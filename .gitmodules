@@ -1,0 +1,12 @@
+[submodule "arglib"]
+	path = arglib
+	url = git@github.com:j-luo93/arglib.git
+    branch = xib
+[submodule "devlib"]
+	path = devlib
+	url = git@github.com:j-luo93/devlib.git
+    branch = xib
+[submodule "trainlib"]
+	path = trainlib
+	url = git@github.com:j-luo93/trainlib.git
+    branch = xib

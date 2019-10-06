@@ -21,16 +21,16 @@ class Trainer:
                 self.model.train()
                 self.optimizer.zero_grad()
                 distr = self.model(batch)
-                metrics = self._analyze_output(distr, batch.target_ipa)
-                metrics.loss.mean.backwards()  # TODO(j_luo) maybe clip gradient norm?
+                metrics = self._analyze_output(distr, batch.target_feat)
+                metrics.loss.mean.backwards()  # IDEA(j_luo) maybe clip gradient norm?
                 self.tracker.update()
 
-    def _analyze_output(self, distr, target_ipa) -> Metrics:
-        bs, ws = target_ipa.shape
+    def _analyze_output(self, distr, target_feat) -> Metrics:
+        bs, ws = target_feat.shape
         batch_i = get_range(bs, 2, 0)
         window_i = get_range(ws, 2, 1)
-        # FIXME(j_luo) This is actually wrong because for each ipa sound, you have multiple features.
-        log_probs = target_ipa[batch_i, window_i]
-        loss = -log_probs.sum()
-        loss = Metric('loss', loss, bs)
+        log_probs = target_feat[batch_i, window_i]
+        mask = (target_feat != 0).float()
+        loss = -(mask * log_probs).sum()
+        loss = Metric('loss', loss, mask.sum())
         return Metrics(loss)

@@ -20,15 +20,15 @@ class Encoder(nn.Module):
             nn.Conv1d(self.dim // 2, self.dim, 3),
         )
 
-    def forward(self, ipa_matrix, pos_to_predict):
-        ipa_emb = self.feat_embeddings(ipa_matrix)
+    def forward(self, feat_matrix, pos_to_predict):
+        feat_emb = self.feat_embeddings(feat_matrix)
         # Set positions to predict to zero.
-        bs, ws = ipa_matrix.shape
+        bs, ws = feat_matrix.shape
         batch_i = get_range(bs, 2, 0)
         window_i = get_range(bs, 2, 1)
-        ipa_emb[batch_i, window_i, pos_to_predict] = 0.0
+        feat_emb[batch_i, window_i, pos_to_predict] = 0.0
         # Run through cnns.
-        output = self.layers(ipa_emb)
+        output = self.layers(feat_emb)
         h, _ = output.max(dim=1)
         return h
 
@@ -62,8 +62,8 @@ class Model(nn.Module):
 
     def forward(self, batch):
         """
-        First encode the `ipa_matrix` into a vector `h`, then based on it predict the distributions of features.
+        First encode the `feat_matrix` into a vector `h`, then based on it predict the distributions of features.
         """
-        h = self.encoder(batch.ipa_matrix, batch.pos_to_predict)
+        h = self.encoder(batch.feat_matrix, batch.pos_to_predict)
         distr = self.predictor(h)
         return distr

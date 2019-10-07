@@ -1,7 +1,7 @@
-from arglib import g, parse_args
+from arglib import parse_args
 from devlib import initiate
 
-from .manager import Manager
+from manager import Manager
 
 
 def train():

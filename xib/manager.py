@@ -1,7 +1,6 @@
-from arglib import add_argument, init_g_attr
-
-from .model import Model
-from .trainer import Trainer
+from data_loader import IpaDataLoader
+from model import Model
+from trainer import Trainer
 
 
 class Manager:

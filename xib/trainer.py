@@ -9,10 +9,12 @@ from trainlib import Metric, Metrics, Tracker
 class Trainer:
 
     add_argument('num_steps', default=10, dtype=int, msg='number of steps to train')
+    add_argument('learning_rate', default=2e-3, dtype=float, msg='learning rate')
+    add_argument('check_interval', default=2, dtype=int, msg='check metrics after this many steps')
 
-    def __init__(self, model: 'a', train_data_loader: 'a', num_steps):
+    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval):
         self.tracker = Tracker()
-        self.tracker.add_track('global_step', update_fn='add', finish_when=num_steps)
+        self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
         self.optimizer = optim.Adam(self.model.parameters(), learning_rate)
 
     def train(self):
@@ -22,14 +24,19 @@ class Trainer:
                 self.optimizer.zero_grad()
                 distr = self.model(batch)
                 metrics = self._analyze_output(distr, batch.target_feat)
-                metrics.loss.mean.backwards()  # IDEA(j_luo) maybe clip gradient norm?
+                metrics.loss.mean.backward()  # IDEA(j_luo) maybe clip gradient norm?
+                self.optimizer.step()
                 self.tracker.update()
+
+                if self.tracker.step % self.check_interval == 0:
+                    print(metrics.get_table(f'Step: {self.tracker.step}'))
+                    metrics.clear()
 
     def _analyze_output(self, distr, target_feat) -> Metrics:
         bs, ws = target_feat.shape
         batch_i = get_range(bs, 2, 0)
         window_i = get_range(ws, 2, 1)
-        log_probs = target_feat[batch_i, window_i]
+        log_probs = distr[batch_i, window_i]
         mask = (target_feat != 0).float()
         loss = -(mask * log_probs).sum()
         loss = Metric('loss', loss, mask.sum())

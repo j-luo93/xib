@@ -65,7 +65,7 @@ class Predictor(nn.Module):
         return ret
 
 
-@init_g_attr
+@init_g_attr(default='property')
 class Model(nn.Module):
 
     add_argument('num_features', default=10, dtype=int, msg='total number of phonetic features')

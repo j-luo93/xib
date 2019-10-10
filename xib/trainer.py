@@ -9,7 +9,7 @@ from trainlib import Metric, Metrics, Tracker
 from xib.cfg import Category
 
 
-@init_g_attr
+@init_g_attr(default='property')
 class Trainer:
 
     add_argument('num_steps', default=10, dtype=int, msg='number of steps to train')

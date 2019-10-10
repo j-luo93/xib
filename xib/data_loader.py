@@ -72,7 +72,7 @@ def collate_fn(batch):
     return np.asarray(segments), feat_matrix, lengths
 
 
-@init_g_attr(default='none')  # NOTE(j_luo) many attributes are handled as properties later by DataLoader.
+@init_g_attr  # NOTE(j_luo) many attributes are handled as properties later by DataLoader.
 class IpaDataLoader(DataLoader):
 
     add_argument('batch_size', default=16, dtype=int, msg='batch size')

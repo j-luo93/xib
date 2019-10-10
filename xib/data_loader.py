@@ -78,5 +78,5 @@ class IpaDataLoader(DataLoader):
 
             feat_matrix = feat_matrix.repeat(ws, 1, 1)
             pos_to_predict = get_range(ws, 2, 0).repeat(1, bs).view(-1)
-            target_weight = target_weight.repeat(ws, 1, 1)
+            target_weight = target_weight.t().reshape(-1)
             yield Batch(feat_matrix, target_weight, pos_to_predict)

@@ -24,7 +24,7 @@ class Trainer:
                 self.model.train()
                 self.optimizer.zero_grad()
                 distr = self.model(batch)
-                metrics = self._analyze_output(distr, batch.target_feat)
+                metrics = self._analyze_output(distr, batch.target_feat, batch.target_weight)
                 metrics.loss.mean.backward()  # IDEA(j_luo) maybe clip gradient norm?
                 self.optimizer.step()
                 self.tracker.update()
@@ -35,12 +35,8 @@ class Trainer:
                 if self.tracker.step % self.save_interval == 0:
                     torch.save(self.model.state_dict(), self.log_dir / 'saved.latest')
 
-    def _analyze_output(self, distr, target_feat) -> Metrics:
-        bs, ws = target_feat.shape
-        batch_i = get_range(bs, 2, 0)
-        window_i = get_range(ws, 2, 1)
-        log_probs = distr[batch_i, window_i]
-        mask = (target_feat != 0).float()
-        loss = -(mask * log_probs).sum()
-        loss = Metric('loss', loss, mask.sum())
+    def _analyze_output(self, distr, target_feat, target_weight) -> Metrics:
+        log_probs = distr.gather(1, target_feat)
+        loss = -(log_probs * target_weight.view(-1, 1)).sum()
+        loss = Metric('loss', loss, target_weight.sum())  # .numel())  # mask.sum())
         return Metrics(loss)

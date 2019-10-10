@@ -25,7 +25,7 @@ class Encoder(nn.Module):
         # Set positions to predict to zero.
         bs, _, _ = feat_matrix.shape
         batch_i = get_range(bs, 1, 0)
-        feat_emb[batch_i, pos_to_predict] = 0.0
+        feat_emb[batch_i, :, :, pos_to_predict] = 0.0
         # Run through cnns.
         output = self.layers(feat_emb)
         h, _ = output.max(dim=-1)

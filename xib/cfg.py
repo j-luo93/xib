@@ -1,118 +1,225 @@
-from enum import Enum, auto, unique
+from dataclasses import dataclass
+from enum import Enum, unique
+
+import inflection
+
 from arglib import Registry
 
 reg = Registry('cfg')
 
 
+@dataclass
+class Index:
+    g_idx: int  # global index
+    c_idx: int  # category index
+    f_idx: int  # feature index
+
+    _instances = dict()
+
+    def __post_init__(self):
+        if self.g_idx in self._instances:
+            raise RuntimeError(f'Duplicate global index at {self.g_idx}.')
+        self._instances[self.g_idx] = self
+
+    @classmethod
+    def get_feature(self, g_idx):
+        index = self._instances[g_idx]
+        cat = Category(index.c_idx)
+        cat_cls = globals()[inflection.camelize(cat.name.lower())]
+        return cat_cls(index)
+
+
 @unique
-class IPAFeature(Enum):
-    NONE = 0
-    VOICED = 1
-    VOICELESS = 2
-    ALVEOLAR = 3
-    BILABIAL = 4
-    VELAR = 5
-    GLOTTAL = 6
-    PALATAL = 7
-    UVULAR = 8
-    LABIO_DENTAL = 9
-    PALATO_ALVEOLAR = 10
-    LABIO_VELAR = 11
-    RETROFLEX = 12
-    DENTAL = 13
-    LABIO_PALATAL = 14
-    ALVEOLO_PALATAL = 15
-    LABIO_ALVEOLAR = 16
-    PHARYNGEAL = 17
-    PALATO_ALVEOLO_VELAR = 18
-    NASAL = 19
-    FLAP = 20
-    PLOSIVE = 21
-    TRILL = 22
-    NON_SIBILANT_FRICATIVE = 23
-    LATERAL_APPROXIMANT = 24
-    APPROXIMANT = 25
-    SIBILANT_FRICATIVE = 26
-    SIBILANT_AFFRICATE = 27
-    CLICK = 28
-    IMPLOSIVE = 29
-    LATERAL_FRICATIVE = 30
-    EJECTIVE = 31
-    LATERAL_CLICK = 32
-    LATERAL_AFFRICATE = 33
-    NON_SIBILANT_AFFRICATE = 34
-    LATERAL_FLAP = 35
-    EJECTIVE_AFFRICATE = 36
-    EJECTIVE_FRICATIVE = 37
-    LATERAL_EJECTIVE_AFFRICATE = 38
-    OPEN_MID = 39
-    CLOSE_MID = 40
-    OPEN = 41
-    CLOSE = 42
-    NEAR_OPEN = 43
-    NEAR_CLOSE = 44
-    MID = 45
-    BACK = 46
-    FRONT = 47
-    CENTRAL = 48
-    NEAR_FRONT = 49
-    NEAR_BACK = 50
-    ROUNDED = 51
-    UNROUNDED = 52
-    ASPIRATED = 53
-    LABIALIZED = 54
-    NASALIZED = 55
-    SYLLABIC = 56
-    NO_AUDIBLE_RELEASE = 57
-    RETRACTED_TONGUE_ROOT = 58
-    NON_SYLLABIC = 59
-    PALATALIZED = 60
-    BREATHY_VOICED = 61
-    VELARIZED = 62
-    CREAKY_VOICED = 63
-    LOWERED = 64
-    PHARYNGEALIZED = 65
-    RAISED = 66
-    ADVANCED = 67
-    CENTRALIZED = 68
-    TIE_BAR_ABOVE = 69
-    RHOTACIZED = 70
-    RETRACTED = 71
-    LESS_ROUNDED = 72
-    TIE_BAR_BELOW = 73
-    APICAL = 74
-    LAMINAL = 75
-    LATERAL_RELEASE = 76
-    ADVANCED_TONGUE_ROOT = 77
-    MORE_ROUNDED = 78
-    PRIMARY_STRESS = 79
-    LONG = 80
-    EXTRA_SHORT = 81
-    HALF_LONG = 82
-    WORD_BREAK = 83
-    LINKING = 84
-    LOW_LEVEL = 85
-    HIGH_LEVEL = 86
-    EXTRA_LOW_LEVEL = 87
-    EXTRA_HIGH_LEVEL = 88
-    MID_LEVEL = 89
-    FALLING_CONTOUR = 90
-    RISING_CONTOUR = 91
-    RISING_FALLING_CONTOUR = 92
-    HIGH_MID_FALLING_CONTOUR = 93
-    LOW_RISING_CONTOUR = 94
-    HIGH_RISING_CONTOUR = 95
-    MID_LOW_FALLING_CONTOUR = 96
-    DOWNSTEP = 97
+class Category(Enum):
+    PTYPE = 0
+    C_VOICING = 1
+    C_PLACE = 2
+    C_MANNER = 3
+    V_HEIGHT = 4
+    V_BACKNESS = 5
+    V_ROUNDNESS = 6
+    DIACRITICS = 7
+    S_STRESS = 8
+    S_LENGTH = 9
+    S_BREAK = 10
+    T_LEVEL = 11
+    T_CONTOUR = 12
+    T_GLOBAL = 13
 
 
-FEAT_COLS = ['c_voicing', 'c_place', 'c_manner', 'v_height', 'v_backness', 'v_roundness',
-             'diacritics', 's_stress', 's_length', 's_break', 't_level', 't_contour', 't_global']
+@unique
+class Ptype(Enum):
+    CONSONANT = Index(0, 0, 0)
+    VOWEL = Index(1, 0, 1)
+
+
+@unique
+class CVoicing(Enum):
+    NONE = Index(2, 1, 0)
+    VOICED = Index(3, 1, 1)
+    VOICELESS = Index(4, 1, 2)
+
+
+@unique
+class CPlace(Enum):
+    NONE = Index(5, 2, 0)
+    ALVEOLAR = Index(6, 2, 1)
+    ALVEOLO_PALATAL = Index(7, 2, 2)
+    BILABIAL = Index(8, 2, 3)
+    DENTAL = Index(9, 2, 4)
+    GLOTTAL = Index(10, 2, 5)
+    LABIO_ALVEOLAR = Index(11, 2, 6)
+    LABIO_DENTAL = Index(12, 2, 7)
+    LABIO_PALATAL = Index(13, 2, 8)
+    LABIO_VELAR = Index(14, 2, 9)
+    PALATAL = Index(15, 2, 10)
+    PALATO_ALVEOLAR = Index(16, 2, 11)
+    PALATO_ALVEOLO_VELAR = Index(17, 2, 12)
+    PHARYNGEAL = Index(18, 2, 13)
+    RETROFLEX = Index(19, 2, 14)
+    UVULAR = Index(20, 2, 15)
+    VELAR = Index(21, 2, 16)
+
+
+@unique
+class CManner(Enum):
+    NONE = Index(22, 3, 0)
+    APPROXIMANT = Index(23, 3, 1)
+    CLICK = Index(24, 3, 2)
+    EJECTIVE = Index(25, 3, 3)
+    EJECTIVE_AFFRICATE = Index(26, 3, 4)
+    EJECTIVE_FRICATIVE = Index(27, 3, 5)
+    FLAP = Index(28, 3, 6)
+    IMPLOSIVE = Index(29, 3, 7)
+    LATERAL_AFFRICATE = Index(30, 3, 8)
+    LATERAL_APPROXIMANT = Index(31, 3, 9)
+    LATERAL_CLICK = Index(32, 3, 10)
+    LATERAL_EJECTIVE_AFFRICATE = Index(33, 3, 11)
+    LATERAL_FLAP = Index(34, 3, 12)
+    LATERAL_FRICATIVE = Index(35, 3, 13)
+    NASAL = Index(36, 3, 14)
+    NON_SIBILANT_AFFRICATE = Index(37, 3, 15)
+    NON_SIBILANT_FRICATIVE = Index(38, 3, 16)
+    PLOSIVE = Index(39, 3, 17)
+    SIBILANT_AFFRICATE = Index(40, 3, 18)
+    SIBILANT_FRICATIVE = Index(41, 3, 19)
+    TRILL = Index(42, 3, 20)
+
+
+@unique
+class VHeight(Enum):
+    NONE = Index(43, 4, 0)
+    CLOSE = Index(44, 4, 1)
+    CLOSE_MID = Index(45, 4, 2)
+    MID = Index(46, 4, 3)
+    NEAR_CLOSE = Index(47, 4, 4)
+    NEAR_OPEN = Index(48, 4, 5)
+    OPEN = Index(49, 4, 6)
+    OPEN_MID = Index(50, 4, 7)
+
+
+@unique
+class VBackness(Enum):
+    NONE = Index(51, 5, 0)
+    BACK = Index(52, 5, 1)
+    CENTRAL = Index(53, 5, 2)
+    FRONT = Index(54, 5, 3)
+    NEAR_BACK = Index(55, 5, 4)
+    NEAR_FRONT = Index(56, 5, 5)
+
+
+@unique
+class VRoundness(Enum):
+    NONE = Index(57, 6, 0)
+    ROUNDED = Index(58, 6, 1)
+    UNROUNDED = Index(59, 6, 2)
+
+
+@unique
+class Diacritics(Enum):
+    NONE = Index(60, 7, 0)
+    ADVANCED = Index(61, 7, 1)
+    ADVANCED_TONGUE_ROOT = Index(62, 7, 2)
+    APICAL = Index(63, 7, 3)
+    ASPIRATED = Index(64, 7, 4)
+    BREATHY_VOICED = Index(65, 7, 5)
+    CENTRALIZED = Index(66, 7, 6)
+    CREAKY_VOICED = Index(67, 7, 7)
+    LABIALIZED = Index(68, 7, 8)
+    LAMINAL = Index(69, 7, 9)
+    LATERAL_RELEASE = Index(70, 7, 10)
+    LESS_ROUNDED = Index(71, 7, 11)
+    LOWERED = Index(72, 7, 12)
+    MORE_ROUNDED = Index(73, 7, 13)
+    NASALIZED = Index(74, 7, 14)
+    NO_AUDIBLE_RELEASE = Index(75, 7, 15)
+    NON_SYLLABIC = Index(76, 7, 16)
+    PALATALIZED = Index(77, 7, 17)
+    PHARYNGEALIZED = Index(78, 7, 18)
+    RAISED = Index(79, 7, 19)
+    RETRACTED = Index(80, 7, 20)
+    RETRACTED_TONGUE_ROOT = Index(81, 7, 21)
+    RHOTACIZED = Index(82, 7, 22)
+    SYLLABIC = Index(83, 7, 23)
+    TIE_BAR_ABOVE = Index(84, 7, 24)
+    TIE_BAR_BELOW = Index(85, 7, 25)
+    VELARIZED = Index(86, 7, 26)
+
+
+@unique
+class SStress(Enum):
+    NONE = Index(87, 8, 0)
+    PRIMARY_STRESS = Index(88, 8, 1)
+
+
+@unique
+class SLength(Enum):
+    NONE = Index(89, 9, 0)
+    EXTRA_SHORT = Index(90, 9, 1)
+    HALF_LONG = Index(91, 9, 2)
+    LONG = Index(92, 9, 3)
+
+
+@unique
+class SBreak(Enum):
+    NONE = Index(93, 10, 0)
+    LINKING = Index(94, 10, 1)
+    WORD_BREAK = Index(95, 10, 2)
+
+
+@unique
+class TLevel(Enum):
+    NONE = Index(96, 11, 0)
+    EXTRA_HIGH_LEVEL = Index(97, 11, 1)
+    EXTRA_LOW_LEVEL = Index(98, 11, 2)
+    HIGH_LEVEL = Index(99, 11, 3)
+    LOW_LEVEL = Index(100, 11, 4)
+    MID_LEVEL = Index(101, 11, 5)
+
+
+@unique
+class TContour(Enum):
+    NONE = Index(102, 12, 0)
+    FALLING_CONTOUR = Index(103, 12, 1)
+    HIGH_MID_FALLING_CONTOUR = Index(104, 12, 2)
+    HIGH_RISING_CONTOUR = Index(105, 12, 3)
+    LOW_RISING_CONTOUR = Index(106, 12, 4)
+    MID_LOW_FALLING_CONTOUR = Index(107, 12, 5)
+    RISING_CONTOUR = Index(108, 12, 6)
+    RISING_FALLING_CONTOUR = Index(109, 12, 7)
+
+
+@unique
+class TGlobal(Enum):
+    NONE = Index(110, 13, 0)
+    DOWNSTEP = Index(111, 13, 1)
 
 
 @reg
 class TestEn:
     data_path: str = 'data/phones_en.pth'
     dim: int = 250
-    num_features: int = 98
-    num_feature_groups: int = len(FEAT_COLS)
+    num_features: int = 112
+    num_feature_groups: int = 14
+    check_interval: int = 50
+    num_steps: int = 1000

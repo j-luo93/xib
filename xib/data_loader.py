@@ -6,18 +6,18 @@ from typing import Union
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader, Dataset
 
 from arglib import add_argument, init_g_attr
 from devlib import (PandasDataLoader, get_length_mask, get_range, get_tensor,
                     pad_to_dense, pandas_collate_fn)
-
-from torch.utils.data import DataLoader, Dataset
 
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
 
 
 @dataclass
 class Batch:
+    segments: np.ndarray
     feat_matrix: LongTensor
     target_weight: LongTensor
     pos_to_predict: LongTensor
@@ -49,13 +49,14 @@ class IpaDataset(Dataset):
         return len(self.data['segments'])
 
     def __getitem__(self, idx):
-        return self.data['matrices'][idx]
+        return self.data['segments'][idx], self.data['matrices'][idx]
 
 
 def collate_fn(batch):
-    lengths = torch.LongTensor(list(map(len, batch)))
-    feat_matrix = torch.nn.utils.rnn.pad_sequence(batch, batch_first=True)  # size: sl x K -> bs x max_sl x K
-    return feat_matrix, lengths
+    segments, matrices = zip(*batch)
+    lengths = torch.LongTensor(list(map(len, matrices)))
+    feat_matrix = torch.nn.utils.rnn.pad_sequence(matrices, batch_first=True)  # size: sl x K -> bs x max_sl x K
+    return np.asarray(segments), feat_matrix, lengths
 
 
 @init_g_attr(default='none')  # NOTE(j_luo) many attributes are handled as properties later by DataLoader.
@@ -72,11 +73,11 @@ class IpaDataLoader(DataLoader):
                          shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
 
     def __iter__(self):
-        for feat_matrix, lengths in super().__iter__():
+        for segments, feat_matrix, lengths in super().__iter__():
             bs, ws, _ = feat_matrix.shape
             target_weight = get_length_mask(lengths, ws)
 
             feat_matrix = feat_matrix.repeat(ws, 1, 1)
             pos_to_predict = get_range(ws, 2, 0).repeat(1, bs).view(-1)
             target_weight = target_weight.t().reshape(-1)
-            yield Batch(feat_matrix, target_weight, pos_to_predict)
+            yield Batch(segments, feat_matrix, target_weight, pos_to_predict)

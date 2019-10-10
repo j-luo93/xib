@@ -112,7 +112,7 @@ FEAT_COLS = ['c_voicing', 'c_place', 'c_manner', 'v_height', 'v_backness', 'v_ro
 
 @reg
 class TestEn:
-    data_path = 'data/phones_en.pth'
+    data_path: str = 'data/phones_en.pth'
     dim: int = 250
     num_features: int = 98
     num_feature_groups: int = len(FEAT_COLS)

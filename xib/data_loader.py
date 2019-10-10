@@ -11,6 +11,8 @@ from arglib import add_argument, init_g_attr
 from devlib import (PandasDataLoader, get_length_mask, get_range, get_tensor,
                     pad_to_dense, pandas_collate_fn)
 
+from torch.utils.data import DataLoader, Dataset
+
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
 
 
@@ -38,11 +40,26 @@ class Batch:
         return self.feat_matrix.size(1)
 
 
-FEAT_COLS = ['f1', 'f2', 'f3']
+class IpaDataset(Dataset):
+
+    def __init__(self, data_path):
+        self.data = torch.load(data_path)
+
+    def __len__(self):
+        return len(self.data['segments'])
+
+    def __getitem__(self, idx):
+        return self.data['matrices'][idx]
+
+
+def collate_fn(batch):
+    lengths = torch.LongTensor(list(map(len, batch)))
+    feat_matrix = torch.nn.utils.rnn.pad_sequence(batch, batch_first=True)  # size: sl x K -> bs x max_sl x K
+    return feat_matrix, lengths
 
 
 @init_g_attr(default='none')  # NOTE(j_luo) many attributes are handled as properties later by DataLoader.
-class IpaDataLoader(PandasDataLoader):
+class IpaDataLoader(DataLoader):
 
     add_argument('batch_size', default=16, dtype=int, msg='batch size')
     add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
@@ -50,18 +67,14 @@ class IpaDataLoader(PandasDataLoader):
     add_argument('window_size', default=3, dtype=int, msg='window size for the cnn kernel')
 
     def __init__(self, data_path: 'p', batch_size, num_workers):
-        converters = {col: ast.literal_eval for col in FEAT_COLS}
-        df = pd.read_csv(data_path, sep='\t', converters=converters)
-        super().__init__(df, columns=['segment'] + FEAT_COLS, batch_size=batch_size,
-                         shuffle=True, num_workers=num_workers)
+        dataset = IpaDataset(data_path)
+        super().__init__(dataset, batch_size=batch_size,
+                         shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
 
     def __iter__(self):
-        for batch_df in super().__iter__():
-            segment = batch_df['segment'].values
-            feats = [get_tensor(pad_to_dense(batch_df[col], dtype='int64')) for col in FEAT_COLS]
-            feat_matrix = torch.stack(feats, dim=-1)
+        for feat_matrix, lengths in super().__iter__():
             bs, ws, _ = feat_matrix.shape
-            target_weight = get_length_mask(list(map(len, segment)), feat_matrix.size(1))
+            target_weight = get_length_mask(lengths, ws)
 
             feat_matrix = feat_matrix.repeat(ws, 1, 1)
             pos_to_predict = get_range(ws, 2, 0).repeat(1, bs).view(-1)

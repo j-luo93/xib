@@ -7,14 +7,16 @@ from devlib import get_range
 
 class Encoder(nn.Module):
 
-    def __init__(self, num_features, max_num_feature_values, dim, window_size):
+    def __init__(self, num_features, num_feature_groups, dim, window_size):
         super().__init__()
         self.dim = dim
         self.num_features = num_features
+        self.num_feature_groups = num_feature_groups
         self.window_size = window_size
-        self.feat_embeddings = nn.Embedding(self.num_features * max_num_feature_values, self.dim)
+        self.feat_embeddings = nn.Embedding(self.num_features, self.dim)
         self.layers = nn.Sequential(
-            nn.Conv2d(self.dim, self.dim * 2, (self.num_features, self.window_size), padding=self.window_size // 2),
+            nn.Conv2d(self.dim, self.dim * 2, (self.num_feature_groups,
+                                               self.window_size), padding=self.window_size // 2),
             nn.MaxPool2d((1, 2))
         )
 
@@ -38,27 +40,26 @@ class Predictor(nn.Module):
         self.num_features = num_features
         self.dim = dim
         self.layers = nn.Sequential(
-            nn.Linear(self.dim, self.dim),
+            nn.Linear(self.dim * 6, self.dim),
             nn.LeakyReLU(0.1),
             nn.Linear(self.dim, self.num_features),
         )
 
     def forward(self, h):
-        return torch.log_softmax(self.layers(h), dim=-1)
+        return torch.sigmoid(self.layers(h)).clamp(min=1e-8).log()
 
 
 @init_g_attr
 class Model(nn.Module):
 
     add_argument('num_features', default=10, dtype=int, msg='total number of phonetic features')
-    add_argument('max_num_feature_values', default=3, dtype=int,
-                 msg='max number of different values for the same feature')
+    add_argument('num_feature_groups', default=10, dtype=int, msg='total number of phonetic feature groups')
     add_argument('dim', default=5, dtype=int, msg='dimensionality of feature embeddings and number of hidden units')
 
-    def __init__(self, num_features, max_num_feature_values, dim, window_size):
+    def __init__(self, num_features, num_feature_groups, dim, window_size):
         super().__init__()
-        self.encoder = Encoder(num_features, max_num_feature_values, dim, window_size)
-        self.predictor = Predictor(num_features, dim * num_features * 2)
+        self.encoder = Encoder(num_features, num_feature_groups, dim, window_size)
+        self.predictor = Predictor(num_features, dim)
 
     def forward(self, batch):
         """

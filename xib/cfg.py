@@ -22,11 +22,23 @@ class Index:
         self._instances[self.g_idx] = self
 
     @classmethod
-    def get_feature(self, g_idx):
-        index = self._instances[g_idx]
+    def get_feature(cls, g_idx):
+        index = cls._instances[g_idx]
         cat = Category(index.c_idx)
-        cat_cls = globals()[inflection.camelize(cat.name.lower())]
+        cat_cls = _get_cat_cls_by_enum(cat)
         return cat_cls(index)
+
+    @classmethod
+    def total_indices(cls):
+        return len(cls._instances)
+
+
+def _get_cat_cls_by_enum(cat):
+    return globals()[inflection.camelize(cat.name.lower())]
+
+
+def _get_enum_by_cat_cls(cat_cls):
+    return getattr(Category, inflection.underscore(cat_cls.__name__).upper())
 
 
 @unique
@@ -46,6 +58,12 @@ class Category(Enum):
     T_CONTOUR = 12
     T_GLOBAL = 13
 
+    @classmethod
+    def get_named_cat_enums(cls):
+        for x in cls:
+            cat_cls = _get_cat_cls_by_enum(x)
+            yield x.name, cat_cls
+
 
 @unique
 class Ptype(Enum):
@@ -53,7 +71,20 @@ class Ptype(Enum):
     VOWEL = Index(1, 0, 1)
 
 
+conditions = dict()
+
+
+def _conditioned_on_cls(e):  # e stands for enum.
+
+    def decorator(cls):
+        conditions[_get_enum_by_cat_cls(cls).name] = e.value
+        return cls
+
+    return decorator
+
+
 @unique
+@_conditioned_on_cls(Ptype.CONSONANT)
 class CVoicing(Enum):
     NONE = Index(2, 1, 0)
     VOICED = Index(3, 1, 1)
@@ -61,6 +92,7 @@ class CVoicing(Enum):
 
 
 @unique
+@_conditioned_on_cls(Ptype.CONSONANT)
 class CPlace(Enum):
     NONE = Index(5, 2, 0)
     ALVEOLAR = Index(6, 2, 1)
@@ -82,6 +114,7 @@ class CPlace(Enum):
 
 
 @unique
+@_conditioned_on_cls(Ptype.CONSONANT)
 class CManner(Enum):
     NONE = Index(22, 3, 0)
     APPROXIMANT = Index(23, 3, 1)
@@ -107,6 +140,7 @@ class CManner(Enum):
 
 
 @unique
+@_conditioned_on_cls(Ptype.VOWEL)
 class VHeight(Enum):
     NONE = Index(43, 4, 0)
     CLOSE = Index(44, 4, 1)
@@ -119,6 +153,7 @@ class VHeight(Enum):
 
 
 @unique
+@_conditioned_on_cls(Ptype.VOWEL)
 class VBackness(Enum):
     NONE = Index(51, 5, 0)
     BACK = Index(52, 5, 1)
@@ -129,6 +164,7 @@ class VBackness(Enum):
 
 
 @unique
+@_conditioned_on_cls(Ptype.VOWEL)
 class VRoundness(Enum):
     NONE = Index(57, 6, 0)
     ROUNDED = Index(58, 6, 1)
@@ -217,8 +253,8 @@ class TGlobal(Enum):
 
 @reg
 class TestEn:
-    data_path: str = 'data/phones_en.pth'
-    dim: int = 250
+    data_path: str = 'data/phones_en_idx.pth'
+    dim: int = 20
     num_features: int = 112
     num_feature_groups: int = 14
     check_interval: int = 50

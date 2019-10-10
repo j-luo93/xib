@@ -6,6 +6,7 @@ import torch.optim as optim
 from arglib import add_argument, g, init_g_attr
 from devlib import get_range
 from trainlib import Metric, Metrics, Tracker
+from xib.cfg import Category
 
 
 @init_g_attr
@@ -27,19 +28,21 @@ class Trainer:
 
     def train(self):
         iterator = self._next_batch_iterator()
+        accum_metrics = Metrics()
         while not self.tracker.is_finished:
             batch = next(iterator)
             self.model.train()
             self.optimizer.zero_grad()
             distr = self.model(batch)
             metrics = self._analyze_output(distr, batch.target_feat, batch.target_weight)
+            accum_metrics += metrics
             metrics.loss.mean.backward()  # IDEA(j_luo) maybe clip gradient norm?
             self.optimizer.step()
             self.tracker.update()
 
             if self.tracker.step % self.check_interval == 0:
-                logging.info(metrics.get_table(f'Step: {self.tracker.step}'))
-                metrics.clear()
+                logging.info(accum_metrics.get_table(f'Step: {self.tracker.step}'))
+                accum_metrics.clear()
             if self.tracker.step % self.save_interval == 0:
                 self._save()
 
@@ -53,7 +56,16 @@ class Trainer:
         logging.imp(f'Model saved to {out_path}.')
 
     def _analyze_output(self, distr, target_feat, target_weight) -> Metrics:
-        log_probs = distr.gather(1, target_feat)
-        loss = -(log_probs * target_weight.view(-1, 1)).sum()
-        loss = Metric('loss', loss, target_weight.sum())  # .numel())  # mask.sum())
-        return Metrics(loss)
+        metrics = Metrics()
+        total_loss = 0.0
+        for i, value in enumerate(Category):
+            target = target_feat[:, i]
+            output = distr[value.name]
+            log_probs = output.gather(1, target.view(-1, 1)).view(-1)
+
+            loss = -(log_probs * target_weight).sum()
+            total_loss += loss
+            loss = Metric(f'loss_{value.name}', loss, target_weight.sum())
+            metrics += loss
+        metrics += Metric('loss', total_loss, target_weight.sum())
+        return metrics

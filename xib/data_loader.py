@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 from arglib import add_argument, init_g_attr
 from devlib import (PandasDataLoader, get_length_mask, get_range, get_tensor,
                     pad_to_dense, pandas_collate_fn)
+from xib.cfg import Index
 
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
 
@@ -23,9 +24,21 @@ class Batch:
     pos_to_predict: LongTensor
     target_feat: LongTensor = field(init=False)
 
+    _g2f = None
+
     def __post_init__(self):
         batch_i = get_range(self.batch_size, 1, 0)
-        self.target_feat = self.feat_matrix[batch_i, self.pos_to_predict]
+        # NOTE(j_luo) This is global index.
+        target_feat = self.feat_matrix[batch_i, self.pos_to_predict]
+        # Get conversion matrix.
+        if self._g2f is None:
+            total = Index.total_indices()
+            self._g2f = torch.LongTensor(total)
+            indices = [Index.get_feature(i).value for i in range(total)]
+            for index in indices:
+                self._g2f[index.g_idx] = index.f_idx
+            # NOTE(j_luo) This is feature index.
+        self.target_feat = self._g2f[target_feat]
 
     @property
     def shape(self):

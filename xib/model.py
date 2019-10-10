@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from arglib import add_argument, init_g_attr
 from devlib import get_range
+from xib.cfg import Category, conditions
 
 
 class Encoder(nn.Module):
@@ -42,11 +43,26 @@ class Predictor(nn.Module):
         self.layers = nn.Sequential(
             nn.Linear(self.dim * 6, self.dim),
             nn.LeakyReLU(0.1),
-            nn.Linear(self.dim, self.num_features),
         )
+        self.feat_predictors = nn.ModuleDict()
+        for name, cat in Category.get_named_cat_enums():
+            self.feat_predictors[name] = nn.Linear(self.dim, len(cat))
 
     def forward(self, h):
-        return torch.sigmoid(self.layers(h)).clamp(min=1e-8).log()
+        shared_h = self.layers(h)
+        ret = dict()
+        for name, layer in self.feat_predictors.items():
+            out = layer(shared_h)
+            ret[name] = torch.log_softmax(out, dim=-1)
+        # Deal with conditions for some categories.
+        for name, index in conditions.items():
+            # Find out the exact value to be conditioned on.
+            condition_name = Category(index.c_idx).name
+            condition_idx = index.f_idx
+            condition_log_probs = ret[condition_name][:, condition_idx]
+            ret[name] = ret[name] + condition_log_probs.unsqueeze(dim=-1)
+
+        return ret
 
 
 @init_g_attr

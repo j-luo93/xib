@@ -11,8 +11,9 @@ class Trainer:
     add_argument('num_steps', default=10, dtype=int, msg='number of steps to train')
     add_argument('learning_rate', default=2e-3, dtype=float, msg='learning rate')
     add_argument('check_interval', default=2, dtype=int, msg='check metrics after this many steps')
+    add_argument('save_interval', default=500, dtype=int, msg='save models after this many steps')
 
-    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval):
+    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval):
         self.tracker = Tracker()
         self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
         self.optimizer = optim.Adam(self.model.parameters(), learning_rate)
@@ -31,6 +32,8 @@ class Trainer:
                 if self.tracker.step % self.check_interval == 0:
                     print(metrics.get_table(f'Step: {self.tracker.step}'))
                     metrics.clear()
+                if self.tracker.step % self.save_interval == 0:
+                    torch.save(self.model.state_dict(), self.log_dir / 'saved.latest')
 
     def _analyze_output(self, distr, target_feat) -> Metrics:
         bs, ws = target_feat.shape

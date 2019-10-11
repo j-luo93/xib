@@ -1,4 +1,5 @@
 import ast
+import logging
 import random
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -8,11 +9,11 @@ import numpy as np
 import pandas as pd
 
 import torch
-from arglib import add_argument, init_g_attr
+from arglib import add_argument, g, init_g_attr
 from devlib import (PandasDataLoader, get_length_mask, get_range, get_tensor,
                     pad_to_dense, pandas_collate_fn)
 from torch.utils.data import DataLoader, Dataset, Sampler
-from xib.cfg import Index
+from xib.cfg import Category, Index, Ptype, conditions
 
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
 
@@ -40,6 +41,15 @@ class Batch:
                 self._g2f[index.g_idx] = index.f_idx
             # NOTE(j_luo) This is feature index.
         self.target_feat = self._g2f[target_feat]
+        # NOTE(j_luo) This has to be a new copy, therefore expand won't work.
+        self.target_weight = self.target_weight.unsqueeze(dim=-1).repeat(1, g.num_feature_groups)
+
+        # NOTE(j_luo) If the condition is not satisfied, the target weight should be set to 0.
+        for name, index in conditions.items():
+            idx = getattr(Category, name).value
+            condition_idx = index.f_idx
+            mask = condition_idx != self.target_feat[:, index.c_idx]
+            self.target_weight[mask, idx] = 0.0
 
         for attr, anno in self.__annotations__.items():
             if anno is not np.ndarray:
@@ -86,6 +96,7 @@ class BatchSampler(Sampler):
         # Partition the entire dataset beforehand into batches by length.
         lengths = np.asarray(list(map(len, self.dataset.data['segments'])))
         indices = lengths.argsort()
+        logging.info('Partitioning the data into batches.')
         self.idx_batches = list()
         i = 0
         while i < len(indices):
@@ -127,6 +138,6 @@ class IpaDataLoader(DataLoader):
 
             feat_matrix = feat_matrix.repeat(ws, 1, 1)
             pos_to_predict = get_range(ws, 2, 0).repeat(1, bs).view(-1)
-            target_weight = target_weight.t().reshape(-1)
+            target_weight = target_weight.reshape(-1)
             batch = Batch(segments, feat_matrix, target_weight, pos_to_predict)
             yield batch

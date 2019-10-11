@@ -65,16 +65,18 @@ class Trainer:
     def _analyze_output(self, distr, target_feat, target_weight) -> Metrics:
         metrics = Metrics()
         total_loss = 0.0
-        for i, value in enumerate(Category):
-            name = value.name
+        for cat in Category:
+            i = cat.value
+            name = cat.name
             if self._should_include_this_loss(name):
                 target = target_feat[:, i]
                 output = distr[name]
+                weight = target_weight[:, i]
                 log_probs = output.gather(1, target.view(-1, 1)).view(-1)
 
-                loss = -(log_probs * target_weight).sum()
+                loss = -(log_probs * weight).sum()
                 total_loss += loss
-                loss = Metric(f'loss_{name}', loss, target_weight.sum())
+                loss = Metric(f'loss_{name}', loss, weight.sum())
                 metrics += loss
         metrics += Metric('loss', total_loss, target_weight.sum())
         return metrics

@@ -83,7 +83,17 @@ def _conditioned_on_cls(e):  # e stands for enum.
     return decorator
 
 
+no_none_predictions = dict()
+
+
+def _avoid_predicting_none(cls):
+    no_none_predictions[cls.__name__] = cls.NONE.value
+
+    return cls
+
+
 @unique
+@_avoid_predicting_none
 @_conditioned_on_cls(Ptype.CONSONANT)
 class CVoicing(Enum):
     NONE = Index(2, 1, 0)
@@ -92,6 +102,7 @@ class CVoicing(Enum):
 
 
 @unique
+@_avoid_predicting_none
 @_conditioned_on_cls(Ptype.CONSONANT)
 class CPlace(Enum):
     NONE = Index(5, 2, 0)
@@ -114,6 +125,7 @@ class CPlace(Enum):
 
 
 @unique
+@_avoid_predicting_none
 @_conditioned_on_cls(Ptype.CONSONANT)
 class CManner(Enum):
     NONE = Index(22, 3, 0)
@@ -140,6 +152,7 @@ class CManner(Enum):
 
 
 @unique
+@_avoid_predicting_none
 @_conditioned_on_cls(Ptype.VOWEL)
 class VHeight(Enum):
     NONE = Index(43, 4, 0)
@@ -153,6 +166,7 @@ class VHeight(Enum):
 
 
 @unique
+@_avoid_predicting_none
 @_conditioned_on_cls(Ptype.VOWEL)
 class VBackness(Enum):
     NONE = Index(51, 5, 0)
@@ -164,6 +178,7 @@ class VBackness(Enum):
 
 
 @unique
+@_avoid_predicting_none
 @_conditioned_on_cls(Ptype.VOWEL)
 class VRoundness(Enum):
     NONE = Index(57, 6, 0)
@@ -261,6 +276,7 @@ class TestEn:
     char_per_batch: int = 2000
     num_steps: int = 10000
     window_size: int = 3
+    hidden_size: int = 100
 
 
 @reg

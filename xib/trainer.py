@@ -1,6 +1,7 @@
 import logging
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 
 from arglib import add_argument, g, init_g_attr
@@ -16,11 +17,17 @@ class Trainer:
     add_argument('learning_rate', default=2e-3, dtype=float, msg='learning rate')
     add_argument('check_interval', default=2, dtype=int, msg='check metrics after this many steps')
     add_argument('save_interval', default=500, dtype=int, msg='save models after this many steps')
+    add_argument('mode', default='pcvdst', dtype=str,
+                 msg='what to include during training: p(type), c(onstonant), v(vowel), d(iacritics), s(tress) and t(one).')
 
-    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir):
+    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, mode):
         self.tracker = Tracker()
         self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
         self.optimizer = optim.Adam(self.model.parameters(), learning_rate)
+
+        for name, p in model.named_parameters():
+            if p.dim() == 2:
+                nn.init.xavier_uniform_(p)
 
     def _next_batch_iterator(self):
         while True:
@@ -59,13 +66,30 @@ class Trainer:
         metrics = Metrics()
         total_loss = 0.0
         for i, value in enumerate(Category):
-            target = target_feat[:, i]
-            output = distr[value.name]
-            log_probs = output.gather(1, target.view(-1, 1)).view(-1)
+            name = value.name
+            if self._should_include_this_loss(name):
+                target = target_feat[:, i]
+                output = distr[name]
+                log_probs = output.gather(1, target.view(-1, 1)).view(-1)
 
-            loss = -(log_probs * target_weight).sum()
-            total_loss += loss
-            loss = Metric(f'loss_{value.name}', loss, target_weight.sum())
-            metrics += loss
+                loss = -(log_probs * target_weight).sum()
+                total_loss += loss
+                loss = Metric(f'loss_{name}', loss, target_weight.sum())
+                metrics += loss
         metrics += Metric('loss', total_loss, target_weight.sum())
         return metrics
+
+    def _should_include_this_loss(self, name):
+        if name == 'PTYPE' and 'p' in self.mode:
+            return True
+        if name.startswith('C_') and 'c' in self.mode:
+            return True
+        if name.startswith('V_') and 'v' in self.mode:
+            return True
+        if name.startswith('D_') and 'd' in self.mode:
+            return True
+        if name.startswith('S_') and 's' in self.mode:
+            return True
+        if name.startswith('T_') and 't' in self.mode:
+            return True
+        return False

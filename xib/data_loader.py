@@ -1,16 +1,17 @@
 import ast
+import random
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Union
 
 import numpy as np
 import pandas as pd
-import torch
-from torch.utils.data import DataLoader, Dataset
 
+import torch
 from arglib import add_argument, init_g_attr
 from devlib import (PandasDataLoader, get_length_mask, get_range, get_tensor,
                     pad_to_dense, pandas_collate_fn)
+from torch.utils.data import DataLoader, Dataset, Sampler
 from xib.cfg import Index
 
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
@@ -40,6 +41,10 @@ class Batch:
             # NOTE(j_luo) This is feature index.
         self.target_feat = self._g2f[target_feat]
 
+        for attr, anno in self.__annotations__.items():
+            if anno is not np.ndarray:
+                setattr(self, attr, get_tensor(getattr(self, attr)))
+
     @property
     def shape(self):
         return self.feat_matrix.shape
@@ -53,6 +58,7 @@ class Batch:
         return self.feat_matrix.size(1)
 
 
+@init_g_attr
 class IpaDataset(Dataset):
 
     def __init__(self, data_path):
@@ -72,18 +78,47 @@ def collate_fn(batch):
     return np.asarray(segments), feat_matrix, lengths
 
 
-@init_g_attr  # NOTE(j_luo) many attributes are handled as properties later by DataLoader.
+@init_g_attr
+class BatchSampler(Sampler):
+
+    def __init__(self, dataset: 'a', char_per_batch: 'p', shuffle: 'p' = True):
+        self.dataset = dataset
+        # Partition the entire dataset beforehand into batches by length.
+        lengths = np.asarray(list(map(len, self.dataset.data['segments'])))
+        indices = lengths.argsort()
+        self.idx_batches = list()
+        i = 0
+        while i < len(indices):
+            max_len = lengths[indices[i]]
+            bs = char_per_batch // max_len
+            if bs == 0:
+                raise RuntimeError(f'Batch too small!')
+            self.idx_batches.append(indices[i: i + bs])
+            i += bs
+
+    def __len__(self):
+        return len(self.idx_batches)
+
+    def __iter__(self):
+        if self.shuffle:
+            random.shuffle(self.idx_batches)
+        yield from self.idx_batches
+
+
+@init_g_attr
 class IpaDataLoader(DataLoader):
 
-    add_argument('batch_size', default=16, dtype=int, msg='batch size')
+    # add_argument('batch_size', default=16, dtype=int, msg='batch size')
+    add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
     add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
     add_argument('data_path', dtype=str, msg='path to the feat data in tsv format.')
     add_argument('window_size', default=3, dtype=int, msg='window size for the cnn kernel')
 
-    def __init__(self, data_path: 'p', batch_size, num_workers):
+    def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers):
         dataset = IpaDataset(data_path)
-        super().__init__(dataset, batch_size=batch_size,
-                         shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
+        batch_sampler = BatchSampler(dataset, char_per_batch, shuffle=True)
+        super().__init__(dataset, batch_sampler=batch_sampler,
+                         num_workers=num_workers, collate_fn=collate_fn)
 
     def __iter__(self):
         for segments, feat_matrix, lengths in super().__iter__():
@@ -93,4 +128,5 @@ class IpaDataLoader(DataLoader):
             feat_matrix = feat_matrix.repeat(ws, 1, 1)
             pos_to_predict = get_range(ws, 2, 0).repeat(1, bs).view(-1)
             target_weight = target_weight.t().reshape(-1)
-            yield Batch(segments, feat_matrix, target_weight, pos_to_predict)
+            batch = Batch(segments, feat_matrix, target_weight, pos_to_predict)
+            yield batch

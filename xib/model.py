@@ -6,14 +6,11 @@ from devlib import get_range
 from xib.cfg import Category, conditions
 
 
+@init_g_attr(default='property')
 class Encoder(nn.Module):
 
     def __init__(self, num_features, num_feature_groups, dim, window_size):
         super().__init__()
-        self.dim = dim
-        self.num_features = num_features
-        self.num_feature_groups = num_feature_groups
-        self.window_size = window_size
         self.feat_embeddings = nn.Embedding(self.num_features, self.dim)
         self.layers = nn.Sequential(
             nn.Conv2d(self.dim, self.dim * 2, (self.num_feature_groups,
@@ -26,7 +23,7 @@ class Encoder(nn.Module):
         # Set positions to predict to zero.
         bs, _, _ = feat_matrix.shape
         batch_i = get_range(bs, 1, 0)
-        feat_emb[batch_i, :, :, pos_to_predict] = 0.0
+        # feat_emb[batch_i, :, :, pos_to_predict] = 0.0
         # Run through cnns.
         output = self.layers(feat_emb)
         h, _ = output.max(dim=-1)
@@ -34,19 +31,18 @@ class Encoder(nn.Module):
         return h
 
 
+@init_g_attr(default='property')
 class Predictor(nn.Module):
 
-    def __init__(self, num_features, dim):
+    def __init__(self, num_features, dim, window_size):
         super().__init__()
-        self.num_features = num_features
-        self.dim = dim
         self.layers = nn.Sequential(
-            nn.Linear(self.dim * 6, self.dim),
+            nn.Linear(dim * 2 * window_size, dim),
             nn.LeakyReLU(0.1),
         )
         self.feat_predictors = nn.ModuleDict()
         for name, cat in Category.get_named_cat_enums():
-            self.feat_predictors[name] = nn.Linear(self.dim, len(cat))
+            self.feat_predictors[name] = nn.Linear(dim, len(cat))
 
     def forward(self, h):
         shared_h = self.layers(h)
@@ -74,8 +70,8 @@ class Model(nn.Module):
 
     def __init__(self, num_features, num_feature_groups, dim, window_size):
         super().__init__()
-        self.encoder = Encoder(num_features, num_feature_groups, dim, window_size)
-        self.predictor = Predictor(num_features, dim)
+        self.encoder = Encoder()
+        self.predictor = Predictor()
 
     def forward(self, batch):
         """

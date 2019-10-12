@@ -1,19 +1,15 @@
-import ast
 import logging
 import random
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from typing import Union
 
 import numpy as np
-import pandas as pd
 
 import torch
 from arglib import add_argument, g, init_g_attr
-from devlib import (PandasDataLoader, get_length_mask, get_range, get_tensor,
-                    pad_to_dense, pandas_collate_fn)
+from devlib import get_length_mask, get_range, get_tensor
 from torch.utils.data import DataLoader, Dataset, Sampler
-from xib.cfg import Category, Index, Ptype, conditions
+from xib.ipa import Category, Index, Ptype, conditions
 
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
 
@@ -45,8 +41,8 @@ class Batch:
         self.target_weight = self.target_weight.unsqueeze(dim=-1).repeat(1, g.num_feature_groups)
 
         # NOTE(j_luo) If the condition is not satisfied, the target weight should be set to 0.
-        for name, index in conditions.items():
-            idx = getattr(Category, name).value
+        for cat, index in conditions.items():
+            idx = cat.value
             condition_idx = index.f_idx
             mask = condition_idx != self.target_feat[:, index.c_idx]
             self.target_weight[mask, idx] = 0.0
@@ -73,6 +69,7 @@ class IpaDataset(Dataset):
 
     def __init__(self, data_path):
         self.data = torch.load(data_path)
+        logging.info(f'Loaded {len(self)} segments in total.')
 
     def __len__(self):
         return len(self.data['segments'])

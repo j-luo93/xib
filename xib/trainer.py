@@ -3,11 +3,9 @@ import logging
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
 from arglib import add_argument, g, init_g_attr
-from devlib import get_range
 from trainlib import Metric, Metrics, Tracker
-from xib.cfg import Category
+from xib.ipa import Category
 
 
 @init_g_attr(default='property')
@@ -41,6 +39,7 @@ class Trainer:
             self.model.train()
             self.optimizer.zero_grad()
             distr = self.model(batch)
+            # self.model.predict(batch)
             metrics = self._analyze_output(distr, batch.target_feat, batch.target_weight)
             accum_metrics += metrics
             metrics.loss.mean.backward()  # IDEA(j_luo) maybe clip gradient norm?
@@ -65,23 +64,22 @@ class Trainer:
     def _analyze_output(self, distr, target_feat, target_weight) -> Metrics:
         metrics = Metrics()
         total_loss = 0.0
-        for cat in Category:
-            i = cat.value
-            name = cat.name
-            if self._should_include_this_loss(name):
+        for cat, output in distr.items():
+            if self._should_include_this_loss(cat):
+                i = cat.value
                 target = target_feat[:, i]
-                output = distr[name]
                 weight = target_weight[:, i]
                 log_probs = output.gather(1, target.view(-1, 1)).view(-1)
 
                 loss = -(log_probs * weight).sum()
                 total_loss += loss
-                loss = Metric(f'loss_{name}', loss, weight.sum())
+                loss = Metric(f'loss_{cat.name}', loss, weight.sum())
                 metrics += loss
         metrics += Metric('loss', total_loss, target_weight.sum())
         return metrics
 
-    def _should_include_this_loss(self, name):
+    def _should_include_this_loss(self, cat):
+        name = cat.name
         if name == 'PTYPE' and 'p' in self.mode:
             return True
         if name.startswith('C_') and 'c' in self.mode:

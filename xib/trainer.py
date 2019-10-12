@@ -38,9 +38,8 @@ class Trainer:
             batch = next(iterator)
             self.model.train()
             self.optimizer.zero_grad()
-            distr = self.model(batch)
-            # self.model.predict(batch)
-            metrics = self._analyze_output(distr, batch.target_feat, batch.target_weight)
+            scores = self.model.score(batch)
+            metrics = self._analyze_scores(scores)
             accum_metrics += metrics
             metrics.loss.mean.backward()  # IDEA(j_luo) maybe clip gradient norm?
             self.optimizer.step()
@@ -61,21 +60,19 @@ class Trainer:
         torch.save(to_save, out_path)
         logging.imp(f'Model saved to {out_path}.')
 
-    def _analyze_output(self, distr, target_feat, target_weight) -> Metrics:
+    def _analyze_output(self, scores) -> Metrics:
         metrics = Metrics()
         total_loss = 0.0
-        for cat, output in distr.items():
+        total_weight = 0.0
+        for cat, (losses, weights) in scores.items():
             if self._should_include_this_loss(cat):
-                i = cat.value
-                target = target_feat[:, i]
-                weight = target_weight[:, i]
-                log_probs = output.gather(1, target.view(-1, 1)).view(-1)
-
-                loss = -(log_probs * weight).sum()
+                loss = (losses * weights).sum()
+                weight = weights.sum()
                 total_loss += loss
-                loss = Metric(f'loss_{cat.name}', loss, weight.sum())
+                total_weight += weight
+                loss = Metric(f'loss_{cat.name}', loss, weight)
                 metrics += loss
-        metrics += Metric('loss', total_loss, target_weight.sum())
+        metrics += Metric('loss', total_loss, total_weight)
         return metrics
 
     def _should_include_this_loss(self, cat):

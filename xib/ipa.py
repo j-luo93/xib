@@ -7,6 +7,7 @@ IPAFeature: the base Enum class that all feature Enum classes subclass.
 feature or feat: the IPAFeature variable. PType.CONSONANT for instance.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum, unique
 
@@ -19,32 +20,6 @@ def get_enum_by_cat(cat):
 
 def get_cat_by_enum(e):
     return getattr(Category, inflection.underscore(e.__name__).upper())
-
-
-@dataclass
-class Index:
-    g_idx: int  # global index
-    c_idx: int  # category index
-    f_idx: int  # feature index
-
-    _instances = dict()
-
-    def __post_init__(self):
-        if self.g_idx in self._instances:
-            raise RuntimeError(f'Duplicate global index at {self.g_idx}.')
-        self._instances[self.g_idx] = self
-
-    @classmethod
-    def get_feature(cls, g_idx: int) -> int:
-        """Get an IPAFeature instance by the global index."""
-        index = cls._instances[g_idx]
-        cat = Category(index.c_idx)
-        e = get_enum_by_cat(cat)
-        return e(index)
-
-    @classmethod
-    def total_indices(cls):
-        return len(cls._instances)
 
 
 @unique
@@ -66,7 +41,53 @@ class Category(Enum):
 
 
 class IPAFeature(Enum):
-    pass
+
+    @classmethod
+    def get(cls, f_idx: int) -> str:
+        """Get the feature name from feature index."""
+        cat = get_cat_by_enum(cls)
+        c_idx = cat.value
+        return Index.get_feature_by_cat(c_idx, f_idx).name
+
+
+@dataclass
+class Index:
+    g_idx: int  # global index
+    c_idx: int  # category index
+    f_idx: int  # feature index
+
+    _instances = dict()
+    _cat_instances = defaultdict(dict)
+
+    def __post_init__(self):
+        if self.g_idx in self._instances:
+            raise RuntimeError(f'Duplicate global index at {self.g_idx}.')
+        self._instances[self.g_idx] = self
+        if self.f_idx in self._cat_instances[self.c_idx]:
+            raise RuntimeError(f'Duplicate feature index at {self.f_idx} for category index {self.c_idx}.')
+        self._cat_instances[self.c_idx][self.f_idx] = self
+
+    @classmethod
+    def get_feature(cls, g_idx: int) -> IPAFeature:
+        """Get an IPAFeature instance by the global index."""
+        index = cls._instances[g_idx]
+        return Index._get_feature_by_index(index)
+
+    @staticmethod
+    def _get_feature_by_index(index):
+        cat = Category(index.c_idx)
+        e = get_enum_by_cat(cat)
+        return e(index)
+
+    @classmethod
+    def get_feature_by_cat(cls, c_idx: int, f_idx: int) -> IPAFeature:
+        """Get an IPAFeature instance by the category index and the feature idx."""
+        index = cls._cat_instances[c_idx][f_idx]
+        return Index._get_feature_by_index(index)
+
+    @classmethod
+    def total_indices(cls):
+        return len(cls._instances)
 
 
 @unique

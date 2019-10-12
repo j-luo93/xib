@@ -84,7 +84,7 @@ class Model(nn.Module):
         self.encoder = Encoder()
         self.predictor = Predictor()
 
-    def forward(self, batch):
+    def forward(self, batch) -> Dict[Category, torch.Tensor]:
         """
         First encode the `feat_matrix` into a vector `h`, then based on it predict the distributions of features.
         """
@@ -92,21 +92,31 @@ class Model(nn.Module):
         distr = self.predictor(h)
         return distr
 
-    def predict(self, batch, k=-1) -> Dict[str, Tuple[torch.Tensor, torch.Tensor]]:
+    def score(self, batch) -> Dict[Category, torch.Tensor]:
+        distr = self(batch)
+        scores = dict()
+        for cat, output in distr.items():
+            i = cat.value
+            target = batch.target_feat[:, i]
+            weight = batch.target_weight[:, i]
+            log_probs = output.gather(1, target.view(-1, 1)).view(-1)
+            scores[cat] = (-log_probs, weight)
+        return scores
+
+    def predict(self, batch, k=-1) -> Dict[Category, Tuple[torch.Tensor, torch.Tensor, np.ndarray]]:
         """
         Predict the top K results for each feature group.
         If k == -1, then everything would be sorted and returned, otherwise take the topk.
         """
         ret = dict()
         distr = self(batch)
-        for name, log_probs in distr.items():
-            cat = Category.get_cat_by_name(name)
-            breakpoint()  # DEBUG(j_luo)
-            name = name.lower()
+        for cat, log_probs in distr.items():
+            e = get_enum_by_cat(cat)
+            name = cat.name.lower()
             log_probs = NamedTensor(log_probs, names=['batch', name])
             max_k = log_probs.size(name)
             this_k = max_k if k == -1 else min(max_k, k)
             top_values, top_indices = log_probs.topk(this_k, dim=-1)
-            top_cats = np.asarray([cat(i).name for i in top_indices.view(-1)]).reshape(*top_indices.shape)
+            top_cats = np.asarray([e.get(i) for i in top_indices.view(-1).cpu().numpy()]).reshape(*top_indices.shape)
             ret[name] = (top_values, top_indices, top_cats)
         return ret

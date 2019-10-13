@@ -60,7 +60,7 @@ class Trainer:
         torch.save(to_save, out_path)
         logging.imp(f'Model saved to {out_path}.')
 
-    def _analyze_output(self, scores) -> Metrics:
+    def _analyze_scores(self, scores) -> Metrics:
         metrics = Metrics()
         total_loss = 0.0
         total_weight = 0.0

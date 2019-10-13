@@ -65,7 +65,8 @@ class Predictor(nn.Module):
         # Deal with conditions for some categories
         for cat, index in conditions.items():
             # Find out the exact value to be conditioned on.
-            condition_log_probs = ret[cat][:, index.f_idx]
+            condition_cat = Category(index.c_idx)
+            condition_log_probs = ret[condition_cat][:, index.f_idx]
             ret[cat] = ret[cat] + condition_log_probs.unsqueeze(dim=-1)
 
         return ret

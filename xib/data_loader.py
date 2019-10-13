@@ -51,6 +51,9 @@ class Batch:
             if anno is not np.ndarray:
                 setattr(self, attr, get_tensor(getattr(self, attr)))
 
+    def __len__(self):
+        return self.batch_size
+
     @property
     def shape(self):
         return self.feat_matrix.shape
@@ -130,11 +133,12 @@ class IpaDataLoader(DataLoader):
 
     def __iter__(self):
         for segments, feat_matrix, lengths in super().__iter__():
+            new_lengths = np.asarray(list(map(lambda x: len(x.split('-')), segments)))
             bs, ws, _ = feat_matrix.shape
             target_weight = get_length_mask(lengths, ws)
 
             feat_matrix = feat_matrix.repeat(ws, 1, 1)
             pos_to_predict = get_range(ws, 2, 0).repeat(1, bs).view(-1)
-            target_weight = target_weight.reshape(-1)
+            target_weight = target_weight.t().reshape(-1)
             batch = Batch(segments, feat_matrix, target_weight, pos_to_predict)
             yield batch

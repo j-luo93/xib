@@ -1,3 +1,4 @@
+from devlib import PandasDataLoader
 import logging
 import random
 from dataclasses import dataclass, field
@@ -35,7 +36,7 @@ class Batch:
             indices = [Index.get_feature(i).value for i in range(total)]
             for index in indices:
                 self._g2f[index.g_idx] = index.f_idx
-            # NOTE(j_luo) This is feature index.
+        # NOTE(j_luo) This is feature index.
         self.target_feat = self._g2f[target_feat]
         # NOTE(j_luo) This has to be a new copy, therefore expand won't work.
         self.target_weight = self.target_weight.unsqueeze(dim=-1).repeat(1, g.num_feature_groups)
@@ -46,6 +47,13 @@ class Batch:
             condition_idx = index.f_idx
             mask = condition_idx != self.target_feat[:, index.c_idx]
             self.target_weight[mask, idx] = 0.0
+
+        # NOTE(j_luo) Refine names.
+        # IDEA(j_luo) We can move this process a bit earlier to DataLoader.
+        self.feat_matrix = self.feat_matrix.refine_names('batch', 'length', 'feat_group')
+        self.target_weight = self.target_weight.refine_names('batch', 'feat_group')
+        self.pos_to_predict = self.pos_to_predict.refine_names('batch')
+        self.target_feat = self.target_feat.refine_names('batch', 'feat_group')
 
         for attr, anno in self.__annotations__.items():
             if anno is not np.ndarray:
@@ -142,3 +150,9 @@ class IpaDataLoader(DataLoader):
             target_weight = target_weight.t().reshape(-1)
             batch = Batch(segments, feat_matrix, target_weight, pos_to_predict)
             yield batch
+
+
+@init_g_attr
+class ContinuousTextDataLoader(PandasDataLoader):
+    # FIXME(j_luo)
+    pass

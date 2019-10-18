@@ -1,13 +1,20 @@
+from devlib.named_tensor import embed, collapse
 from typing import Dict, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.modules import MultiheadAttention
 
 from arglib import add_argument, init_g_attr
 from devlib import get_range
-from devlib.named_tensor import NamedTensor
+from xib.data_loader import Batch
 from xib.ipa import Category, conditions, get_enum_by_cat, no_none_predictions
+
+add_argument('num_features', default=10, dtype=int, msg='total number of phonetic features')
+add_argument('num_feature_groups', default=10, dtype=int, msg='total number of phonetic feature groups')
+add_argument('dim', default=5, dtype=int, msg='dimensionality of feature embeddings')
+add_argument('hidden_size', default=5, dtype=int, msg='hidden size')
 
 
 @init_g_attr(default='property')
@@ -93,11 +100,6 @@ class Predictor(nn.Module):
 @init_g_attr(default='property')
 class Model(nn.Module):
 
-    add_argument('num_features', default=10, dtype=int, msg='total number of phonetic features')
-    add_argument('num_feature_groups', default=10, dtype=int, msg='total number of phonetic feature groups')
-    add_argument('dim', default=5, dtype=int, msg='dimensionality of feature embeddings and number of hidden units')
-    add_argument('hidden_size', default=5, dtype=int, msg='hidden size')
-
     def __init__(self, num_features, num_feature_groups, dim, window_size):
         super().__init__()
         self.encoder = Encoder()
@@ -132,10 +134,33 @@ class Model(nn.Module):
         for cat, log_probs in distr.items():
             e = get_enum_by_cat(cat)
             name = cat.name.lower()
-            log_probs = NamedTensor(log_probs, names=['batch', name])
             max_k = log_probs.size(name)
             this_k = max_k if k == -1 else min(max_k, k)
             top_values, top_indices = log_probs.topk(this_k, dim=-1)
             top_cats = np.asarray([e.get(i) for i in top_indices.view(-1).cpu().numpy()]).reshape(*top_indices.shape)
             ret[name] = (top_values, top_indices, top_cats)
         return ret
+
+
+@init_g_attr(default='property')
+class DecipherModel(nn.Module):
+
+    add_argument('adapt_mode', default='none', choices=['none'], dtype=str,
+                 msg='how to adapt the features from one language to another')
+    add_argument('num_self_attn_layers', default=2, dtype=int, msg='number of self attention layers')
+
+    def __init__(self, num_features, dim, adapt_mode, num_self_attn_layers):
+        super().__init__()
+        # NOTE(j_luo) I'm keeping two embeddings for now, now for LM evaluation and the other for prediction BIOs.
+        self.emb_for_label = nn.Embedding(num_features, dim)
+        self.emb_for_lm = nn.Embedding(num_features, dim)
+
+        self.self_attn_layers = nn.ModuleList()
+        for _ in range(num_self_attn_layers):
+            self.self_attn_layers.append(MultiheadAttention(dim, 8))
+
+    def forward(self, batch: Batch):
+        out = embed(self.emb_for_label, batch.feat_matrix, 'dim')
+        out = collapse(out, 'feat_group', 'dim')
+        for layer in self.self_attn_layers:
+            out = layer()

@@ -1,9 +1,9 @@
 from typing import Dict, Tuple
 
 import numpy as np
-
 import torch
 import torch.nn as nn
+
 from arglib import add_argument, init_g_attr
 from devlib import get_range
 from devlib.named_tensor import NamedTensor
@@ -13,9 +13,15 @@ from xib.ipa import Category, conditions, get_enum_by_cat, no_none_predictions
 @init_g_attr(default='property')
 class Encoder(nn.Module):
 
-    def __init__(self, num_features, num_feature_groups, dim, window_size, hidden_size):
+    add_argument('emb_groups', default='pcvdst', dtype=str, msg='what feature groups to embed.')
+
+    def __init__(self, num_features, num_feature_groups, dim, window_size, hidden_size, emb_groups):
         super().__init__()
-        self.cat_dim = dim * num_feature_groups
+        self.c_idx = Encoder._get_effective_c_idx(emb_groups)
+        if len(self.c_idx) > num_feature_groups:
+            raise RuntimeError('Something is seriously wrong.')
+
+        self.cat_dim = dim * len(self.c_idx)
         self.feat_embeddings = nn.Embedding(self.num_features, self.dim)
         self.conv_layers = nn.Sequential(
             nn.Conv1d(self.cat_dim, self.cat_dim, self.window_size, padding=self.window_size // 2)
@@ -25,8 +31,20 @@ class Encoder(nn.Module):
             nn.LeakyReLU(negative_slope=0.1)
         )
 
+    @staticmethod
+    def _get_effective_c_idx(emb_groups):
+        if len(set(emb_groups)) != len(emb_groups):
+            raise ValueError(f'Duplicate values in emb_groups {emb_groups}.')
+        c_idx = list()
+        groups = set(emb_groups)
+        for cat in Category:
+            if cat.name[0].lower() in groups:
+                c_idx.append(cat.value)
+        return c_idx
+
     def forward(self, feat_matrix, pos_to_predict):
         bs, l, _ = feat_matrix.shape
+        feat_matrix = feat_matrix[:, :, self.c_idx]
         feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
         batch_i = get_range(bs, 1, 0)
         feat_emb[batch_i, :, pos_to_predict] = 0.0

@@ -28,6 +28,7 @@ class TestEnP(TestEn):  # Only deal with ptype.
 @reg
 class TestEnPCV(TestEn):
     mode: str = 'pcv'
+    emb_groups: str = 'pcv'
 
 
 @reg

@@ -1,7 +1,7 @@
 from arglib import parse_args, show_args, g
 from devlib import initiate
 
-from manager import Manager, DecipherManager
+from xib.manager import Manager, DecipherManager
 from cfg import reg
 
 

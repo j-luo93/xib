@@ -3,9 +3,10 @@ import logging
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
 from arglib import add_argument, g, init_g_attr
 from trainlib import Metric, Metrics, Tracker, Trainer
-from xib.ipa import Category
+from xib.ipa import Category, should_include
 
 
 @init_g_attr(default='property')
@@ -68,7 +69,7 @@ class LMTrainer(BaseTrainer):
         total_loss = 0.0
         total_weight = 0.0
         for cat, (losses, weights) in scores.items():
-            if self._should_include_this_loss(cat):
+            if should_include(self.mode, cat):
                 loss = (losses * weights).sum()
                 weight = weights.sum()
                 total_loss += loss
@@ -78,22 +79,6 @@ class LMTrainer(BaseTrainer):
         metrics += Metric('loss', total_loss, total_weight)
         return metrics
 
-    def _should_include_this_loss(self, cat):
-        name = cat.name
-        if name == 'PTYPE' and 'p' in self.mode:
-            return True
-        if name.startswith('C_') and 'c' in self.mode:
-            return True
-        if name.startswith('V_') and 'v' in self.mode:
-            return True
-        if name.startswith('D_') and 'd' in self.mode:
-            return True
-        if name.startswith('S_') and 's' in self.mode:
-            return True
-        if name.startswith('T_') and 't' in self.mode:
-            return True
-        return False
-
 
 class DecipherTrainer(BaseTrainer):
 
@@ -101,5 +86,14 @@ class DecipherTrainer(BaseTrainer):
         self.model.train()
         self.optimizer.zero_grad()
         batch = next(self.iterator)
-        # FIXME(j_luo)
-        pass
+        scores = self.model(batch)
+        bs = batch.feat_matrix.size('batch')
+        metrics = Metrics(*[
+            Metric(name, score, bs) for name, score in scores.items()
+        ])
+        score = Metric('score', sum(metrics), bs)
+        metrics += score
+        loss = metrics.score.mean
+        loss.backward()
+        self.optimizer.step()
+        return metrics

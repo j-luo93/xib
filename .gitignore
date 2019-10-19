@@ -102,3 +102,6 @@ ENV/
 
 # my stuff
 .vscode
+data/
+log/
+notebooks/

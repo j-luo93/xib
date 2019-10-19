@@ -1,4 +1,4 @@
-from devlib.named_tensor import embed, collapse
+from dataclasses import dataclass
 from typing import Dict, Tuple
 
 import numpy as np
@@ -8,23 +8,38 @@ from torch.nn.modules import MultiheadAttention
 
 from arglib import add_argument, init_g_attr
 from devlib import get_range
+from devlib.named_tensor import embed, self_attend
 from xib.data_loader import Batch
-from xib.ipa import Category, conditions, get_enum_by_cat, no_none_predictions
+from xib.ipa import (Category, conditions, get_enum_by_cat,
+                     no_none_predictions, should_include)
 
 add_argument('num_features', default=10, dtype=int, msg='total number of phonetic features')
 add_argument('num_feature_groups', default=10, dtype=int, msg='total number of phonetic feature groups')
 add_argument('dim', default=5, dtype=int, msg='dimensionality of feature embeddings')
 add_argument('hidden_size', default=5, dtype=int, msg='hidden size')
+add_argument('emb_groups', default='pcvdst', dtype=str, msg='what feature groups to embed.')
+
+
+Tensor = torch.Tensor
+
+
+def _get_effective_c_idx(emb_groups):
+    if len(set(emb_groups)) != len(emb_groups):
+        raise ValueError(f'Duplicate values in emb_groups {emb_groups}.')
+    c_idx = list()
+    groups = set(emb_groups)
+    for cat in Category:
+        if cat.name[0].lower() in groups:
+            c_idx.append(cat.value)
+    return c_idx
 
 
 @init_g_attr(default='property')
 class Encoder(nn.Module):
 
-    add_argument('emb_groups', default='pcvdst', dtype=str, msg='what feature groups to embed.')
-
     def __init__(self, num_features, num_feature_groups, dim, window_size, hidden_size, emb_groups):
         super().__init__()
-        self.c_idx = Encoder._get_effective_c_idx(emb_groups)
+        self.c_idx = _get_effective_c_idx(emb_groups)
         if len(self.c_idx) > num_feature_groups:
             raise RuntimeError('Something is seriously wrong.')
 
@@ -37,17 +52,6 @@ class Encoder(nn.Module):
             nn.Linear(self.cat_dim, self.hidden_size),
             nn.LeakyReLU(negative_slope=0.1)
         )
-
-    @staticmethod
-    def _get_effective_c_idx(emb_groups):
-        if len(set(emb_groups)) != len(emb_groups):
-            raise ValueError(f'Duplicate values in emb_groups {emb_groups}.')
-        c_idx = list()
-        groups = set(emb_groups)
-        for cat in Category:
-            if cat.name[0].lower() in groups:
-                c_idx.append(cat.value)
-        return c_idx
 
     def forward(self, feat_matrix, pos_to_predict):
         bs, l, _ = feat_matrix.shape
@@ -148,8 +152,9 @@ class DecipherModel(nn.Module):
     add_argument('adapt_mode', default='none', choices=['none'], dtype=str,
                  msg='how to adapt the features from one language to another')
     add_argument('num_self_attn_layers', default=2, dtype=int, msg='number of self attention layers')
+    add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
 
-    def __init__(self, num_features, dim, adapt_mode, num_self_attn_layers):
+    def __init__(self, lm_model: 'a', num_features, dim, emb_groups, adapt_mode, num_self_attn_layers, mode, score_per_word):
         super().__init__()
         # NOTE(j_luo) I'm keeping two embeddings for now, now for LM evaluation and the other for prediction BIOs.
         self.emb_for_label = nn.Embedding(num_features, dim)
@@ -159,8 +164,61 @@ class DecipherModel(nn.Module):
         for _ in range(num_self_attn_layers):
             self.self_attn_layers.append(MultiheadAttention(dim, 8))
 
+        cat_dim = dim * len(_get_effective_c_idx(emb_groups))
+        self.label_predictor = nn.Sequential(
+            nn.Linear(cat_dim, cat_dim),
+            nn.LeakyReLU(negative_slope=0.1),
+            nn.Linear(cat_dim, 3)  # BIO.
+        )
+
+    def _adapt(self, packed_feat_matrix: Tensor) -> Tensor:
+        if self.adapt_mode == 'none':
+            return packed_feat_matrix
+        else:
+            raise NotImplementedError()
+
     def forward(self, batch: Batch):
-        out = embed(self.emb_for_label, batch.feat_matrix, 'dim')
-        out = collapse(out, 'feat_group', 'dim')
+        # Get the samples of label sequences first.
+        out = embed(self.emb_for_label, batch.feat_matrix, 'feat_dim_for_label')
+        out = out.flatten(['feat_group', 'feat_dim_for_label'], 'char_dim_for_label')
         for layer in self.self_attn_layers:
-            out = layer()
+            out, _ = self_attend(layer, out)
+        label_probs = out.log_softmax(dim=-1).exp()
+        label_seq_samples, label_seq_sample_probs = DecipherModel._sample(label_samples)  # FIXME(j_luo)
+
+        # Get the lm score.
+        packed_feat_matrix, orig_idx = self._pack(label_seq_samples, batch.feat_matrix)  # FIXME(j_luo)
+        packed_feat_matrix = self._adapt(packed_feat_matrix)
+        lm_batch = self._prepare_batch(packed_feat_matrix)  # FIXME(j_luo)
+        scores = self.lm_model.score(lm_batch)  # FIXME(j_luo) make sure that is named.
+        nlls = list()
+        for cat, (nll, _) in scores.items():
+            if should_include(self.mode, cat):
+                nlls.append(nll)
+        nlls = sum(nlls)
+        lm_score = self._unpack(nlls, orig_idx)  # FIXME(j_luo)
+
+        # Compute word score that corresponds to the number of readable words.
+        word_score = self.score_per_word  # FIXME(j_luo)
+
+        bs = batch.feat_matrix.size('batch')
+        return {
+            'word_score': word_score,
+            'lm_score': lm_score
+        }
+
+    @staticmethod
+    def _prepare_batch(packed_feat_matrix: Tensor) -> Batch:
+        pass
+
+    @staticmethod
+    def _pack(label_seq_samples: Tensor, feat_matrix: Tensor) -> Tuple[Tensor, Tensor]:
+        pass
+
+    @staticmethod
+    def _unpack(self, lm_score: Tensor, orig_idx: Tensor) -> Tensor:
+        pass
+
+    @staticmethod
+    def _sample(label_samples: Tensor) -> Tuple[Tensor, Tensor]:
+        pass

@@ -288,3 +288,20 @@ class TContour(IPAFeature):
 class TGlobal(IPAFeature):
     NONE = Index(110, 13, 0)
     DOWNSTEP = Index(111, 13, 1)
+
+
+def should_include(mode, cat):
+    name = cat.name
+    if name == 'PTYPE' and 'p' in mode:
+        return True
+    if name.startswith('C_') and 'c' in mode:
+        return True
+    if name.startswith('V_') and 'v' in mode:
+        return True
+    if name.startswith('D_') and 'd' in mode:
+        return True
+    if name.startswith('S_') and 's' in mode:
+        return True
+    if name.startswith('T_') and 't' in mode:
+        return True
+    return False

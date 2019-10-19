@@ -1,15 +1,14 @@
-from devlib import PandasDataLoader
 import logging
 import random
 from dataclasses import dataclass, field
 from typing import Union
 
 import numpy as np
-
 import torch
+from torch.utils.data import DataLoader, Dataset, Sampler
+
 from arglib import add_argument, g, init_g_attr
 from devlib import get_length_mask, get_range, get_tensor
-from torch.utils.data import DataLoader, Dataset, Sampler
 from xib.ipa import Category, Index, Ptype, conditions
 
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
@@ -75,7 +74,6 @@ class Batch:
         return self.feat_matrix.size(1)
 
 
-@init_g_attr
 class IpaDataset(Dataset):
 
     def __init__(self, data_path):
@@ -124,13 +122,14 @@ class BatchSampler(Sampler):
         yield from self.idx_batches
 
 
+add_argument('data_path', dtype=str, msg='path to the feat data in tsv format.')
+add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
+add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
+
+
 @init_g_attr
 class IpaDataLoader(DataLoader):
 
-    # add_argument('batch_size', default=16, dtype=int, msg='batch size')
-    add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
-    add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
-    add_argument('data_path', dtype=str, msg='path to the feat data in tsv format.')
     add_argument('window_size', default=3, dtype=int, msg='window size for the cnn kernel')
 
     def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers):
@@ -153,6 +152,7 @@ class IpaDataLoader(DataLoader):
 
 
 @init_g_attr
-class ContinuousTextDataLoader(PandasDataLoader):
-    # FIXME(j_luo)
+class ContinuousTextDataLoader(IpaDataLoader):
+
+    # FIXME(j_luo) might want to add curriculum learning to anneal the window size.
     pass

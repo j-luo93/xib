@@ -1,9 +1,9 @@
 import os
 
 from arglib import add_argument
-from data_loader import IpaDataLoader, ContinuousTextDataLoader
-from model import Model, DecipherModel
-from trainer import LMTrainer, DecipherTrainer
+from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
+from xib.model import DecipherModel, Model
+from xib.trainer import DecipherTrainer, LMTrainer
 
 add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher'], msg='which task to run')
 

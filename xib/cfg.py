@@ -4,7 +4,7 @@ reg = Registry('cfg')
 
 
 @reg
-class TestEn:
+class LMEn:
     lang = 'en'
 
     dim: int = 20
@@ -21,18 +21,18 @@ class TestEn:
 
 
 @reg
-class TestEnP(TestEn):  # Only deal with ptype.
+class LMEnP(LMEn):  # Only deal with ptype.
     mode: str = 'p'
 
 
 @reg
-class TestEnPCV(TestEn):
+class LMEnPCV(LMEn):
     mode: str = 'pcv'
     emb_groups: str = 'pcv'
 
 
 @reg
-class TestEnPDST(TestEn):
+class LMEnPDST(LMEn):
     mode: str = 'pdst'
 
 
@@ -45,5 +45,5 @@ _all_langs = [
 
 for lang in _all_langs:
     cap_lang = lang[0].upper() + lang[1:]
-    new_cls = type(f'Test{cap_lang}PCV', (TestEnPCV,), {'lang': lang})
+    new_cls = type(f'LM{cap_lang}PCV', (LMEnPCV,), {'lang': lang})
     reg(new_cls)

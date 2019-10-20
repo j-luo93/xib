@@ -48,7 +48,7 @@ class Batch:
             self.target_weight[mask, idx] = 0.0
 
         # NOTE(j_luo) Refine names.
-        # IDEA(j_luo) We can move this process a bit earlier to DataLoader.
+        # IDEA(j_luo) We can move this process a bit earlier to DataLoader?
         self.feat_matrix = self.feat_matrix.refine_names('batch', 'length', 'feat_group')
         self.target_weight = self.target_weight.refine_names('batch', 'feat_group')
         self.pos_to_predict = self.pos_to_predict.refine_names('batch')
@@ -154,5 +154,5 @@ class IpaDataLoader(DataLoader):
 @init_g_attr
 class ContinuousTextDataLoader(IpaDataLoader):
 
-    # FIXME(j_luo) might want to add curriculum learning to anneal the window size.
+    # TODO(j_luo) might want to add curriculum learning to anneal the window size.
     pass

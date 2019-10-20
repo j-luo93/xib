@@ -18,7 +18,7 @@ class BaseTrainer(Trainer):
     add_argument('save_interval', default=500, dtype=int, msg='save models after this many steps')
 
     def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, mode):
-        super.__init__()
+        super().__init__()
         self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
         self.optimizer = optim.Adam(self.model.parameters(), learning_rate)
 
@@ -35,7 +35,7 @@ class BaseTrainer(Trainer):
 
     def check_metrics(self, accum_metrics: Metrics):
         if self.tracker.step % self.check_interval == 0:
-            logging.info(metrics.get_table(f'Step: {self.tracker.step}'))
+            logging.info(accum_metrics.get_table(f'Step: {self.tracker.step}'))
             accum_metrics.clear()
 
     def save(self):

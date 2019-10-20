@@ -1,3 +1,4 @@
+from devlib.named_tensor import adv_index
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
@@ -7,8 +8,8 @@ import torch.nn as nn
 from torch.nn.modules import MultiheadAttention
 
 from arglib import add_argument, init_g_attr
-from devlib import get_range
-from devlib.named_tensor import embed, self_attend
+from devlib import get_range, get_tensor
+from devlib.named_tensor import embed, self_attend, leaky_relu, gather
 from xib.data_loader import Batch
 from xib.ipa import (Category, conditions, get_enum_by_cat,
                      no_none_predictions, should_include)
@@ -39,30 +40,37 @@ class Encoder(nn.Module):
 
     def __init__(self, num_features, num_feature_groups, dim, window_size, hidden_size, emb_groups):
         super().__init__()
-        self.c_idx = _get_effective_c_idx(emb_groups)
+        self.register_buffer('c_idx', get_tensor(_get_effective_c_idx(emb_groups)).refine_names('chosen_feat_group'))
         if len(self.c_idx) > num_feature_groups:
             raise RuntimeError('Something is seriously wrong.')
 
         self.cat_dim = dim * len(self.c_idx)
         self.feat_embeddings = nn.Embedding(self.num_features, self.dim)
+        # IDEA(j_luo) should I define a Rename layer?
         self.conv_layers = nn.Sequential(
             nn.Conv1d(self.cat_dim, self.cat_dim, self.window_size, padding=self.window_size // 2)
         )
-        self.linear_layers = nn.Sequential(
-            nn.Linear(self.cat_dim, self.hidden_size),
-            nn.LeakyReLU(negative_slope=0.1)
-        )
+        self.linear = nn.Linear(self.cat_dim, self.hidden_size)
 
     def forward(self, feat_matrix, pos_to_predict):
         bs, l, _ = feat_matrix.shape
-        feat_matrix = feat_matrix[:, :, self.c_idx]
-        feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
+        feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
+        feat_emb = embed(self.feat_embeddings, feat_matrix, 'feat_emb')
+        feat_emb = feat_emb.flatten(['chosen_feat_group', 'feat_emb'], 'char_emb')
+        feat_emb = feat_emb.align_to('batch', 'char_emb', 'length')
+        # feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
         batch_i = get_range(bs, 1, 0)
-        feat_emb[batch_i, :, pos_to_predict] = 0.0
-        output = self.conv_layers(feat_emb)  # size: bs x D x l
-        output = self.linear_layers(output.transpose(1, 2))  # size: bs x l x n_hid
+        # TODO(j_luo) ugly
+        feat_emb.rename(None)[batch_i, :, pos_to_predict.rename(None)] = 0.0
+        output = self.conv_layers(feat_emb.rename(None))
+        output = output.refine_names('batch', 'char_conv_repr', 'length')  # size: bs x D x l
+        output = self.linear(output.align_to(..., 'char_conv_repr'))  # size: bs x l x n_hid
+        output = output.refine_names('batch', 'length', 'hidden_repr')
+        output = leaky_relu(output, negative_slope=0.1)
         # NOTE(j_luo) This is actually quite wasteful because we are discarding all the irrelevant information, which is computed anyway. This is equivalent to training on ngrams.
-        h = output[batch_i, pos_to_predict]  # size: bs x n_hid
+        # TODO(j_luo) ugly
+        h = output.rename(None)[batch_i, pos_to_predict.rename(None)]
+        h = h.refine_names('batch', 'hidden_repr')  # size: bs x n_hid
         return h
 
 
@@ -71,10 +79,7 @@ class Predictor(nn.Module):
 
     def __init__(self, num_features, hidden_size, window_size):
         super().__init__()
-        self.layers = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.LeakyReLU(0.1),
-        )
+        self.linear = nn.Linear(hidden_size, hidden_size)
         self.feat_predictors = nn.ModuleDict()
         for cat in Category:
             e = get_enum_by_cat(cat)
@@ -82,11 +87,12 @@ class Predictor(nn.Module):
             self.feat_predictors[cat.name] = nn.Linear(hidden_size, len(e))
 
     def forward(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
-        shared_h = self.layers(h)
+        shared_h = leaky_relu(self.linear(h).refine_names(..., 'shared_repr'), negative_slope=0.1)
         ret = dict()
         for name, layer in self.feat_predictors.items():
             cat = getattr(Category, name)
-            out = layer(shared_h)
+            dim_name = f'{name.lower()}_repr'
+            out = layer(shared_h).refine_names(..., dim_name)
             if cat in no_none_predictions:
                 index = no_none_predictions[cat]
                 out[:, index.f_idx] = -999.9
@@ -96,7 +102,7 @@ class Predictor(nn.Module):
             # Find out the exact value to be conditioned on.
             condition_cat = Category(index.c_idx)
             condition_log_probs = ret[condition_cat][:, index.f_idx]
-            ret[cat] = ret[cat] + condition_log_probs.unsqueeze(dim=-1)
+            ret[cat] = ret[cat] + condition_log_probs.align_as(ret[cat])
 
         return ret
 
@@ -124,7 +130,7 @@ class Model(nn.Module):
             i = cat.value
             target = batch.target_feat[:, i]
             weight = batch.target_weight[:, i]
-            log_probs = output.gather(1, target.view(-1, 1)).view(-1)
+            log_probs = gather(output, target)
             scores[cat] = (-log_probs, weight)
         return scores
 
@@ -181,10 +187,11 @@ class DecipherModel(nn.Module):
         # Get the samples of label sequences first.
         out = embed(self.emb_for_label, batch.feat_matrix, 'feat_dim_for_label')
         out = out.flatten(['feat_group', 'feat_dim_for_label'], 'char_dim_for_label')
+        out = out.align_to(['length', 'batch', 'char_dim_for_label'])
         for layer in self.self_attn_layers:
             out, _ = self_attend(layer, out)
         label_probs = out.log_softmax(dim=-1).exp()
-        label_seq_samples, label_seq_sample_probs = DecipherModel._sample(label_samples)  # FIXME(j_luo)
+        label_seq_samples, label_seq_sample_probs = DecipherModel._sample(label_probs)  # FIXME(j_luo)
 
         # Get the lm score.
         packed_feat_matrix, orig_idx = self._pack(label_seq_samples, batch.feat_matrix)  # FIXME(j_luo)
@@ -220,5 +227,6 @@ class DecipherModel(nn.Module):
         pass
 
     @staticmethod
-    def _sample(label_samples: Tensor) -> Tuple[Tensor, Tensor]:
+    def _sample(label_probs: Tensor) -> Tuple[Tensor, Tensor]:
+        breakpoint() # DEBUG(j_luo)
         pass

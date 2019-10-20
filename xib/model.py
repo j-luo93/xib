@@ -36,6 +36,19 @@ def _get_effective_c_idx(emb_groups):
 
 
 @init_g_attr(default='property')
+class FeatEmbedding(nn.Module):
+
+    def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim):
+        super().__init__()
+        self.embed_layer = nn.Embedding(num_features, dim)
+
+    def forward(self, idx):
+        feat_emb = embed(self.embed_layer, idx, self.feat_emb_name)
+        feat_emb = feat_emb.flatten([self.group_name, self.feat_emb_name], self.char_emb_name)
+        return feat_emb
+
+
+@init_g_attr(default='property')
 class Encoder(nn.Module):
 
     def __init__(self, num_features, num_feature_groups, dim, window_size, hidden_size, emb_groups):
@@ -45,7 +58,7 @@ class Encoder(nn.Module):
             raise RuntimeError('Something is seriously wrong.')
 
         self.cat_dim = dim * len(self.c_idx)
-        self.feat_embeddings = nn.Embedding(self.num_features, self.dim)
+        self.feat_embedding = FeatEmbedding('feat_emb', 'chosen_feat_group', 'char_emb')
         # IDEA(j_luo) should I define a Rename layer?
         self.conv_layers = nn.Sequential(
             nn.Conv1d(self.cat_dim, self.cat_dim, self.window_size, padding=self.window_size // 2)
@@ -55,8 +68,7 @@ class Encoder(nn.Module):
     def forward(self, feat_matrix, pos_to_predict):
         bs, l, _ = feat_matrix.shape
         feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
-        feat_emb = embed(self.feat_embeddings, feat_matrix, 'feat_emb')
-        feat_emb = feat_emb.flatten(['chosen_feat_group', 'feat_emb'], 'char_emb')
+        feat_emb = self.feat_embedding(feat_matrix)
         feat_emb = feat_emb.align_to('batch', 'char_emb', 'length')
         # feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
         batch_i = get_range(bs, 1, 0)
@@ -160,17 +172,19 @@ class DecipherModel(nn.Module):
     add_argument('num_self_attn_layers', default=2, dtype=int, msg='number of self attention layers')
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
 
-    def __init__(self, lm_model: 'a', num_features, dim, emb_groups, adapt_mode, num_self_attn_layers, mode, score_per_word):
+    def __init__(self, lm_model: 'a', num_feature_groups, num_features, dim, emb_groups, adapt_mode, num_self_attn_layers, mode, score_per_word):
         super().__init__()
-        # NOTE(j_luo) I'm keeping two embeddings for now, now for LM evaluation and the other for prediction BIOs.
-        self.emb_for_label = nn.Embedding(num_features, dim)
-        self.emb_for_lm = nn.Embedding(num_features, dim)
-
-        self.self_attn_layers = nn.ModuleList()
-        for _ in range(num_self_attn_layers):
-            self.self_attn_layers.append(MultiheadAttention(dim, 8))
+        self.register_buffer('c_idx', get_tensor(_get_effective_c_idx(emb_groups)).refine_names('chosen_feat_group'))
+        if len(self.c_idx) > num_feature_groups:
+            raise RuntimeError('Something is seriously wrong.')
+        # NOTE(j_luo) I'm keeping a separate embedding for label prediction.
+        self.emb_for_label = FeatEmbedding('feat_emb_for_label', 'chosen_feat_group', 'char_emb_for_label')
 
         cat_dim = dim * len(_get_effective_c_idx(emb_groups))
+        self.self_attn_layers = nn.ModuleList()
+        for _ in range(num_self_attn_layers):
+            self.self_attn_layers.append(MultiheadAttention(cat_dim, 4))
+
         self.label_predictor = nn.Sequential(
             nn.Linear(cat_dim, cat_dim),
             nn.LeakyReLU(negative_slope=0.1),
@@ -185,16 +199,18 @@ class DecipherModel(nn.Module):
 
     def forward(self, batch: Batch):
         # Get the samples of label sequences first.
-        out = embed(self.emb_for_label, batch.feat_matrix, 'feat_dim_for_label')
-        out = out.flatten(['feat_group', 'feat_dim_for_label'], 'char_dim_for_label')
-        out = out.align_to(['length', 'batch', 'char_dim_for_label'])
-        for layer in self.self_attn_layers:
-            out, _ = self_attend(layer, out)
-        label_probs = out.log_softmax(dim=-1).exp()
+        feat_matrix = adv_index(batch.feat_matrix, 'feat_group', self.c_idx)
+        out = self.emb_for_label(feat_matrix)
+        out = out.align_to('length', 'batch', 'char_emb_for_label')
+        for i, layer in enumerate(self.self_attn_layers):
+            out, _ = self_attend(layer, out, f'self_attn_repr')
+        logits = self.label_predictor(out.rename(None)).refine_names(*out.names)
+        logits = logits.rename(**{f'self_attn_repr': 'label'})
+        label_probs = logits.log_softmax(dim=-1).exp()
         label_seq_samples, label_seq_sample_probs = DecipherModel._sample(label_probs)  # FIXME(j_luo)
 
         # Get the lm score.
-        packed_feat_matrix, orig_idx = self._pack(label_seq_samples, batch.feat_matrix)  # FIXME(j_luo)
+        packed_feat_matrix, orig_idx = self._pack(label_seq_samples, feat_matrix)  # FIXME(j_luo)
         packed_feat_matrix = self._adapt(packed_feat_matrix)
         lm_batch = self._prepare_batch(packed_feat_matrix)  # FIXME(j_luo)
         scores = self.lm_model.score(lm_batch)  # FIXME(j_luo) make sure that is named.
@@ -228,5 +244,5 @@ class DecipherModel(nn.Module):
 
     @staticmethod
     def _sample(label_probs: Tensor) -> Tuple[Tensor, Tensor]:
-        breakpoint() # DEBUG(j_luo)
+        breakpoint()  # DEBUG(j_luo)
         pass

@@ -10,16 +10,18 @@ add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher'], msg='w
 
 class Manager:
 
-    model_cls = Model
     data_loader_cls = IpaDataLoader
     trainer_cls = LMTrainer
 
     def __init__(self):
-        self.model = self.model_cls()
+        self.model = self._get_model()
         if os.environ.get('CUDA_VISIBLE_DEVICES', False):
             self.model.cuda()
         self.train_data_loader = self.data_loader_cls()
         self.trainer = self.trainer_cls(self.model, self.train_data_loader)
+
+    def _get_model(self):
+        return Model()
 
     def train(self):
         self.trainer.train()
@@ -27,6 +29,8 @@ class Manager:
 
 class DecipherManager(Manager):
 
-    model_cls = DecipherModel
     data_loader_cls = ContinuousTextDataLoader
     trainer_cls = DecipherTrainer
+
+    def _get_model(self):
+        return DecipherModel(None)  # FIXME(j_luo) fill in pretrained lm_model.

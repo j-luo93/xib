@@ -47,3 +47,8 @@ for lang in _all_langs:
     cap_lang = lang[0].upper() + lang[1:]
     new_cls = type(f'LM{cap_lang}PCV', (LMEnPCV,), {'lang': lang})
     reg(new_cls)
+
+
+@reg
+class DecipherEnPCV(LMEnPCV):
+    task: str = 'decipher'

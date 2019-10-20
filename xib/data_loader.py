@@ -100,8 +100,8 @@ class BatchSampler(Sampler):
     def __init__(self, dataset: 'a', char_per_batch: 'p', shuffle: 'p' = True):
         self.dataset = dataset
         # Partition the entire dataset beforehand into batches by length.
-        lengths = np.asarray(list(map(len, self.dataset.data['segments'])))
-        indices = lengths.argsort()
+        lengths = np.asarray(list(map(len, self.dataset.data['matrices'])))
+        indices = lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
         logging.info('Partitioning the data into batches.')
         self.idx_batches = list()
         i = 0
@@ -140,7 +140,6 @@ class IpaDataLoader(DataLoader):
 
     def __iter__(self):
         for segments, feat_matrix, lengths in super().__iter__():
-            new_lengths = np.asarray(list(map(lambda x: len(x.split('-')), segments)))
             bs, ws, _ = feat_matrix.shape
             target_weight = get_length_mask(lengths, ws)
 

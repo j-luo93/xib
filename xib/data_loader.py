@@ -18,9 +18,9 @@ LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
 class Batch:
     segments: np.ndarray
     feat_matrix: LongTensor
-    target_weight: LongTensor
     pos_to_predict: LongTensor
     target_feat: LongTensor = field(init=False)
+    target_weight: LongTensor = field(init=False)
 
     _g2f = None
 
@@ -37,8 +37,7 @@ class Batch:
                 self._g2f[index.g_idx] = index.f_idx
         # NOTE(j_luo) This is feature index.
         self.target_feat = self._g2f[target_feat]
-        # NOTE(j_luo) This has to be a new copy, therefore expand won't work.
-        self.target_weight = self.target_weight.unsqueeze(dim=-1).repeat(1, g.num_feature_groups)
+        self.target_weight = torch.ones(self.batch_size, g.num_feature_groups)
 
         # NOTE(j_luo) If the condition is not satisfied, the target weight should be set to 0.
         for cat, index in conditions.items():
@@ -88,38 +87,49 @@ class IpaDataset(Dataset):
 
 
 def collate_fn(batch):
-    segments, matrices = zip(*batch)
-    lengths = torch.LongTensor(list(map(len, matrices)))
-    feat_matrix = torch.nn.utils.rnn.pad_sequence(matrices, batch_first=True)  # size: sl x K -> bs x max_sl x K
-    return np.asarray(segments), feat_matrix, lengths
+    segments = list()
+    matrices = list()
+    positions = list()
+    lengths = list()
+    for segment, matrix in batch:
+        length = len(matrix)
+        for position in range(length):
+            segments.append(segment)
+            matrices.append(matrix)
+            positions.append(position)
+            lengths.append(length)
+    matrices = torch.nn.utils.rnn.pad_sequence(matrices, batch_first=True)
+    return np.asarray(segments), matrices, torch.LongTensor(positions), torch.LongTensor(lengths)
 
 
 @init_g_attr
 class BatchSampler(Sampler):
+    """
+    This class works by sampling (randomly if shuffled) segments, until the total number of characters exceeds char_per_batch.
+    Note that __len__ is not defined.
+    """
 
     def __init__(self, dataset: 'a', char_per_batch: 'p', shuffle: 'p' = True):
         self.dataset = dataset
-        # Partition the entire dataset beforehand into batches by length.
-        lengths = np.asarray(list(map(len, self.dataset.data['matrices'])))
-        indices = lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
-        logging.info('Partitioning the data into batches.')
-        self.idx_batches = list()
-        i = 0
-        while i < len(indices):
-            max_len = lengths[indices[i]]
-            bs = char_per_batch // max_len
-            if bs == 0:
-                raise RuntimeError(f'Batch too small!')
-            self.idx_batches.append(indices[i: i + bs])
-            i += bs
-
-    def __len__(self):
-        return len(self.idx_batches)
+        self.lengths = np.asarray(list(map(len, self.dataset.data['matrices'])))
 
     def __iter__(self):
+        indices = list(range(len(self.dataset)))
         if self.shuffle:
-            random.shuffle(self.idx_batches)
-        yield from self.idx_batches
+            random.shuffle(indices)
+        total_num_char = 0
+        batch = list()
+        for idx in indices:
+            length = self.lengths[idx]
+            if length + total_num_char > self.char_per_batch:
+                yield batch
+                batch = [idx]
+                total_num_char = length
+            else:
+                batch.append(idx)
+                total_num_char += length
+        if batch:
+            yield batch
 
 
 add_argument('data_path', dtype=str, msg='path to the feat data in tsv format.')
@@ -139,14 +149,9 @@ class IpaDataLoader(DataLoader):
                          num_workers=num_workers, collate_fn=collate_fn)
 
     def __iter__(self):
-        for segments, feat_matrix, lengths in super().__iter__():
+        for segments, feat_matrix, pos_to_predict, lengths in super().__iter__():
             bs, ws, _ = feat_matrix.shape
-            target_weight = get_length_mask(lengths, ws)
-
-            feat_matrix = feat_matrix.repeat(ws, 1, 1)
-            pos_to_predict = get_range(ws, 2, 0).repeat(1, bs).view(-1)
-            target_weight = target_weight.t().reshape(-1)
-            batch = Batch(segments, feat_matrix, target_weight, pos_to_predict)
+            batch = Batch(segments, feat_matrix, pos_to_predict)
             yield batch
 
 

@@ -176,12 +176,20 @@ class Model(nn.Module):
         return ret
 
 
+# @dataclass
+# class PackedSamples:
+#     samples: LT
+#     batch_indices: LT
+#     sample_indice: LT
+#     sample_probs: FT
+
 @dataclass
-class PackedSamples:
-    samples: LT
-    inverse_batch_indices: LT
-    inverse_sample_indice: LT
-    sample_probs: FT
+class PackedWords:
+    word_feat_matrices: LT
+    word_lengths: LT
+    batch_indices: LT
+    sample_indices: LT
+    word_positions: LT
 
 
 @init_g_attr(default='property')
@@ -233,19 +241,19 @@ class DecipherModel(nn.Module):
         logits = self.label_predictor(out.rename(None)).refine_names(*out.names)
         logits = logits.rename(**{f'self_attn_repr': 'label'})
         label_probs = logits.log_softmax(dim=-1).exp()
-        packed_samples = self._sample(label_probs)
+        samples, sample_probs = self._sample(label_probs)
 
         # Get the lm score.
-        word_feat_matrix, word_lengths = self._pack(packed_samples, batch.feat_matrix)
-        word_feat_matrix = self._adapt(word_feat_matrix)
-        lm_batch = self._prepare_batch(word_feat_matrix)
-        scores = self.lm_model.score(lm_batch)  # FIXME(j_luo) make sure that is named.
+        packed_words = self._pack(samples, batch.feat_matrix)
+        packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
+        lm_batch = self._prepare_batch(packed_words)  # FIXME(j_luo)  This is actually continous batching.
+        scores = self.lm_model.score(lm_batch)
         nlls = list()
         for cat, (nll, _) in scores.items():
             if should_include(self.mode, cat):
                 nlls.append(nll)
         nlls = sum(nlls)
-        lm_score = self._unpack(nlls, orig_idx)  # FIXME(j_luo)
+        lm_score = self._unpack(nlls, packed_words)  # FIXME(j_luo)
 
         # Compute word score that corresponds to the number of readable words.
         word_score = self.score_per_word  # FIXME(j_luo)
@@ -257,28 +265,38 @@ class DecipherModel(nn.Module):
         }
 
     @staticmethod
-    def _prepare_batch(word_feat_matrix: LT, word_lengths: LT) -> IpaBatch:
+    def _prepare_batch(packed_words: PackedWords) -> IpaBatch:
+
         pass
 
     @staticmethod
-    def _pack(packed_samples: PackedSamples, feat_matrix: LT) -> Tuple[LT, LT]:
+    def _pack(samples: LT, feat_matrix: LT) -> PackedWords:
         # TODO(j_luo) ugly
-        feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
-        # TODO(j_luo) use plural
-        word_feat_matrix, word_lengths = pack_feat_matrix(
-            feat_matrix.rename(None),
-            packed_samples.samples,
-            packed_samples.inverse_batch_indices)  # FIXME(j_luo)
-        word_feat_matrix = word_feat_matrix.refine_names('batch_word', 'feat_group', 'feat_group')
-        word_lengths = word_lengths.refine_names('batch_word')
-        return word_feat_matrix, word_lengths
+        with torch.no_grad():
+            feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
+            samples = samples.align_to('batch', 'sample', 'length')
+            batch_indices, sample_indices, word_positions, word_lengths = extract_words(
+                samples.cpu().numpy())  # FIXME(j_luo)
+            batch_indices = batch_indices.refine_names('batch_word')
+            sample_indices = sample_indices.refine_names('batch_word')
+            word_positions = word_positions.refine_names('batch_word', 'position')
+            word_lengths = word_lengths.refine_name('batch_word')
+
+            key = (
+                batch_indices.align_as(word_positions),
+                sample_indices.align_as(word_positions),
+                word_positions
+            )
+            word_feat_matrices = feat_matrix.rename(None)[key]
+            word_feat_matrices = word_feat_matrices.refine_names('batch_word', 'position', 'feat_group')
+            return PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions)
 
     @staticmethod
-    def _unpack(self, lm_score: FT, orig_idx: LT):
+    def _unpack(self, lm_score: FT, packed_words: PackedWords):
         pass
 
     @staticmethod
-    def _sample(label_probs: FT, source_padding: FT) -> PackedSamples:
+    def _sample(label_probs: FT, source_padding: FT) -> Tuple[LT, FT]:
         """Return samples based on `label_probs`."""
         # TODO(j_luo) ugly
         # Ignore padded indices.
@@ -290,20 +308,27 @@ class DecipherModel(nn.Module):
         label_distr = Categorical(probs=label_probs.rename(None))
         samples = label_distr.sample([self.num_samples]).refine_names('sample', 'batch', 'length')
         samples = samples.align_to('batch', 'sample', 'length')
-        unique_samples, inverse_batch_indices, inverse_sample_indices = batch_unique(samples, 2)  # FIXME(j_luo)
-        unique_samples = unique_samples.refine_names('packed_batch_x_sample', 'length')
-        inverse_batch_indices = inverse_batch_indices.refine_names('packed_batch_x_sample')
-        inverse_sample_indices = inverse_sample_indices.refine_names('packed_batch_x_sample')
+        batch_idx = get_range(samples.size('batch'), 3, 1)
+        sample_idx = get_range(samples.size('sample'), 3, 0)
+        sample_probs = label_probs.rename(None)[sample_idx, batch_idx, samples.rename(None)]
+        sample_probs = sample_probs.refine_names('sample', 'batch', 'length')
+        sample_probs = (source_padding.align_as(sample_probs).float() * sample_probs).sum(dim='length')
+        return samples, sample_probs
+        # samples = samples.cpu().numpy()
+        # unique_samples, batch_indices, sample_indices = batch_unique(samples, 2)  # FIXME(j_luo)
+        # unique_samples = unique_samples.refine_names('packed_batch_x_sample', 'length')
+        # batch_indices = batch_indices.refine_names('packed_batch_x_sample')
+        # sample_indices = sample_indices.refine_names('packed_batch_x_sample')
 
-        # Get packed probs.
-        sample_probs = samples.rename(None)[inverse_batch_indices, inverse_sample_indices]
-        sample_probs = sample_probs.refine_names('packed_batch_x_sample', 'length')
-        source_padding = source_padding.rename(None)[inverse_batch_indices]
-        # IDEA(j_luo) Can I bind name to a fixed number?
-        source_padding = source_padding.refine_names('packed_batch_x_sample', 'length')
-        sample_probs = (sample_probs * source_padding.float()).sum(dim='length')
-        packed_samples = PackedSamples(unique_samples, inverse_batch_indices, inverse_sample_indice, sample_probs)
-        return packed_samples
+        # # Get packed probs.
+        # sample_probs = samples.rename(None)[batch_indices, sample_indices]
+        # sample_probs = sample_probs.refine_names('packed_batch_x_sample', 'length')
+        # source_padding = source_padding.rename(None)[batch_indices]
+        # # IDEA(j_luo) Can I bind name to a fixed number?
+        # source_padding = source_padding.refine_names('packed_batch_x_sample', 'length')
+        # sample_probs = (sample_probs * source_padding.float()).sum(dim='length')
+        # packed_samples = PackedSamples(unique_samples, batch_indices, sample_indice, sample_probs)
+        # return packed_samples
 
         # sample_probs = label_probs.refine(None).gather(2, samples.rename(None))
         # sample_probs = sample_probs.refine_names('batch', 'length', 'sample')

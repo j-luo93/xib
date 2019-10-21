@@ -11,23 +11,53 @@ from arglib import add_argument, g, init_g_attr
 from devlib import get_length_mask, get_range, get_tensor
 from xib.ipa import Category, Index, Ptype, conditions
 
-LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
+
+@dataclass
+class BaseBatch:
+    segments: np.ndarray
+    lengths: torch.LongTensor
+    # TODO(j_luo) use the plurals
+    feat_matrix: torch.LongTensor
+    source_padding: torch.BoolTensor = field(init=False)
+
+    @property
+    def shape(self):
+        return self.feat_matrix.shape
+
+    @property
+    def batch_size(self):
+        return self.feat_matrix.size(0)
+
+    @property
+    def max_length(self):
+        return self.feat_matrix.size(1)
+
+    def cuda(self):
+        """Move tensors to gpu if possible."""
+        for attr, anno in self.__annotations__.items():
+            if anno is not np.ndarray:
+                setattr(self, attr, get_tensor(getattr(self, attr)))
+
+    def __post_init__(self):
+        self.lengths = self.lengths.refine_names('batch')
+        self.feat_matrix = self.feat_matrix.refine_names('batch', 'length', 'feat_group')
+        self.source_padding = ~get_length_mask(self.lengths, self.max_length, name='length')
+        self.source_padding = self.source_padding.refine_names('batch', 'length')
+        self.cuda()
 
 
 @dataclass
-class Batch:
-    segments: np.ndarray
-    feat_matrix: LongTensor
-    pos_to_predict: LongTensor
-    target_feat: LongTensor = field(init=False)
-    target_weight: LongTensor = field(init=False)
+class IpaBatch(BaseBatch):
+    pos_to_predict: torch.LongTensor
+    target_feat: torch.LongTensor = field(init=False)
+    target_weight: torch.FloatTensor = field(init=False)
 
     _g2f = None
 
     def __post_init__(self):
         batch_i = get_range(self.batch_size, 1, 0)
-        # NOTE(j_luo) This is global index.
-        target_feat = self.feat_matrix[batch_i, self.pos_to_predict]
+        # NOTE(j_luo) This is global index. # TODO(j_luo) ugly
+        target_feat = self.feat_matrix.rename(None)[batch_i, self.pos_to_predict]
         # Get conversion matrix.
         if self._g2f is None:
             total = Index.total_indices()
@@ -47,30 +77,15 @@ class Batch:
             self.target_weight[mask, idx] = 0.0
 
         # NOTE(j_luo) Refine names.
-        # IDEA(j_luo) We can move this process a bit earlier to DataLoader?
-        self.feat_matrix = self.feat_matrix.refine_names('batch', 'length', 'feat_group')
-        self.target_weight = self.target_weight.refine_names('batch', 'feat_group')
+        # IDEA(j_luo) We can move this process a bit earlier to DataLoader (serialization not yet implemented for named tensors).
         self.pos_to_predict = self.pos_to_predict.refine_names('batch')
         self.target_feat = self.target_feat.refine_names('batch', 'feat_group')
+        self.target_weight = self.target_weight.refine_names('batch', 'feat_group')
 
-        for attr, anno in self.__annotations__.items():
-            if anno is not np.ndarray:
-                setattr(self, attr, get_tensor(getattr(self, attr)))
+        super().__post_init__()
 
     def __len__(self):
         return self.batch_size
-
-    @property
-    def shape(self):
-        return self.feat_matrix.shape
-
-    @property
-    def batch_size(self):
-        return self.feat_matrix.size(0)
-
-    @property
-    def window_size(self):
-        return self.feat_matrix.size(1)
 
 
 class IpaDataset(Dataset):
@@ -86,20 +101,47 @@ class IpaDataset(Dataset):
         return self.data['segments'][idx], self.data['matrices'][idx]
 
 
-def collate_fn(batch):
+@dataclass
+class CollateReturn:
+    segments: np.ndarray
+    lengths: torch.LongTensor
+    matrices: torch.LongTensor
+    positions: torch.LongTensor = None
+
+
+def _collate_fn(batch, repeat=True) -> CollateReturn:
     segments = list()
     matrices = list()
-    positions = list()
     lengths = list()
+    if repeat:
+        positions = list()
     for segment, matrix in batch:
         length = len(matrix)
-        for position in range(length):
+        if repeat:
+            segments.extend([segment] * length)
+            lengths.extend([length] * length)
+            matrices.extend([matrix] * length)
+            positions.extend(list(range(length)))
+        else:
             segments.append(segment)
-            matrices.append(matrix)
-            positions.append(position)
             lengths.append(length)
+            matrices.append(matrix)
     matrices = torch.nn.utils.rnn.pad_sequence(matrices, batch_first=True)
-    return np.asarray(segments), matrices, torch.LongTensor(positions), torch.LongTensor(lengths)
+    segments = np.asarray(segments)
+    lengths = torch.LongTensor(lengths)
+    if repeat:
+        positions = torch.LongTensor(positions)
+        return CollateReturn(segments, lengths, matrices, positions=positions)
+    else:
+        return CollateReturn(segments, lengths, matrices)
+
+
+def lm_collate_fn(batch):
+    return _collate_fn(batch, repeat=True)
+
+
+def decipher_collate_fn(batch):
+    return _collate_fn(batch, repeat=False)
 
 
 @init_g_attr
@@ -132,31 +174,44 @@ class BatchSampler(Sampler):
             yield batch
 
 
-add_argument('data_path', dtype=str, msg='path to the feat data in tsv format.')
-add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
-add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
-
-
 @init_g_attr
-class IpaDataLoader(DataLoader):
+class BaseIpaDataLoader(DataLoader):
 
-    add_argument('window_size', default=3, dtype=int, msg='window size for the cnn kernel')
+    collate_fn = None
+
+    add_argument('data_path', dtype=str, msg='path to the feat data in tsv format.')
+    add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
+    add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
 
     def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers):
         dataset = IpaDataset(data_path)
         batch_sampler = BatchSampler(dataset, char_per_batch, shuffle=True)
+        cls = type(self)
         super().__init__(dataset, batch_sampler=batch_sampler,
-                         num_workers=num_workers, collate_fn=collate_fn)
+                         num_workers=num_workers, collate_fn=cls.collate_fn)
 
     def __iter__(self):
-        for segments, feat_matrix, pos_to_predict, lengths in super().__iter__():
-            bs, ws, _ = feat_matrix.shape
-            batch = Batch(segments, feat_matrix, pos_to_predict)
+        for collate_return in super().__iter__():
+            batch = self._prepare_batch(collate_return)
             yield batch
 
 
-@init_g_attr
+class IpaDataLoader(BaseIpaDataLoader):
+
+    collate_fn = lm_collate_fn
+
+    def _prepare_batch(self, collate_return: CollateReturn) -> IpaBatch:
+        return IpaBatch(collate_return.segments, collate_return.lengths, collate_return.matrices, collate_return.positions)
+
+
+@dataclass
+class ContinuousTextIpaBatch(BaseBatch):
+    pass
+
+
 class ContinuousTextDataLoader(IpaDataLoader):
 
-    # TODO(j_luo) might want to add curriculum learning to anneal the window size.
-    pass
+    collate_fn = decipher_collate_fn
+
+    def _prepare_batch(self, collate_return: CollateReturn) -> ContinuousTextIpaBatch:
+        return ContinuousTextIpaBatch(collate_return.segments, collate_return.lengths, collate_return.matrices)

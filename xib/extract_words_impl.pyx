@@ -1,5 +1,3 @@
-# cython: linetrace=False
-
 import cython
 import numpy as np
 cimport numpy as np
@@ -17,7 +15,7 @@ cdef inline (bint, bint, bint) where(int value, int last_value, int next_value):
     cdef bint wrap_up = add and (next_value != I)
     return start, add, wrap_up
 
-cdef  first_pass(int[:, :, ::1] samples):
+cdef first_pass(int[:, :, ::1] samples):
     cdef Py_ssize_t batch_size = samples.shape[0]
     cdef Py_ssize_t num_samples = samples.shape[1]
     cdef Py_ssize_t max_len = samples.shape[2]
@@ -33,6 +31,10 @@ cdef  first_pass(int[:, :, ::1] samples):
     cdef int last_value
     cdef int next_value
     cdef int value
+
+    cdef Py_ssize_t i
+    cdef Py_ssize_t j
+    cdef Py_ssize_t k
 
     for i in range(batch_size):
         for j in range(num_samples):
@@ -92,6 +94,10 @@ cdef second_pass(int[:, :, ::1] samples, long[:, ::1] offsets, long total_num_wo
     cdef int next_value
     cdef int value
 
+    cdef Py_ssize_t i
+    cdef Py_ssize_t j
+    cdef Py_ssize_t k
+
     for i in range(batch_size):
         for j in range(num_samples):
             offset = offsets[i, j]
@@ -123,7 +129,7 @@ cdef second_pass(int[:, :, ::1] samples, long[:, ::1] offsets, long total_num_wo
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def extract_words_v4(int[:, :, ::1] samples):
+def extract_words_v5(int[:, :, ::1] samples):
     # First pass to calculate total number of words and max length of words.
     word_counts, max_lengths, offsets = first_pass(samples)
     cdef long total_num_words = word_counts.sum()

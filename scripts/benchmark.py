@@ -7,7 +7,7 @@ import pyximport
 
 from devlib import pad_to_dense
 from xib.extract_words import B, I, O, extract_words_py, where
-from xib.extract_words_impl import extract_words_v4
+from xib.extract_words_impl import extract_words_v5
 
 
 def get_random_test(size):
@@ -64,18 +64,18 @@ if __name__ == "__main__":
 
     # arr, _, _, _, _ = get_random_test([200, 100, 20])
     # cProfile.runctx(
-    #     "extract_words_v4(arr)", globals(), locals(), "Profile.prof")
+    #     "extract_words_v5(arr)", globals(), locals(), "Profile.prof")
 
     # s = pstats.Stats("Profile.prof")
     # s.strip_dirs().sort_stats("time").print_stats()
 
     print(timeit.timeit(
-        'extract_words_v4(arr)',
-        'from __main__ import extract_words_v4, get_random_test; arr, _, _, _, _ = get_random_test([200, 100, 20])', number=10))
+        'extract_words_v5(arr)',
+        'from __main__ import extract_words_v5, get_random_test; arr, _, _, _, _ = get_random_test([200, 100, 20])', number=10))
 
     # arr, batch_indices, sample_indices, word_positions, word_lengths = get_random_test([200, 100, 20])
 
-    # ret_batch_indices, ret_sample_indices, ret_word_positions, ret_word_lengths = extract_words_v1(arr)
+    # ret_batch_indices, ret_sample_indices, ret_word_positions, ret_word_lengths = extract_words_v5(arr)
 
     # if not np.array_equal(batch_indices, ret_batch_indices) or not np.array_equal(sample_indices, ret_sample_indices) or not np.array_equal(word_positions, ret_word_positions)or not np.array_equal(word_lengths, ret_word_lengths):
     #     raise RuntimeError('Did not pass!')

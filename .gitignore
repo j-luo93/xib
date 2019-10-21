@@ -105,3 +105,4 @@ ENV/
 data/
 log/
 notebooks/
+*impl.c

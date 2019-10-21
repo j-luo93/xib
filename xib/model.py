@@ -302,7 +302,7 @@ class DecipherModel(nn.Module):
         # Ignore padded indices.
         label_probs = label_probs.align_to('batch', 'length', 'label')
         source_padding = source_padding.align_to('batch', 'length')
-        label_probs.rename(None)[source_padding.rename(None).unsqueeze(dim=-1)] = [1.0, 0.0, 0.0]
+        label_probs.rename(None)[source_padding.rename(None).unsqueeze(dim=-1)] = [0.0, 0.0, 1.0] # NOTE(j_luo) O is equivalent to None.
 
         # Get packed batches.
         label_distr = Categorical(probs=label_probs.rename(None))

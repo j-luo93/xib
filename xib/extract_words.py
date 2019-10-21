@@ -83,7 +83,7 @@ def first_pass(samples):
     batch_size, num_samples, max_len = samples.shape
     word_counts = np.zeros([batch_size, num_samples], dtype=np.uint32)
     max_lengths = np.zeros([batch_size, num_samples], dtype=np.uint32)
-    offsets = np.zeros([batch_size, num_samples], dtype=np.uint32)
+    offsets = np.zeros([batch_size * num_samples], dtype=np.uint32)
 
     for i in range(batch_size):
         for j in range(num_samples):
@@ -115,8 +115,10 @@ def first_pass(samples):
             max_lengths[i, j] = max_length
 
     # Compute offsets.
-    accum_counts = np.cumsum(word_counts.reshape(-1)).reshape([batch_size, num_samples])
-    offsets[:, 1:] = accum_counts[:, :-1]
+    accum_counts = np.cumsum(word_counts.reshape(-1))
+
+    offsets[1:] = accum_counts[:-1]
+    offsets = offsets.reshape([batch_size, num_samples])
     return word_counts, max_lengths, offsets
 
 

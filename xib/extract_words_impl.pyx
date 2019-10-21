@@ -1,34 +1,38 @@
+# cython: linetrace=False
+
+import cython
 import numpy as np
 cimport numpy as np
 
 DTYPE = np.intc
 
-B = <int>(0)
-I = <int>(1)
-O = <int>(2)
-N = <int>(3)
+cdef int B = 0
+cdef int I = 1
+cdef int O = 2
+cdef int N = 4
 
-cdef inline where(int value, int last_value, int next_value):
-    start = (value == B) or (value == I and (last_value == N or last_value == O))
-    add = (value == B) or (value == I)
-    wrap_up = add and (next_value != I)
+cdef inline (bint, bint, bint) where(int value, int last_value, int next_value):
+    cdef bint start = (value == B) or (value == I and (last_value == N or last_value == O))
+    cdef bint add = (value == B) or (value == I)
+    cdef bint wrap_up = add and (next_value != I)
     return start, add, wrap_up
 
-cdef first_pass(int[:, :, :] samples):
+cdef  first_pass(int[:, :, ::1] samples):
     cdef Py_ssize_t batch_size = samples.shape[0]
     cdef Py_ssize_t num_samples = samples.shape[1]
     cdef Py_ssize_t max_len = samples.shape[2]
 
     word_counts_storage = np.zeros([batch_size, num_samples], dtype=DTYPE)
     max_lengths_storage = np.zeros([batch_size, num_samples], dtype=DTYPE)
-    cdef int[:, :] word_counts = word_counts_storage
-    cdef int[:, :] max_lengths = max_lengths_storage
+    cdef int[:, ::1] word_counts = word_counts_storage
+    cdef int[:, ::1] max_lengths = max_lengths_storage
 
     cdef int length
     cdef int max_length
     cdef int count
     cdef int last_value
     cdef int next_value
+    cdef int value
 
     for i in range(batch_size):
         for j in range(num_samples):
@@ -39,7 +43,7 @@ cdef first_pass(int[:, :, :] samples):
             next_value = samples[i, j, 0]
             for k in range(max_len):
                 value = next_value
-                if k < max_len - 1:
+                if k + 1 < max_len:
                     next_value = samples[i, j, k + 1]
                 else:
                     next_value = N
@@ -61,27 +65,32 @@ cdef first_pass(int[:, :, :] samples):
 
     # Compute offsets.
     offsets_storage = np.zeros([batch_size * num_samples], dtype=np.int_)
-    cdef long[:] offsets = offsets_storage
+    cdef long[::1] offsets = offsets_storage
     cdef long[:] accum_counts = np.cumsum(word_counts_storage.reshape(-1))
 
     offsets[1:] = accum_counts[:-1]
     offsets_2d_storage = offsets_storage.reshape([batch_size, num_samples])
     return word_counts_storage, max_lengths_storage, offsets_2d_storage
 
-
-cdef second_pass(int[:, :, :] samples, long[:, :] offsets, long total_num_words, int max_word_len):
+cdef second_pass(int[:, :, ::1] samples, long[:, ::1] offsets, long total_num_words, int max_word_len):
     batch_indices_storage = np.zeros([total_num_words], dtype=DTYPE)
     sample_indices_storage = np.zeros([total_num_words], dtype=DTYPE)
     word_positions_storage = np.zeros([total_num_words, max_word_len], dtype=DTYPE)
     word_lengths_storage = np.zeros([total_num_words], dtype=DTYPE)
-    cdef int[:] batch_indices = batch_indices_storage
-    cdef int[:] sample_indices = sample_indices_storage
-    cdef int[:, :] word_positions = word_positions_storage
-    cdef int[:] word_lengths = word_lengths_storage
+    cdef int[::1] batch_indices = batch_indices_storage
+    cdef int[::1] sample_indices = sample_indices_storage
+    cdef int[:, ::1] word_positions = word_positions_storage
+    cdef int[::1] word_lengths = word_lengths_storage
 
     cdef Py_ssize_t batch_size = samples.shape[0]
     cdef Py_ssize_t num_samples = samples.shape[1]
     cdef Py_ssize_t max_len = samples.shape[2]
+
+    cdef Py_ssize_t offset
+    cdef Py_ssize_t length
+    cdef int last_value
+    cdef int next_value
+    cdef int value
 
     for i in range(batch_size):
         for j in range(num_samples):
@@ -112,7 +121,9 @@ cdef second_pass(int[:, :, :] samples, long[:, :] offsets, long total_num_words,
     return batch_indices_storage, sample_indices_storage, word_positions_storage, word_lengths_storage
 
 
-def extract_words_v3(int[:, :, :] samples):
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def extract_words_v4(int[:, :, ::1] samples):
     # First pass to calculate total number of words and max length of words.
     word_counts, max_lengths, offsets = first_pass(samples)
     cdef long total_num_words = word_counts.sum()

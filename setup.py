@@ -8,6 +8,6 @@ setup(
     name='xib',
     version='0.1',
     packages=find_packages(),
-    ext_modules=cythonize('xib/extract_words_impl.pyx'),
+    ext_modules=cythonize('xib/extract_words_impl.pyx', annotate=True),
     include_dirs=[np.get_include()]
 )

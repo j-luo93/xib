@@ -1,6 +1,9 @@
 import cython
+from cython.parallel import prange
+
 import numpy as np
 cimport numpy as np
+cimport openmp
 
 DTYPE = np.intc
 
@@ -9,13 +12,13 @@ cdef int I = 1
 cdef int O = 2
 cdef int N = 4
 
-cdef inline (bint, bint, bint) where(int value, int last_value, int next_value):
+cdef inline (bint, bint, bint) where(int value, int last_value, int next_value) nogil:
     cdef bint start = (value == B) or (value == I and (last_value == N or last_value == O))
     cdef bint add = (value == B) or (value == I)
     cdef bint wrap_up = add and (next_value != I)
     return start, add, wrap_up
 
-cdef first_pass(int[:, :, ::1] samples):
+cdef first_pass(const int[:, :, ::1] samples):
     cdef Py_ssize_t batch_size = samples.shape[0]
     cdef Py_ssize_t num_samples = samples.shape[1]
     cdef Py_ssize_t max_len = samples.shape[2]
@@ -36,7 +39,11 @@ cdef first_pass(int[:, :, ::1] samples):
     cdef Py_ssize_t j
     cdef Py_ssize_t k
 
-    for i in range(batch_size):
+    cdef bint start
+    cdef bint add
+    cdef bint wrap_up
+
+    for i in prange(batch_size, nogil=True):
         for j in range(num_samples):
             length = 0
             max_length = 0
@@ -52,10 +59,10 @@ cdef first_pass(int[:, :, ::1] samples):
 
                 start, add, wrap_up = where(value, last_value, next_value)
                 if start:
-                    count += 1
+                    count = count + 1
                     length = 0
                 if add:
-                    length += 1
+                    length = length + 1
                 if wrap_up:
                     max_length = max(max_length, length)
                     length = 0
@@ -74,7 +81,7 @@ cdef first_pass(int[:, :, ::1] samples):
     offsets_2d_storage = offsets_storage.reshape([batch_size, num_samples])
     return word_counts_storage, max_lengths_storage, offsets_2d_storage
 
-cdef second_pass(int[:, :, ::1] samples, long[:, ::1] offsets, long total_num_words, int max_word_len):
+cdef second_pass(const int[:, :, ::1] samples, const long[:, ::1] offsets, long total_num_words, int max_word_len):
     batch_indices_storage = np.zeros([total_num_words], dtype=DTYPE)
     sample_indices_storage = np.zeros([total_num_words], dtype=DTYPE)
     word_positions_storage = np.zeros([total_num_words, max_word_len], dtype=DTYPE)
@@ -98,7 +105,11 @@ cdef second_pass(int[:, :, ::1] samples, long[:, ::1] offsets, long total_num_wo
     cdef Py_ssize_t j
     cdef Py_ssize_t k
 
-    for i in range(batch_size):
+    cdef bint start
+    cdef bint add
+    cdef bint wrap_up
+
+    for i in prange(batch_size, nogil=True):
         for j in range(num_samples):
             offset = offsets[i, j]
             length = 0
@@ -117,11 +128,11 @@ cdef second_pass(int[:, :, ::1] samples, long[:, ::1] offsets, long total_num_wo
                     length = 0
                 if add:
                     word_positions[offset, length] = k
-                    length += 1
+                    length = length + 1
                 if wrap_up:
                     word_lengths[offset] = length
                     length = 0
-                    offset += 1
+                    offset = offset + 1
 
                 last_value = value
     return batch_indices_storage, sample_indices_storage, word_positions_storage, word_lengths_storage
@@ -129,7 +140,8 @@ cdef second_pass(int[:, :, ::1] samples, long[:, ::1] offsets, long total_num_wo
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def extract_words_v5(int[:, :, ::1] samples):
+def extract_words_v6(const int[:, :, ::1] samples, int num_threads=1):
+    openmp.omp_set_num_threads(num_threads)
     # First pass to calculate total number of words and max length of words.
     word_counts, max_lengths, offsets = first_pass(samples)
     cdef long total_num_words = word_counts.sum()

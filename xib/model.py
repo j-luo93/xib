@@ -4,14 +4,15 @@ from typing import Dict, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn.modules import MultiheadAttention
 from torch.distributions.categorical import Categorical
+from torch.nn.modules import MultiheadAttention
 
 from arglib import add_argument, init_g_attr
-from devlib import get_range, get_tensor
-from devlib.named_tensor import (adv_index, embed, gather, leaky_relu,
-                                 self_attend)
+from devlib import get_dataclass_repr, get_range, get_tensor
+from devlib.named_tensor import (adv_index, embed, expand_as, gather,
+                                 get_named_range, leaky_relu, self_attend)
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
+from xib.extract_words_impl import extract_words_v6 as extract_words
 from xib.ipa import (Category, conditions, get_enum_by_cat,
                      no_none_predictions, should_include)
 
@@ -176,13 +177,7 @@ class Model(nn.Module):
         return ret
 
 
-# @dataclass
-# class PackedSamples:
-#     samples: LT
-#     batch_indices: LT
-#     sample_indice: LT
-#     sample_probs: FT
-
+@get_dataclass_repr
 @dataclass
 class PackedWords:
     word_feat_matrices: LT
@@ -241,7 +236,7 @@ class DecipherModel(nn.Module):
         logits = self.label_predictor(out.rename(None)).refine_names(*out.names)
         logits = logits.rename(**{f'self_attn_repr': 'label'})
         label_probs = logits.log_softmax(dim=-1).exp()
-        samples, sample_probs = self._sample(label_probs)
+        samples, sample_probs = self._sample(label_probs, batch.source_padding)
 
         # Get the lm score.
         packed_words = self._pack(samples, batch.feat_matrix)
@@ -274,18 +269,17 @@ class DecipherModel(nn.Module):
         # TODO(j_luo) ugly
         with torch.no_grad():
             feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
-            samples = samples.align_to('batch', 'sample', 'length')
+            samples = samples.align_to('batch', 'sample', 'length').int()
             batch_indices, sample_indices, word_positions, word_lengths = extract_words(
-                samples.cpu().numpy())  # FIXME(j_luo)
-            batch_indices = batch_indices.refine_names('batch_word')
-            sample_indices = sample_indices.refine_names('batch_word')
-            word_positions = word_positions.refine_names('batch_word', 'position')
-            word_lengths = word_lengths.refine_name('batch_word')
+                samples.cpu().numpy(), num_threads=4)
+            batch_indices = get_tensor(batch_indices).refine_names('batch_word').long()
+            sample_indices = get_tensor(sample_indices).refine_names('batch_word').long()
+            word_positions = get_tensor(word_positions).refine_names('batch_word', 'position').long()
+            word_lengths = get_tensor(word_lengths).refine_names('batch_word').long()
 
             key = (
-                batch_indices.align_as(word_positions),
-                sample_indices.align_as(word_positions),
-                word_positions
+                batch_indices.align_as(word_positions).rename(None),
+                word_positions.rename(None)
             )
             word_feat_matrices = feat_matrix.rename(None)[key]
             word_feat_matrices = word_feat_matrices.refine_names('batch_word', 'position', 'feat_group')
@@ -295,41 +289,24 @@ class DecipherModel(nn.Module):
     def _unpack(self, lm_score: FT, packed_words: PackedWords):
         pass
 
-    @staticmethod
-    def _sample(label_probs: FT, source_padding: FT) -> Tuple[LT, FT]:
+    def _sample(self, label_probs: FT, source_padding: FT) -> Tuple[LT, FT]:
         """Return samples based on `label_probs`."""
-        # TODO(j_luo) ugly
         # Ignore padded indices.
         label_probs = label_probs.align_to('batch', 'length', 'label')
         source_padding = source_padding.align_to('batch', 'length')
-        label_probs.rename(None)[source_padding.rename(None).unsqueeze(dim=-1)] = [1.0, 0.0, 0.0]
+        # NOTE(j_luo) O is equivalent to None.
+        mask = expand_as(source_padding, label_probs)
+        source = expand_as(get_tensor([0.0, 0.0, 1.0]).refine_names('label').float(), label_probs)
+        # TODO(j_luo) ugly
+        label_probs.rename(None).masked_scatter_(mask.rename(None), source.rename(None))
 
         # Get packed batches.
         label_distr = Categorical(probs=label_probs.rename(None))
-        samples = label_distr.sample([self.num_samples]).refine_names('sample', 'batch', 'length')
-        samples = samples.align_to('batch', 'sample', 'length')
-        batch_idx = get_range(samples.size('batch'), 3, 1)
-        sample_idx = get_range(samples.size('sample'), 3, 0)
-        sample_probs = label_probs.rename(None)[sample_idx, batch_idx, samples.rename(None)]
-        sample_probs = sample_probs.refine_names('sample', 'batch', 'length')
-        sample_probs = (source_padding.align_as(sample_probs).float() * sample_probs).sum(dim='length')
-        return samples, sample_probs
-        # samples = samples.cpu().numpy()
-        # unique_samples, batch_indices, sample_indices = batch_unique(samples, 2)  # FIXME(j_luo)
-        # unique_samples = unique_samples.refine_names('packed_batch_x_sample', 'length')
-        # batch_indices = batch_indices.refine_names('packed_batch_x_sample')
-        # sample_indices = sample_indices.refine_names('packed_batch_x_sample')
-
-        # # Get packed probs.
-        # sample_probs = samples.rename(None)[batch_indices, sample_indices]
-        # sample_probs = sample_probs.refine_names('packed_batch_x_sample', 'length')
-        # source_padding = source_padding.rename(None)[batch_indices]
-        # # IDEA(j_luo) Can I bind name to a fixed number?
-        # source_padding = source_padding.refine_names('packed_batch_x_sample', 'length')
-        # sample_probs = (sample_probs * source_padding.float()).sum(dim='length')
-        # packed_samples = PackedSamples(unique_samples, batch_indices, sample_indice, sample_probs)
-        # return packed_samples
-
-        # sample_probs = label_probs.refine(None).gather(2, samples.rename(None))
-        # sample_probs = sample_probs.refine_names('batch', 'length', 'sample')
-        # return samples, sample_probs
+        label_samples = label_distr.sample([self.num_samples]).refine_names('sample', 'batch', 'length')
+        label_samples = label_samples.align_to('batch', 'sample', 'length')
+        batch_idx = get_named_range(label_samples.size('batch'), 'batch').align_as(label_samples).rename(None)
+        length_idx = get_named_range(label_samples.size('length'), 'length').align_as(label_samples).rename(None)
+        label_sample_probs = label_probs.rename(None)[batch_idx, length_idx, label_samples.rename(None)]
+        label_sample_probs = label_sample_probs.refine_names(*label_samples.names)
+        sample_probs = (source_padding.align_as(label_sample_probs).float() * label_sample_probs).sum(dim='length')
+        return label_samples, label_sample_probs

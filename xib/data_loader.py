@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from arglib import add_argument, g, init_g_attr
-from devlib import get_length_mask, get_range, get_tensor
+from devlib import get_dataclass_repr, get_length_mask, get_range, get_tensor
 from xib.ipa import Category, Index, Ptype, conditions
 
 
@@ -36,16 +36,19 @@ class BaseBatch:
         """Move tensors to gpu if possible."""
         for attr, anno in self.__annotations__.items():
             if anno is not np.ndarray:
-                setattr(self, attr, get_tensor(getattr(self, attr)))
+                tensor = getattr(self, attr)
+                names = tensor.names
+                setattr(self, attr, get_tensor(tensor).refine_names(*names))
 
     def __post_init__(self):
         self.lengths = self.lengths.refine_names('batch')
         self.feat_matrix = self.feat_matrix.refine_names('batch', 'length', 'feat_group')
-        self.source_padding = ~get_length_mask(self.lengths, self.max_length, name='length')
+        self.source_padding = ~get_length_mask(self.lengths, self.max_length)
         self.source_padding = self.source_padding.refine_names('batch', 'length')
         self.cuda()
 
 
+@get_dataclass_repr
 @dataclass
 class IpaBatch(BaseBatch):
     pos_to_predict: torch.LongTensor

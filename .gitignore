@@ -105,3 +105,6 @@ ENV/
 data/
 log/
 notebooks/
+*impl.c
+*impl.html
+*.prof

@@ -11,7 +11,8 @@ from arglib import add_argument, init_g_attr
 from devlib import get_dataclass_repr, get_range, get_tensor
 from devlib.named_tensor import (adv_index, embed, expand_as, gather,
                                  get_named_range, leaky_relu, self_attend)
-from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
+from xib.data_loader import (ContinuousTextIpaBatch, IpaBatch,
+                             MetricLearningBatch)
 from xib.extract_words_impl import extract_words_v6 as extract_words
 from xib.ipa import (Category, conditions, get_enum_by_cat,
                      no_none_predictions, should_include)
@@ -248,10 +249,10 @@ class DecipherModel(nn.Module):
             if should_include(self.mode, cat):
                 nlls.append(nll)
         nlls = sum(nlls)
-        lm_score = self._unpack(nlls, packed_words)  # FIXME(j_luo)
+        lm_score = self._unpack(nlls, packed_words)  # FIXME(j_luo) unpack this
 
         # Compute word score that corresponds to the number of readable words.
-        word_score = self.score_per_word  # FIXME(j_luo)
+        word_score = self.score_per_word  # FIXME(j_luo) what's the shape for lm_score?
 
         bs = batch.feat_matrix.size('batch')
         return {
@@ -308,5 +309,19 @@ class DecipherModel(nn.Module):
         length_idx = get_named_range(label_samples.size('length'), 'length').align_as(label_samples).rename(None)
         label_sample_probs = label_probs.rename(None)[batch_idx, length_idx, label_samples.rename(None)]
         label_sample_probs = label_sample_probs.refine_names(*label_samples.names)
-        sample_probs = (source_padding.align_as(label_sample_probs).float() * label_sample_probs).sum(dim='length')
+        label_sample_probs = (source_padding.align_as(label_sample_probs).float()
+                              * label_sample_probs).sum(dim='length')
         return label_samples, label_sample_probs
+
+
+@init_g_attr(default='property')
+class MetricLearningModel(nn.Module):
+
+    def __init__(self, hidden_size, emb_groups):
+        super().__init__()
+        effective_num_feat_groups = len(_get_effective_c_idx(emb_groups)) + 1  # NOTE(j_luo) +1 due to 'avg' score.
+        self.regressor = nn.Linear(effective_num_feat_groups, 1)
+
+    def forward(self, batch: MetricLearningBatch) -> torch.FloatTensor:
+        output = self.regressor(batch.normalized_score.rename(None)).view(-1).refine_names('batch')
+        return output

@@ -1,4 +1,5 @@
 import logging
+from abc import ABCMeta, abstractmethod
 
 import torch
 import torch.nn as nn
@@ -10,7 +11,7 @@ from xib.ipa import Category, should_include
 
 
 @init_g_attr(default='property')
-class BaseTrainer(Trainer):
+class BaseTrainer(Trainer, metaclass=ABCMeta):
 
     add_argument('num_steps', default=10, dtype=int, msg='number of steps to train')
     add_argument('learning_rate', default=2e-3, dtype=float, msg='learning rate')
@@ -22,24 +23,36 @@ class BaseTrainer(Trainer):
         self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
         self.optimizer = optim.Adam(self.model.parameters(), learning_rate)
 
-        for name, p in model.named_parameters():
-            if p.dim() == 2:
-                nn.init.xavier_uniform_(p)
+        self.init_params()
 
         # Prepare batch iterator.
         self.iterator = self._next_batch_iterator()
+
+    def init_params(self, init_matrix=True, init_vector=False, init_higher_tensor=False):
+        for name, p in self.model.named_parameters():
+            if p.dim() == 2 and init_matrix:
+                nn.init.xavier_uniform_(p)
+            elif p.dim() == 1 and init_vector:
+                nn.init.uniform_(p, 0.01)
+            elif init_higher_tensor:
+                nn.init.uniform_(p, 0.01)
 
     def _next_batch_iterator(self):
         while True:
             yield from self.train_data_loader
 
+    @property
+    @abstractmethod
+    def track(self):
+        pass
+
     def check_metrics(self, accum_metrics: Metrics):
-        if self.tracker.step % self.check_interval == 0:
-            logging.info(accum_metrics.get_table(f'Step: {self.tracker.step}'))
+        if self.track % self.check_interval == 0:
+            logging.info(accum_metrics.get_table(f'Step: {self.track}'))
             accum_metrics.clear()
 
     def save(self):
-        if self.tracker.step % self.save_interval == 0:
+        if self.track % self.save_interval == 0:
             out_path = self.log_dir / 'saved.latest'
             to_save = {
                 'model': self.model.state_dict(),
@@ -54,7 +67,7 @@ class LMTrainer(BaseTrainer):
     add_argument('mode', default='pcvdst', dtype=str,
                  msg='what to include during training: p(type), c(onstonant), v(vowel), d(iacritics), s(tress) and t(one).')
 
-    def train_loop(self):
+    def train_loop(self) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
         batch = next(self.iterator)
@@ -79,10 +92,14 @@ class LMTrainer(BaseTrainer):
         metrics += Metric('loss', total_loss, total_weight)
         return metrics
 
+    @property
+    def track(self):
+        return self.tracker.step
 
-class DecipherTrainer(BaseTrainer):
 
-    def train_loop(self):
+class DecipherTrainer(LMTrainer):
+
+    def train_loop(self) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
         batch = next(self.iterator)
@@ -97,3 +114,41 @@ class DecipherTrainer(BaseTrainer):
         loss.backward()
         self.optimizer.step()
         return metrics
+
+
+@init_g_attr(default='property')
+class MetricLearningTrainer(BaseTrainer):
+
+    add_argument('num_epochs', default=5, dtype=int, msg='number of epochs')
+
+    def __init__(self, model: 'a', train_data_loader: 'a', num_epochs, learning_rate, check_interval, save_interval, log_dir):
+        Trainer.__init__(self)
+        self.tracker.add_track('epoch', update_fn='add', finish_when=num_epochs)
+
+    def train(self, train_langs) -> Metrics:
+        # Get data first.
+        self.train_data_loader.select(train_langs)
+        # Reset parameters.
+        self.init_params(init_matrix=True, init_vector=True, init_higher_tensor=True)
+        self.optimizer = optim.Adam(self.model.parameters(), self.learning_rate)
+        # Main boy.
+        super().train()
+
+    def train_loop(self) -> Metrics:
+        metrics = Metrics()
+        for batch in self.train_data_loader:
+            self.model.train()
+            self.optimizer.zero_grad()
+
+            output = self.model(batch)
+            mse = (output - batch.dist) ** 2
+            mse = Metric('mse', mse.sum(), len(batch))
+            metrics += mse
+
+            mse.mean.backward()
+            self.optimizer.step()
+        return metrics
+
+    @property
+    def track(self):
+        return self.tracker.epoch

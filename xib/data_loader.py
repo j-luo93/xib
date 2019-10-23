@@ -1,15 +1,20 @@
 import logging
 import random
+from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass, field
-from typing import Union
+from typing import Sequence
 
 import numpy as np
+import pandas as pd
 import torch
+from pycountry import languages
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from arglib import add_argument, g, init_g_attr
-from devlib import get_dataclass_repr, get_length_mask, get_range, get_tensor
-from xib.ipa import Category, Index, Ptype, conditions
+from devlib import (PandasDataLoader, get_dataclass_repr, get_length_mask,
+                    get_range, get_tensor)
+from xib.families import get_all_distances, get_families
+from xib.ipa import Category, Index, conditions, should_include
 
 
 @dataclass
@@ -178,7 +183,7 @@ class BatchSampler(Sampler):
 
 
 @init_g_attr
-class BaseIpaDataLoader(DataLoader):
+class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
 
     collate_fn = None
 
@@ -192,6 +197,10 @@ class BaseIpaDataLoader(DataLoader):
         cls = type(self)
         super().__init__(dataset, batch_sampler=batch_sampler,
                          num_workers=num_workers, collate_fn=cls.collate_fn)
+
+    @abstractmethod
+    def _prepare_batch(self):
+        pass
 
     def __iter__(self):
         for collate_return in super().__iter__():
@@ -218,3 +227,74 @@ class ContinuousTextDataLoader(IpaDataLoader):
 
     def _prepare_batch(self, collate_return: CollateReturn) -> ContinuousTextIpaBatch:
         return ContinuousTextIpaBatch(collate_return.segments, collate_return.lengths, collate_return.matrices)
+
+
+@dataclass
+class MetricLearningBatch:
+    lang1: np.ndarray
+    lang2: np.ndarray
+    normalized_score: torch.FloatTensor
+    dist: torch.FloatTensor
+
+    def __post_init__(self):
+        self.normalized_score = get_tensor(self.normalized_score).refine_names('batch', 'feat_group')
+        self.dist = get_tensor(self.dist).refine_names('batch')
+
+    def __len__(self):
+        return self.dist.size('batch')
+
+
+@init_g_attr()
+class MetricLearningDataLoader(PandasDataLoader):
+
+    add_argument('family_file_path', dtype=str, msg='path to the family file')
+    add_argument('num_langs', dtype=int, default=10, msg='number of languages')
+
+    def __init__(self, data_path: 'p', num_workers, emb_groups: 'p', family_file_path: 'p', num_langs: 'p'):
+        # Get scores first.
+        data = pd.read_csv(data_path, sep='\t')
+        data = pd.pivot_table(data, index=['lang1', 'lang2'], columns='category',
+                              values='normalized_score').reset_index()
+        self.cats = [cat.name for cat in Category if should_include(emb_groups, cat)] + ['avg']
+        cols = ['lang1', 'lang2'] + self.cats
+        data = data[cols]
+
+        # Get ground truth distances.
+        get_families(family_file_path)
+        dists = get_all_distances()
+
+        def _get_lang(lang: str):
+            if len(lang) == 2:
+                return languages.get(alpha_2=lang)
+            elif len(lang) == 3:
+                return languages.get(alpha_3=lang)
+            else:
+                return None
+
+        def _get_dist(lang1: str, lang2: str):
+            lang_struct1 = _get_lang(lang1)
+            lang_struct2 = _get_lang(lang2)
+            if lang_struct1 is None or lang_struct2 is None:
+                return None
+            return dists.get((lang_struct1.name, lang_struct2.name), None)
+
+        dists = [_get_dist(lang1, lang2) for lang1, lang2, *_ in data.values]
+        data['dist'] = dists
+        cols.append('dist')
+        data = data[~data['dist'].isnull()].reset_index(drop=True)
+
+        self.all_langs = sorted(set(data['lang1']))
+        super().__init__(data, columns=cols, batch_size=num_langs, num_workers=num_workers)
+
+    def __iter__(self) -> MetricLearningBatch:
+        for df in super().__iter__():
+            lang1 = df['lang1'].values
+            lang2 = df['lang2'].values
+            normalized_score = get_tensor(df[self.cats].values.astype('float32'))
+            dist = get_tensor(df['dist'].values.astype('float32'))
+            yield MetricLearningBatch(lang1, lang2, normalized_score, dist)
+
+    def select(self, langs: Sequence[str]):
+        all_langs = set(langs)
+        mask = (self.dataset.data['lang1'].isin(all_langs)) & (self.dataset.data['lang2'].isin(all_langs))
+        self.dataset.select(mask)

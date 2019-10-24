@@ -11,8 +11,8 @@ from pycountry import languages
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from arglib import add_argument, g, init_g_attr
-from devlib import (PandasDataLoader, get_dataclass_repr, get_length_mask,
-                    get_range, get_tensor)
+from devlib import (PandasDataLoader, dataclass_cuda, dataclass_size_repr,
+                    get_length_mask, get_range, get_tensor)
 from xib.families import get_all_distances, get_families
 from xib.ipa import Category, Index, conditions, should_include
 
@@ -24,6 +24,8 @@ class BaseBatch:
     # TODO(j_luo) use the plurals
     feat_matrix: torch.LongTensor
     source_padding: torch.BoolTensor = field(init=False)
+
+    cuda = dataclass_cuda
 
     @property
     def shape(self):
@@ -37,14 +39,6 @@ class BaseBatch:
     def max_length(self):
         return self.feat_matrix.size(1)
 
-    def cuda(self):
-        """Move tensors to gpu if possible."""
-        for attr, anno in self.__annotations__.items():
-            if anno is not np.ndarray:
-                tensor = getattr(self, attr)
-                names = tensor.names
-                setattr(self, attr, get_tensor(tensor).refine_names(*names))
-
     def __post_init__(self):
         self.lengths = self.lengths.refine_names('batch')
         self.feat_matrix = self.feat_matrix.refine_names('batch', 'length', 'feat_group')
@@ -53,7 +47,6 @@ class BaseBatch:
         self.cuda()
 
 
-@get_dataclass_repr
 @dataclass
 class IpaBatch(BaseBatch):
     pos_to_predict: torch.LongTensor
@@ -61,6 +54,8 @@ class IpaBatch(BaseBatch):
     target_weight: torch.FloatTensor = field(init=False)
 
     _g2f = None
+
+    __repr__ = dataclass_size_repr
 
     def __post_init__(self):
         batch_i = get_range(self.batch_size, 1, 0)
@@ -236,9 +231,12 @@ class MetricLearningBatch:
     normalized_score: torch.FloatTensor
     dist: torch.FloatTensor
 
+    cuda = dataclass_cuda
+
     def __post_init__(self):
         self.normalized_score = get_tensor(self.normalized_score).refine_names('batch', 'feat_group')
         self.dist = get_tensor(self.dist).refine_names('batch')
+        self.cuda()
 
     def __len__(self):
         return self.dist.size('batch')
@@ -248,9 +246,9 @@ class MetricLearningBatch:
 class MetricLearningDataLoader(PandasDataLoader):
 
     add_argument('family_file_path', dtype=str, msg='path to the family file')
-    add_argument('num_langs', dtype=int, default=10, msg='number of languages')
+    add_argument('num_lang_pairs', dtype=int, default=10, msg='number of languages')
 
-    def __init__(self, data_path: 'p', num_workers, emb_groups: 'p', family_file_path: 'p', num_langs: 'p'):
+    def __init__(self, data_path: 'p', num_workers, emb_groups: 'p', family_file_path: 'p', num_lang_pairs: 'p'):
         # Get scores first.
         data = pd.read_csv(data_path, sep='\t')
         data = pd.pivot_table(data, index=['lang1', 'lang2'], columns='category',
@@ -284,7 +282,7 @@ class MetricLearningDataLoader(PandasDataLoader):
         data = data[~data['dist'].isnull()].reset_index(drop=True)
 
         self.all_langs = sorted(set(data['lang1']))
-        super().__init__(data, columns=cols, batch_size=num_langs, num_workers=num_workers)
+        super().__init__(data, columns=cols, batch_size=num_lang_pairs, num_workers=num_workers)
 
     def __iter__(self) -> MetricLearningBatch:
         for df in super().__iter__():

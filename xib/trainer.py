@@ -1,5 +1,6 @@
 import logging
 from abc import ABCMeta, abstractmethod
+from typing import List
 
 import torch
 import torch.nn as nn
@@ -7,6 +8,7 @@ import torch.optim as optim
 
 from arglib import add_argument, g, init_g_attr
 from trainlib import Metric, Metrics, Tracker, Trainer
+from xib.evaluator import Evaluator
 from xib.ipa import Category, should_include
 
 
@@ -125,18 +127,38 @@ class MetricLearningTrainer(BaseTrainer):
         Trainer.__init__(self)
         self.tracker.add_track('epoch', update_fn='add', finish_when=num_epochs)
 
-    def train(self, train_langs) -> Metrics:
-        # Get data first.
-        self.train_data_loader.select(train_langs)
+    def train(self, train_langs: List[str], evaluator: Evaluator, dev_langs: List[str]) -> Metrics:
         # Reset parameters.
         self.init_params(init_matrix=True, init_vector=True, init_higher_tensor=True)
         self.optimizer = optim.Adam(self.model.parameters(), self.learning_rate)
         # Main boy.
-        super().train()
+        accum_metrics = Metrics()
+        best_mse = None
+        while not self.tracker.is_finished:
+            # Get data first.
+            self.train_data_loader.select(train_langs)
+
+            metrics = self.train_loop()
+            accum_metrics += metrics
+            self.tracker.update()
+
+            self.check_metrics(accum_metrics)
+            self.save()
+
+            if self.track % self.save_interval == 0:
+                dev_metrics = evaluator.evaluate(dev_langs)
+                logging.info(dev_metrics.get_table(title='dev'))
+                if best_mse is None or dev_metrics.mse.mean < best_mse:
+                    best_mse = dev_metrics.mse.mean
+        return Metric('best_mse', best_mse, 1)
+
+    def reset(self):
+        # HACK(j_luo)
+        self.tracker._attrs['epoch'] = 0
 
     def train_loop(self) -> Metrics:
         metrics = Metrics()
-        for batch in self.train_data_loader:
+        for batch_i, batch in enumerate(self.train_data_loader):
             self.model.train()
             self.optimizer.zero_grad()
 

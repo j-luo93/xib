@@ -1,7 +1,8 @@
 from typing import Sequence
-from trainlib import Metrics
+
 import torch
 
+from trainlib import Metric, Metrics
 from xib.data_loader import MetricLearningDataLoader
 from xib.model import MetricLearningModel
 

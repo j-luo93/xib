@@ -8,7 +8,7 @@ from torch.distributions.categorical import Categorical
 from torch.nn.modules import MultiheadAttention
 
 from arglib import add_argument, init_g_attr
-from devlib import get_dataclass_repr, get_range, get_tensor
+from devlib import dataclass_size_repr, get_range, get_tensor
 from devlib.named_tensor import (adv_index, embed, expand_as, gather,
                                  get_named_range, leaky_relu, self_attend)
 from xib.data_loader import (ContinuousTextIpaBatch, IpaBatch,
@@ -178,7 +178,6 @@ class Model(nn.Module):
         return ret
 
 
-@get_dataclass_repr
 @dataclass
 class PackedWords:
     word_feat_matrices: LT
@@ -187,6 +186,7 @@ class PackedWords:
     sample_indices: LT
     word_positions: LT
 
+    __repr__ = dataclass_size_repr
 
 @init_g_attr(default='property')
 class DecipherModel(nn.Module):
@@ -320,7 +320,13 @@ class MetricLearningModel(nn.Module):
     def __init__(self, hidden_size, emb_groups):
         super().__init__()
         effective_num_feat_groups = len(_get_effective_c_idx(emb_groups)) + 1  # NOTE(j_luo) +1 due to 'avg' score.
-        self.regressor = nn.Linear(effective_num_feat_groups, 1)
+        self.regressor = nn.Sequential(
+            nn.Linear(effective_num_feat_groups, 50),
+            nn.LeakyReLU(negative_slope=0.1),
+            nn.Linear(50, 50),
+            nn.LeakyReLU(negative_slope=0.1),
+            nn.Linear(50, 1)
+        )
 
     def forward(self, batch: MetricLearningBatch) -> torch.FloatTensor:
         output = self.regressor(batch.normalized_score.rename(None)).view(-1).refine_names('batch')

@@ -59,7 +59,11 @@ class DecipherEnPCV(LMEn):
 
 @reg
 class MetricPCV(SharedConfig):
-    num_epochs: int = 100
+    num_epochs: int = 500
+    save_interval: int = 10
+    check_interval: int = 10
     task: str = 'metric'
     family_file_path: str = 'data/families.txt'
     data_path: str = 'data/direct_transfer.tsv'
+    num_lang_pairs: int = 100
+    learning_rate: float = 0.02

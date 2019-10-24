@@ -74,11 +74,10 @@ class MetricLearningManager(Manager):
             assert len(set(dev_langs + train_langs)) == num_langs
 
             set_random_seeds(self.random_seed)
-            self.trainer.train(train_langs)
+            self.trainer.reset()
+            best_mse = self.trainer.train(train_langs, self.evaluator, dev_langs)
 
-            dev_metrics = self.evaluator.evaluate(dev_langs)
-
-            # Aggregate everything.
-            accum_metrics += dev_metrics
+            # Aggregate every fold.
+            accum_metrics += best_mse
 
         logging.info(accum_metrics.get_table())

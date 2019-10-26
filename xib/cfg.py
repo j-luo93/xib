@@ -43,7 +43,8 @@ _all_langs = [
     'sh', 'bg', 'fr', 'de', 'lt', 'pt', 'nl', 'ka', 'is', 'ro', 'fi', 'it', 'eo',
     'el', 'cs', 'syc', 'ga', 'ang', 'hy', 'cy', 'tr', 'ms', 'ady', 'sk', 'da', 'fa',
     'gem-pro', 'sl', 'lb', 'es', 'nci', 'gl', 'fo', 'enm', 'io', 'dsb', 'ba', 'tlh',
-    'sv', 'no', 'tl', 'la', 'jbo', 'arc', 'he', 'sq', 'ps', 'nn', 'az', 'sga', 'sco', 'yue'
+    'sv', 'no', 'tl', 'la', 'jbo', 'arc', 'he', 'sq', 'ps', 'nn', 'az', 'sga', 'sco',
+    'xib', 'yue'
 ]
 
 for lang in _all_langs:
@@ -67,3 +68,4 @@ class MetricPCV(SharedConfig):
     data_path: str = 'data/direct_transfer.tsv'
     num_lang_pairs: int = 100
     learning_rate: float = 0.02
+    hidden_size: int = 50

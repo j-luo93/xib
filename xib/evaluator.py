@@ -5,7 +5,7 @@ import torch
 
 from trainlib import Metric, Metrics
 from xib.data_loader import MetricLearningBatch, MetricLearningDataLoader
-from xib.model import MetricLearningModel
+from xib.model.metric_learning_model import MetricLearningModel
 
 
 class Evaluator:

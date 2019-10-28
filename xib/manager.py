@@ -7,7 +7,9 @@ from trainlib import Metrics, set_random_seeds
 from xib.data_loader import (ContinuousTextDataLoader, IpaDataLoader,
                              MetricLearningDataLoader)
 from xib.evaluator import Evaluator
-from xib.model import DecipherModel, MetricLearningModel, Model
+from xib.model.decipher_model import DecipherModel
+from xib.model.lm_model import LMModel
+from xib.model.metric_learning_model import MetricLearningBatch
 from xib.trainer import DecipherTrainer, LMTrainer, MetricLearningTrainer
 
 add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'metric'], msg='which task to run')
@@ -26,7 +28,7 @@ class Manager:
         self.trainer = self.trainer_cls(self.model, self.train_data_loader)
 
     def _get_model(self):
-        return Model()
+        return LMModel()
 
     def train(self):
         self.trainer.train()

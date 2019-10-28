@@ -1,9 +1,11 @@
 import logging
 import random
 from abc import ABCMeta, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -18,15 +20,24 @@ from devlib import (PandasDataLoader, PandasDataset, dataclass_cuda,
 from xib.families import get_all_distances, get_families
 from xib.ipa import Category, Index, conditions, should_include
 
+# NOTE(j_luo) Batch dataclasses will inherit the customized __repr__.
+batch_class = partial(dataclass, repr=False)
 
-@dataclass
+
+@batch_class
 class BaseBatch:
     segments: np.ndarray
     lengths: torch.LongTensor
     # TODO(j_luo) use the plurals
     feat_matrix: torch.LongTensor
     source_padding: torch.BoolTensor = field(init=False)
+    # HACK(j_luo) This is a hack. If we have a way of inheriting names, then this is not necessary.
+    batch_name: str = field(default='batch', repr=False)
+    length_name: str = field(default='length', repr=False)
 
+    run_post_init: bool = True
+
+    __repr__ = dataclass_size_repr
     cuda = dataclass_cuda
 
     @property
@@ -42,27 +53,83 @@ class BaseBatch:
         return self.feat_matrix.size(1)
 
     def __post_init__(self):
-        self.lengths = self.lengths.refine_names('batch')
-        self.feat_matrix = self.feat_matrix.refine_names('batch', 'length', 'feat_group')
+        """Do not override this, override _post_init_helper instead."""
+        if self.run_post_init:
+            self._post_init_helper()
+
+    def _post_init_helper(self):
+        self.feat_matrix = self.feat_matrix.refine_names(self.batch_name, self.length_name, 'feat_group')
         self.source_padding = ~get_length_mask(self.lengths, self.max_length)
-        self.source_padding = self.source_padding.refine_names('batch', 'length')
+        self.source_padding = self.source_padding.refine_names(self.batch_name, self.length_name)
+        self.lengths = self.lengths.refine_names(self.batch_name)
         self.cuda()
 
+    def split(self, size: int):
+        """Split the batch into multiple smaller batches with size <= `size`."""
+        if size > self.batch_size:
+            raise ValueError(f'Size {size} bigger than batch size {self.batch_size}.')
+        # Gather all relevant arguments for each smaller batch. Note that some arguments are not part of __init__.
+        num_splits = (self.batch_size + size - 1) // size
+        inherited_init_kwargs: Dict[str, Tuple[Any, bool]] = dict()
+        split_init_kwargs: Dict[str, Tuple[Any, bool]] = dict()
+        for attr, field in self.__dataclass_fields__.items():
+            anno = field.type
+            value = getattr(self, attr)
+            init = field.init
+            if anno is np.ndarray:
+                lengths = [size * i for i in range(1, 1 + num_splits)]
+                split_init_kwargs[attr] = (np.split(value, lengths, axis=0), init)
+            elif 'Tensor' in anno.__name__:
+                value = value.align_to(self.batch_name, ...)
+                values = [v.refine_names(*value.names) for v in value.rename(None).split(size, dim=0)]
+                split_init_kwargs[attr] = (values, init)
+            else:
+                inherited_init_kwargs[attr] = (value, init)
 
-@dataclass
+        batches = list()
+        batch_cls = type(self)
+        for i in range(num_splits):
+            init_kwargs = dict()
+            remaining_fields = dict()
+            for attr, (value, init) in inherited_init_kwargs.items():
+                d = init_kwargs if init else remaining_fields
+                d[attr] = value
+            for attr, (value, init) in split_init_kwargs.items():
+                d = init_kwargs if init else remaining_fields
+                d[attr] = value[i]
+            init_kwargs['run_post_init'] = False
+            batch = batch_cls(**init_kwargs)
+            for attr, value in remaining_fields.items():
+                setattr(batch, attr, value)
+            batches.append(batch)
+        return batches
+
+
+@batch_class
 class IpaBatch(BaseBatch):
-    pos_to_predict: torch.LongTensor
+    pos_to_predict: torch.LongTensor = field(init=False)
     target_feat: torch.LongTensor = field(init=False)
     target_weight: torch.FloatTensor = field(init=False)
 
     _g2f = None
 
-    __repr__ = dataclass_size_repr
+    def _post_init_helper(self):
+        bs, ml, nfg = self.feat_matrix.shape
+        new_bs = bs * ml
+        batch_i = get_range(bs, 2, 0, cpu=True)
 
-    def __post_init__(self):
-        batch_i = get_range(self.batch_size, 1, 0)
-        # NOTE(j_luo) This is global index. # TODO(j_luo) ugly
-        target_feat = self.feat_matrix.rename(None)[batch_i, self.pos_to_predict]
+        self.segments = np.repeat(self.segments, ml)
+        self.target_weight = get_length_mask(self.lengths, ml, cpu=True)
+        self.target_weight = self.target_weight.unsqueeze(dim=-1).repeat(1, 1, nfg).view(new_bs, nfg).float()
+        self.pos_to_predict = get_range(ml, 2, 1, cpu=True).repeat(bs, 1)
+
+        self.lengths = self.lengths.repeat_interleave(ml, dim=0)
+
+        # NOTE(j_luo) This is global index.
+        target_feat = self.feat_matrix[batch_i, self.pos_to_predict].view(new_bs, -1)
+        self.pos_to_predict = self.pos_to_predict.view(new_bs)
+        self.feat_matrix = self.feat_matrix.repeat_interleave(ml, dim=0)
+        # IDEA(j_luo) autocomplete not showing up for feat_matrix?
         # Get conversion matrix.
         if self._g2f is None:
             total = Index.total_indices()
@@ -72,7 +139,6 @@ class IpaBatch(BaseBatch):
                 self._g2f[index.g_idx] = index.f_idx
         # NOTE(j_luo) This is feature index.
         self.target_feat = self._g2f[target_feat]
-        self.target_weight = torch.ones(self.batch_size, g.num_feature_groups)
 
         # NOTE(j_luo) If the condition is not satisfied, the target weight should be set to 0.
         for cat, index in conditions.items():
@@ -83,11 +149,11 @@ class IpaBatch(BaseBatch):
 
         # NOTE(j_luo) Refine names.
         # IDEA(j_luo) We can move this process a bit earlier to DataLoader (serialization not yet implemented for named tensors).
-        self.pos_to_predict = self.pos_to_predict.refine_names('batch')
-        self.target_feat = self.target_feat.refine_names('batch', 'feat_group')
-        self.target_weight = self.target_weight.refine_names('batch', 'feat_group')
+        self.pos_to_predict = self.pos_to_predict.refine_names(self.batch_name)
+        self.target_feat = self.target_feat.refine_names(self.batch_name, 'feat_group')
+        self.target_weight = self.target_weight.refine_names(self.batch_name, 'feat_group')
 
-        super().__post_init__()
+        super()._post_init_helper()
 
     def __len__(self):
         return self.batch_size
@@ -111,78 +177,53 @@ class CollateReturn:
     segments: np.ndarray
     lengths: torch.LongTensor
     matrices: torch.LongTensor
-    positions: torch.LongTensor = None
 
 
-def _collate_fn(batch, repeat=True) -> CollateReturn:
+def collate_fn(batch) -> CollateReturn:
     segments = list()
     matrices = list()
     lengths = list()
-    if repeat:
-        positions = list()
     for segment, matrix in batch:
         length = len(matrix)
-        if repeat:
-            segments.extend([segment] * length)
-            lengths.extend([length] * length)
-            matrices.extend([matrix] * length)
-            positions.extend(list(range(length)))
-        else:
-            segments.append(segment)
-            lengths.append(length)
-            matrices.append(matrix)
+        segments.append(segment)
+        lengths.append(length)
+        matrices.append(matrix)
     matrices = torch.nn.utils.rnn.pad_sequence(matrices, batch_first=True)
     segments = np.asarray(segments)
     lengths = torch.LongTensor(lengths)
-    if repeat:
-        positions = torch.LongTensor(positions)
-        return CollateReturn(segments, lengths, matrices, positions=positions)
-    else:
-        return CollateReturn(segments, lengths, matrices)
-
-
-def lm_collate_fn(batch):
-    return _collate_fn(batch, repeat=True)
-
-
-def decipher_collate_fn(batch):
-    return _collate_fn(batch, repeat=False)
+    return CollateReturn(segments, lengths, matrices)
 
 
 @init_g_attr
 class BatchSampler(Sampler):
-    """
-    This class works by sampling (randomly if shuffled) segments, until the total number of characters exceeds char_per_batch.
-    Note that __len__ is not defined.
-    """
 
     def __init__(self, dataset: 'a', char_per_batch: 'p', shuffle: 'p' = True):
         self.dataset = dataset
-        self.lengths = np.asarray(list(map(len, self.dataset.data['matrices'])))
+        # Partition the entire dataset beforehand into batches by length.
+        lengths = np.asarray(list(map(len, self.dataset.data['matrices'])))
+        indices = lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
+        logging.info('Partitioning the data into batches.')
+        self.idx_batches = list()
+        i = 0
+        while i < len(indices):
+            max_len = lengths[indices[i]]
+            bs = char_per_batch // max_len
+            if bs == 0:
+                raise RuntimeError(f'Batch too small!')
+            self.idx_batches.append(indices[i: i + bs])
+            i += bs
+
+    def __len__(self):
+        return len(self.idx_batches)
 
     def __iter__(self):
-        indices = list(range(len(self.dataset)))
         if self.shuffle:
-            random.shuffle(indices)
-        total_num_char = 0
-        batch = list()
-        for idx in indices:
-            length = self.lengths[idx]
-            if length + total_num_char > self.char_per_batch:
-                yield batch
-                batch = [idx]
-                total_num_char = length
-            else:
-                batch.append(idx)
-                total_num_char += length
-        if batch:
-            yield batch
+            random.shuffle(self.idx_batches)
+        yield from self.idx_batches
 
 
 @init_g_attr
 class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
-
-    collate_fn = None
 
     add_argument('data_path', dtype='path', msg='path to the feat data in tsv format.')
     add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
@@ -193,7 +234,7 @@ class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
         batch_sampler = BatchSampler(dataset, char_per_batch, shuffle=True)
         cls = type(self)
         super().__init__(dataset, batch_sampler=batch_sampler,
-                         num_workers=num_workers, collate_fn=cls.collate_fn)
+                         num_workers=num_workers, collate_fn=collate_fn)
 
     @abstractmethod
     def _prepare_batch(self):
@@ -207,23 +248,23 @@ class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
 
 class IpaDataLoader(BaseIpaDataLoader):
 
-    collate_fn = lm_collate_fn
-
     def _prepare_batch(self, collate_return: CollateReturn) -> IpaBatch:
-        return IpaBatch(collate_return.segments, collate_return.lengths, collate_return.matrices, collate_return.positions)
+        return IpaBatch(collate_return.segments, collate_return.lengths, collate_return.matrices)
 
 
-@dataclass
+@batch_class
 class ContinuousTextIpaBatch(BaseBatch):
     pass
 
 
 class ContinuousTextDataLoader(IpaDataLoader):
 
-    collate_fn = decipher_collate_fn
-
     def _prepare_batch(self, collate_return: CollateReturn) -> ContinuousTextIpaBatch:
         return ContinuousTextIpaBatch(collate_return.segments, collate_return.lengths, collate_return.matrices)
+
+# ------------------------------------------------------------- #
+#                         Metric learner                        #
+# ------------------------------------------------------------- #
 
 
 @dataclass

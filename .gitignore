@@ -102,7 +102,7 @@ ENV/
 
 # my stuff
 .vscode
-data/
+data
 log/
 notebooks/
 *impl.c

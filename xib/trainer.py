@@ -141,7 +141,7 @@ class MetricLearningTrainer(BaseTrainer):
         best_mse = None
         while not self.tracker.is_finished:
             # Get data first.
-            metrics = self.train_loop(train_langs)  # FIXME(j_luo)
+            metrics = self.train_loop(train_langs)
             accum_metrics += metrics
             self.tracker.update()
 
@@ -149,7 +149,7 @@ class MetricLearningTrainer(BaseTrainer):
 
             if self.track % self.save_interval == 0:
                 self.save(dev_langs, f'{fold_idx}.latest')
-                dev_metrics = evaluator.evaluate(dev_langs)  # FIXME(j_luo)
+                dev_metrics = evaluator.evaluate(dev_langs)
                 logging.info(dev_metrics.get_table(title='dev'))
                 if best_mse is None or dev_metrics.mse.mean < best_mse:
                     best_mse = dev_metrics.mse.mean
@@ -168,7 +168,7 @@ class MetricLearningTrainer(BaseTrainer):
         logging.imp(f'Model saved to {out_path}.')
 
     def reset(self):
-        # HACK(j_luo)
+        # HACK(j_luo) Need to improve trakcer api.
         self.tracker._attrs['epoch'] = 0
 
     def train_loop(self, train_langs: List[str]) -> Metrics:

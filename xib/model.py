@@ -7,9 +7,10 @@ import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.nn.modules import MultiheadAttention
+from torch.utils.data.dataloader import default_collate
 
 from arglib import add_argument, init_g_attr
-from devlib import dataclass_size_repr, get_range, get_tensor
+from devlib import dataclass_size_repr, get_range, get_tensor, get_zeros
 from devlib.named_tensor import (adv_index, embed, expand_as, gather,
                                  get_named_range, leaky_relu, self_attend)
 from xib.data_loader import (ContinuousTextIpaBatch, IpaBatch,
@@ -196,20 +197,23 @@ class DecipherModel(nn.Module):
     add_argument('adapt_mode', default='none', choices=['none'], dtype=str,
                  msg='how to adapt the features from one language to another')
     add_argument('num_self_attn_layers', default=2, dtype=int, msg='number of self attention layers')
-    add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
     add_argument('num_samples', default=100, dtype=int, msg='number of samples per sequence')
+    add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
 
     def __init__(self,
-                 lm_model: 'a',
+                 lm_model_path,
                  num_features,
                  dim,
                  emb_groups,
                  adapt_mode,
                  num_self_attn_layers,
                  mode,
-                 score_per_word,
                  num_samples):
         super().__init__()
+        self.lm_model = Model()
+        saved_dict = torch.load(lm_model_path)
+        self.lm_model.load_state_dict(saved_dict['model'])
+
         # NOTE(j_luo) I'm keeping a separate embedding for label prediction.
         self.emb_for_label = FeatEmbedding('feat_emb_for_label', 'chosen_feat_group', 'char_emb_for_label')
 
@@ -231,6 +235,7 @@ class DecipherModel(nn.Module):
             raise NotImplementedError()
 
     def forward(self, batch: ContinuousTextIpaBatch):
+        bs = batch.batch_size
         # Get the samples of label sequences first.
         out = self.emb_for_label(batch.feat_matrix, batch.source_padding)
         out = out.align_to('length', 'batch', 'char_emb_for_label')

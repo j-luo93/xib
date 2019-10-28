@@ -21,7 +21,7 @@ class LMEn(SharedConfig):
     check_interval: int = 50
     char_per_batch: int = 2000
     num_steps: int = 10000
-    window_size: int = 3
+    window_size: int = 5
 
     def __post_init__(self):
         self.data_path = f'data/phones_{self.lang}_idx.pth'

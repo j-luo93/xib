@@ -38,7 +38,11 @@ class DecipherManager(Manager):
     trainer_cls = DecipherTrainer
 
     def _get_model(self):
-        return DecipherModel(None)  # FIXME(j_luo) fill in pretrained lm_model.
+        return DecipherModel()
+
+# ------------------------------------------------------------- #
+#                         Metric learner                        #
+# ------------------------------------------------------------- #
 
 
 @init_g_attr(default='property')

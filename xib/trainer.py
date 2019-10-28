@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from arglib import add_argument, g, init_g_attr
+from devlib import get_trainable_params
 from trainlib import Metric, Metrics, Tracker, Trainer
 from xib.data_loader import MetricLearningDataLoader
 from xib.evaluator import Evaluator
@@ -24,7 +25,7 @@ class BaseTrainer(Trainer, metaclass=ABCMeta):
     def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, mode):
         super().__init__()
         self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
-        self.optimizer = optim.Adam(self.model.parameters(), learning_rate)
+        self.optimizer = optim.Adam(get_trainable_params(self.model), learning_rate)
 
         self.init_params()
 
@@ -101,6 +102,10 @@ class LMTrainer(BaseTrainer):
 
 
 @init_g_attr
+class AdaptLMTrainer(LMTrainer):
+
+
+@init_g_attr
 class DecipherTrainer(LMTrainer):
 
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
@@ -126,6 +131,10 @@ class DecipherTrainer(LMTrainer):
         loss.backward()
         self.optimizer.step()
         return metrics
+
+# ------------------------------------------------------------- #
+#                         Metric learner                        #
+# ------------------------------------------------------------- #
 
 
 @init_g_attr(default='property')

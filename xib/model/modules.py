@@ -6,7 +6,8 @@ import torch.nn as nn
 from arglib import add_argument, init_g_attr
 from devlib import get_range, get_tensor
 from devlib.named_tensor import adv_index, embed, leaky_relu
-from xib.ipa import Category, conditions, get_enum_by_cat, no_none_predictions
+from xib.ipa import (Category, conditions, get_enum_by_cat,
+                     no_none_predictions, should_include)
 
 from . import BT, FT, LT
 
@@ -22,6 +23,7 @@ def get_effective_c_idx(emb_groups):
     return c_idx
 
 
+# FIXME(j_luo) should not have init_g_attr here.
 @init_g_attr(default='property')
 class FeatEmbedding(nn.Module):
 
@@ -44,6 +46,33 @@ class FeatEmbedding(nn.Module):
         feat_emb = feat_emb.align_to('batch', 'length', self.char_emb_name)
         padding = padding.align_to('batch', 'length')
         feat_emb.rename(None)[padding.rename(None)] = 0.0
+        return feat_emb
+
+
+@init_g_attr(default='property')
+class SparseFeatEmbedding(nn.Module):
+
+    def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, emb_groups, num_feature_groups):
+        super().__init__()
+        emb_dict = dict()
+        for cat in Category:
+            if should_include(emb_groups, cat):
+                e = get_enum_by_cat(cat)
+                nf = len(e)
+                names = [f'{cat.name}_feat_adapted', 'feat_dim']
+                emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, dim, names=names))
+        self.emb_dict = nn.ModuleDict(emb_dict)
+
+    def forward(self, sparse_feat_matrices: Dict[Category, FT], padding: BT) -> FT:
+        embs = list()
+        for cat in Category:
+            if cat.name in self.emb_dict and cat in sparse_feat_matrices:
+                sfm = sparse_feat_matrices[cat]
+                emb_param = self.emb_dict[cat.name]
+                sfm = sfm.align_to('batch', 'length', ...)
+                emb = sfm @ emb_param
+                embs.append(emb)
+        feat_emb = torch.cat(embs, dim=-1)
         return feat_emb
 
 
@@ -113,4 +142,27 @@ class Predictor(nn.Module):
             condition_log_probs = ret[condition_cat][:, index.f_idx]
             ret[cat] = ret[cat] + condition_log_probs.align_as(ret[cat])
 
+        return ret
+
+
+class AdaptLayer(nn.Module):
+
+    def __init__(self, emb_groups: str):
+        param_dict = dict()
+        for cat in Category:
+            if should_include(emb_groups, cat):
+                e = get_enum_by_cat(cat)
+                nf = len(e)
+                names = [f'{cat.name}_feat', f'{cat.name}_feat_adapted']
+                param = nn.Parameter(torch.zeros(nf, nf, names=names))
+                param_dict[cat.name] = param
+        self.adapters = nn.ParameterDict(param_dict)
+
+    def forward(self, sparse_feat_matrices: Dict[Category, FT]) -> Dict[Category, FT]:
+        ret = dict()
+        for cat, sfm in sparse_feat_matrices.items():
+            if cat.name in self.adapters:
+                param = self.adapters[cat.name]
+                sfm_adapted = sfm @ param
+                ret[cat] = sfm_adapted
         return ret

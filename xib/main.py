@@ -16,7 +16,7 @@ def train():
 
 
 if __name__ == "__main__":
-    initiate(reg, logger=True, log_dir=True, log_level=True, gpus=True, random_seed=True)
+    initiate(reg, logger=True, log_dir=True, log_level=True, gpus=True, random_seed=True, commit_id=True)
     patch_named_tensors()
 
     parse_args()

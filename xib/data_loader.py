@@ -3,25 +3,25 @@ import random
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
 
 import numpy as np
 import pandas as pd
 import torch
-from pycountry import languages
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from arglib import add_argument, g, init_g_attr
 from devlib import (PandasDataLoader, PandasDataset, dataclass_cuda,
                     dataclass_size_repr, get_length_mask, get_range,
-                    get_tensor)
+                    get_tensor, get_zeros)
+from pycountry import languages
 from xib.families import get_all_distances, get_families
 from xib.ipa import Category, Index, conditions, should_include
 
 # NOTE(j_luo) Batch dataclasses will inherit the customized __repr__.
-batch_class = partial(dataclass, repr=False)
+batch_class = wraps(partial(dataclass, repr=False))
 
 
 @batch_class
@@ -62,7 +62,6 @@ class BaseBatch:
         self.source_padding = ~get_length_mask(self.lengths, self.max_length)
         self.source_padding = self.source_padding.refine_names(self.batch_name, self.length_name)
         self.lengths = self.lengths.refine_names(self.batch_name)
-        self.cuda()
 
     def split(self, size: int):
         """Split the batch into multiple smaller batches with size <= `size`."""
@@ -129,7 +128,6 @@ class IpaBatch(BaseBatch):
         target_feat = self.feat_matrix[batch_i, self.pos_to_predict].view(new_bs, -1)
         self.pos_to_predict = self.pos_to_predict.view(new_bs)
         self.feat_matrix = self.feat_matrix.repeat_interleave(ml, dim=0)
-        # IDEA(j_luo) autocomplete not showing up for feat_matrix?
         # Get conversion matrix.
         if self._g2f is None:
             total = Index.total_indices()
@@ -157,6 +155,25 @@ class IpaBatch(BaseBatch):
 
     def __len__(self):
         return self.batch_size
+
+
+@batch_class
+class SparseIpaBatch(IpaBatch):
+    feat_matrix: Dict[Category, torch.FloatTensor]
+
+    def _post_init_helper(self):
+        super()._post_init_helper()
+        names = self.feat_matrix.names
+        bs = self.feat_matrix.size('batch')
+        ml = self.feat_matrix.size('length')
+        fm = self._g2f[self.feat_matrix.rename(None)].refine_names(*names)
+        sfms = dict()
+        for cat in Category:
+            sfm_idx = fm[..., cat.value]
+            sfm = get_zeros(bs, ml, len(cat))
+            sfm = sfm.scatter(2, sfm_idx.rename(None).unsqueeze(dim=-1), 1.0)
+            sfms[cat] = sfm
+        self.feat_matrix = sfms
 
 
 class IpaDataset(Dataset):
@@ -248,8 +265,16 @@ class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
 
 class IpaDataLoader(BaseIpaDataLoader):
 
+    batch_cls: Type[BaseBatch] = IpaBatch
+
     def _prepare_batch(self, collate_return: CollateReturn) -> IpaBatch:
-        return IpaBatch(collate_return.segments, collate_return.lengths, collate_return.matrices)
+        cls = type(self)
+        batch_cls = cls.batch_cls
+        return batch_cls(collate_return.segments, collate_return.lengths, collate_return.matrices).cuda()
+
+
+class SparseIpaDataLoader(IpaDataLoader):
+    batch_cls = SparseIpaBatch
 
 
 @batch_class
@@ -279,7 +304,6 @@ class MetricLearningBatch:
     def __post_init__(self):
         self.normalized_score = get_tensor(self.normalized_score)  # .refine_names('batch', 'feat_group')
         self.dist = get_tensor(self.dist)  # .refine_names('batch')
-        self.cuda()
 
     def __len__(self):
         return self.dist.size(0)
@@ -337,7 +361,7 @@ class MetricLearningDataLoader(PandasDataLoader):
             lang2 = df['lang2'].values
             normalized_score = get_tensor(df[self.cats].values.astype('float32'))
             dist = get_tensor(df['dist'].values.astype('float32'))
-            yield MetricLearningBatch(lang1, lang2, normalized_score, dist)
+            return MetricLearningBatch(lang1, lang2, normalized_score, dist).cuda()
 
     def select(self, langs1: Sequence[str], langs2: Sequence[str]) -> 'MetricLearningDataLoader':
         all_langs1 = set(langs1)

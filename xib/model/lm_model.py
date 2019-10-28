@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
@@ -8,7 +9,7 @@ import torch.nn as nn
 from arglib import init_g_attr
 from devlib import freeze
 from devlib.named_tensor import gather
-from xib.data_loader import IpaBatch, DenseIpaBatch
+from xib.data_loader import DenseIpaBatch, IpaBatch
 from xib.ipa import Category, get_enum_by_cat
 
 from . import FT, LT
@@ -65,8 +66,21 @@ class AdaptedLMModel(LMModel):
     def __init__(self, emb_groups, lm_model_path):
         super().__init__()
         saved_dict = torch.load(lm_model_path)
-        saved_params = {k: v for k, v in saved_dict['model'].items() if k.startswith('encoder.')}
-        self.load_state_dict(saved_params, strict=False)
+        try:
+            self.load_state_dict(saved_dict['model'])
+        except RuntimeError as e:
+            logging.error(str(e))
+
+        # NOTE(j_luo) We have to map normal feature embedidngs to dense feature embeddings.
+        old_weights = saved_dict['model']['encoder.feat_embedding.embed_layer.weight']
+        for cat in Category:
+            try:
+                emb_param = self.encoder.feat_embedding.embed_layer[cat.name]
+                e = get_enum_by_cat(cat)
+                g_idx = [feat.value.g_idx for feat in e]
+                emb_param.data.copy_(old_weights[g_idx])
+            except KeyError:
+                pass
 
         freeze(self.encoder)
         freeze(self.predictor)

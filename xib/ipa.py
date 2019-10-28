@@ -10,11 +10,12 @@ feature or feat: the IPAFeature variable. PType.CONSONANT for instance.
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum, unique
+from typing import Type
 
 import inflection
 
 
-def get_enum_by_cat(cat):
+def get_enum_by_cat(cat) -> Type['IPAFeature']:
     return globals()[inflection.camelize(cat.name.lower())]
 
 

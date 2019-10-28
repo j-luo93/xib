@@ -8,7 +8,7 @@ import torch.optim as optim
 
 from arglib import add_argument, g, init_g_attr
 from devlib import get_trainable_params
-from trainlib import Metric, Metrics, Tracker, Trainer
+from trainlib import Metric, Metrics, Tracker, Trainer, log_this
 from xib.data_loader import MetricLearningDataLoader
 from xib.evaluator import Evaluator
 from xib.ipa import Category, should_include
@@ -32,7 +32,11 @@ class BaseTrainer(Trainer, metaclass=ABCMeta):
         # Prepare batch iterator.
         self.iterator = self._next_batch_iterator()
 
-    def init_params(self, init_matrix=True, init_vector=False, init_higher_tensor=False):
+    def init_params(self):
+        self._init_params()
+
+    @log_this(log_level='IMP')
+    def _init_params(self, init_matrix=True, init_vector=False, init_higher_tensor=False):
         for name, p in self.model.named_parameters():
             if p.dim() == 2 and init_matrix:
                 nn.init.xavier_uniform_(p)
@@ -103,7 +107,9 @@ class LMTrainer(BaseTrainer):
 
 @init_g_attr
 class AdaptLMTrainer(LMTrainer):
-    pass
+
+    def init_params(self):
+        pass
 
 
 @init_g_attr
@@ -153,7 +159,7 @@ class MetricLearningTrainer(BaseTrainer):
               dev_langs: List[str],
               fold_idx: int) -> Metrics:
         # Reset parameters.
-        self.init_params(init_matrix=True, init_vector=True, init_higher_tensor=True)
+        self._init_params(init_matrix=True, init_vector=True, init_higher_tensor=True)
         self.optimizer = optim.Adam(self.model.parameters(), self.learning_rate)
         # Main boy.
         accum_metrics = Metrics()

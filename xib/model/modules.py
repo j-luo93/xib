@@ -162,12 +162,16 @@ class AdaptLayer(nn.Module):
                 param_dict[cat.name] = param
         self.adapters = nn.ParameterDict(param_dict)
 
+    def alignment(self, cat_name: str) -> FT:
+        param = self.adapters[cat_name]
+        alignment = param.log_softmax(dim=0).exp()
+        return alignment
+
     def forward(self, dense_feat_matrices: Dict[Category, FT]) -> Dict[Category, FT]:
         ret = dict()
         for cat, sfm in dense_feat_matrices.items():
             if cat.name in self.adapters:
-                param = self.adapters[cat.name]
-                probs = param.log_softmax(dim=0).exp()
-                sfm_adapted = sfm @ probs
+                alignment = self.alignment(cat.name)
+                sfm_adapted = sfm @ alignment
                 ret[cat] = sfm_adapted.refine_names('batch', 'length', f'{cat.name}_feat_adapted')
         return ret

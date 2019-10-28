@@ -100,7 +100,14 @@ class LMTrainer(BaseTrainer):
         return self.tracker.step
 
 
+@init_g_attr
 class DecipherTrainer(LMTrainer):
+
+    add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
+    add_argument('concentration', default=1e-2, dtype=float, msg='concentration hyperparameter')
+
+    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, mode, score_per_word: 'p', concentration: 'p'):
+        super().__init__(model, train_data_loader, num_steps, learning_rate, check_interval, save_interval, log_dir, mode)
 
     def train_loop(self) -> Metrics:
         self.model.train()
@@ -108,12 +115,14 @@ class DecipherTrainer(LMTrainer):
         batch = next(self.iterator)
         scores = self.model(batch)
         bs = batch.feat_matrix.size('batch')
-        metrics = Metrics(*[
-            Metric(name, score, bs) for name, score in scores.items()
-        ])
-        score = Metric('score', sum(metrics), bs)
-        metrics += score
-        loss = metrics.score.mean
+        sample_probs = (scores['sample_log_probs'] * self.concentration).log_softmax(dim='sample').exp()
+        final_scores = scores['lm_score'] + scores['word_score'] * self.score_per_word
+        score = (sample_probs * final_scores).sum()
+        lm_score = Metric('lm_score', scores['lm_score'].sum(), bs)
+        word_score = Metric('word_score', scores['word_score'].sum(), bs)
+        score = Metric('score', score, bs)
+        metrics = Metrics(score, lm_score, word_score)
+        loss = -score.mean
         loss.backward()
         self.optimizer.step()
         return metrics

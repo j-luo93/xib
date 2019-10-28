@@ -244,33 +244,70 @@ class DecipherModel(nn.Module):
         logits = self.label_predictor(out.rename(None)).refine_names(*out.names)
         logits = logits.rename(**{f'self_attn_repr': 'label'})
         label_probs = logits.log_softmax(dim=-1).exp()
-        samples, sample_probs = self._sample(label_probs, batch.source_padding)
+        samples, sample_log_probs = self._sample(label_probs, batch.source_padding)
 
         # Get the lm score.
+        # FIXME(j_luo) add unique somewhere
         packed_words = self._pack(samples, batch.feat_matrix)
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
         lm_batch = self._prepare_batch(packed_words)  # FIXME(j_luo)  This is actually continous batching.
-        scores = self.lm_model.score(lm_batch)
+        scores = self._get_lm_scores(lm_batch)
         nlls = list()
-        for cat, (nll, _) in scores.items():
+        for cat, (nll, weight) in scores.items():
             if should_include(self.mode, cat):
-                nlls.append(nll)
+                nlls.append(nll * weight)
         nlls = sum(nlls)
-        lm_score = self._unpack(nlls, packed_words)  # FIXME(j_luo) unpack this
+        lm_score = self._unpack(nlls, packed_words, bs)
 
         # Compute word score that corresponds to the number of readable words.
-        word_score = self.score_per_word  # FIXME(j_luo) what's the shape for lm_score?
+        word_score = self._get_word_score(packed_words, bs)
 
-        bs = batch.feat_matrix.size('batch')
         return {
             'word_score': word_score,
-            'lm_score': lm_score
+            'lm_score': lm_score,
+            'sample_log_probs': sample_log_probs
         }
+
+    def _get_word_score(self, packed_words: PackedWords, batch_size: int) -> FT:
+        with torch.no_grad():
+            num_words = get_zeros(batch_size * self.num_samples)
+            bi = packed_words.batch_indices
+            si = packed_words.sample_indices
+            idx = (bi * self.num_samples + si).rename(None)
+            inc = get_zeros(packed_words.batch_indices.size('batch_word')).fill_(1.0)
+            num_words.scatter_add_(0, idx, inc)
+            num_words = num_words.view(batch_size, self.num_samples).refine_names('batch', 'sample')
+        return num_words
+
+    def _get_lm_scores(self, lm_batch: IpaBatch) -> Dict[Category, FT]:
+        max_size = min(300000, lm_batch.batch_size)
+        with torch.no_grad():
+            batches = lm_batch.split(max_size)
+            all_scores = [self.lm_model.score(batch) for batch in batches]
+            cats = all_scores[0].keys()
+            all_scores = {
+                cat: list(zip(*[scores[cat] for scores in all_scores]))
+                for cat in cats
+            }
+            for cat in cats:
+                scores, weights = all_scores[cat]
+                names = scores[0].names
+                scores = torch.cat([score.rename(None) for score in scores], dim=0).refine_names(*names)
+                weights = torch.cat([weight.rename(None) for weight in weights], dim=0).refine_names(*names)
+                all_scores[cat] = (scores, weights)
+        return all_scores
 
     @staticmethod
     def _prepare_batch(packed_words: PackedWords) -> IpaBatch:
-
-        pass
+        # TODO(j_luo) Why does add_module (methods from Tensor) show up in the list autocompletion in PackedWords.
+        # TODO(j_luo) ugly
+        return IpaBatch(
+            None,
+            packed_words.word_lengths.rename(None),
+            packed_words.word_feat_matrices.rename(None),
+            batch_name='batch',
+            length_name='length'
+        )
 
     @staticmethod
     def _pack(samples: LT, feat_matrix: LT) -> PackedWords:
@@ -293,9 +330,19 @@ class DecipherModel(nn.Module):
             word_feat_matrices = word_feat_matrices.refine_names('batch_word', 'position', 'feat_group')
             return PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions)
 
-    @staticmethod
-    def _unpack(self, lm_score: FT, packed_words: PackedWords):
-        pass
+    def _unpack(self, lm_score: FT, packed_words: PackedWords, batch_size: int) -> FT:
+        with torch.no_grad():
+            bw = packed_words.word_feat_matrices.size('batch_word')
+            p = packed_words.word_feat_matrices.size('position')
+            lm_score = lm_score.unflatten('batch', [('batch_word', bw), ('position', p)])
+            lm_score = lm_score.sum(dim='position')
+            ret = get_zeros(batch_size * self.num_samples)
+            bi = packed_words.batch_indices
+            si = packed_words.sample_indices
+            idx = (bi * self.num_samples + si).rename(None)
+            ret.scatter_add_(0, idx, lm_score.rename(None))
+            ret = ret.view(batch_size, self.num_samples).refine_names('batch', 'sample')
+        return ret
 
     def _sample(self, label_probs: FT, source_padding: FT) -> Tuple[LT, FT]:
         """Return samples based on `label_probs`."""
@@ -306,7 +353,7 @@ class DecipherModel(nn.Module):
         mask = expand_as(source_padding, label_probs)
         source = expand_as(get_tensor([0.0, 0.0, 1.0]).refine_names('label').float(), label_probs)
         # TODO(j_luo) ugly
-        label_probs.rename(None).masked_scatter_(mask.rename(None), source.rename(None))
+        label_probs = label_probs.rename(None).masked_scatter(mask.rename(None), source.rename(None))
 
         # Get packed batches.
         label_distr = Categorical(probs=label_probs.rename(None))
@@ -316,9 +363,10 @@ class DecipherModel(nn.Module):
         length_idx = get_named_range(label_samples.size('length'), 'length').align_as(label_samples).rename(None)
         label_sample_probs = label_probs.rename(None)[batch_idx, length_idx, label_samples.rename(None)]
         label_sample_probs = label_sample_probs.refine_names(*label_samples.names)
-        label_sample_probs = (source_padding.align_as(label_sample_probs).float()
-                              * label_sample_probs).sum(dim='length')
-        return label_samples, label_sample_probs
+        label_sample_log_probs = (1e-8 + label_sample_probs).log()
+        label_sample_log_probs = ((~source_padding).align_as(label_sample_log_probs).float()
+                                  * label_sample_log_probs).sum(dim='length')
+        return label_samples, label_sample_log_probs
 
 
 @init_g_attr(default='property')

@@ -1,13 +1,14 @@
-from dataclasses import dataclass, make_dataclass
+from dataclasses import dataclass
 from typing import Dict, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 
+from arglib import init_g_attr
 from devlib import freeze
 from devlib.named_tensor import gather
-from xib.data_loader import IpaBatch, SparseIpaBatch
+from xib.data_loader import IpaBatch, DenseIpaBatch
 from xib.ipa import Category, get_enum_by_cat
 
 from . import FT, LT
@@ -64,15 +65,16 @@ class AdaptedLMModel(LMModel):
     def __init__(self, emb_groups, lm_model_path):
         super().__init__()
         saved_dict = torch.load(lm_model_path)
-        self.encoder.load_state_dict(saved_dict['model']['encoder'])
+        saved_params = {k: v for k, v in saved_dict['model'].items() if k.startswith('encoder.')}
+        self.load_state_dict(saved_params, strict=False)
 
         freeze(self.encoder)
         freeze(self.predictor)
 
         self.adapter = AdaptLayer(emb_groups)
 
-    def forward(self, batch: SparseIpaBatch) -> Dict[Category, FT]:
-        sfm_adapted = self.adapter(batch.sparse_feat_matrices)
+    def forward(self, batch: DenseIpaBatch) -> Dict[Category, FT]:
+        sfm_adapted = self.adapter(batch.dense_feat_matrix)
         h = self.encoder(sfm_adapted, batch.pos_to_predict, batch.source_padding)
         distr = self.predictor(h)
         return distr

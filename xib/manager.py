@@ -5,7 +5,7 @@ import random
 from arglib import add_argument, init_g_attr
 from trainlib import Metrics, set_random_seeds
 from xib.data_loader import (ContinuousTextDataLoader, IpaDataLoader,
-                             MetricLearningDataLoader, SparseIpaDataLoader)
+                             MetricLearningDataLoader, DenseIpaDataLoader)
 from xib.evaluator import Evaluator
 from xib.model.decipher_model import DecipherModel
 from xib.model.lm_model import AdaptedLMModel, LMModel
@@ -13,7 +13,7 @@ from xib.model.metric_learning_model import MetricLearningBatch
 from xib.trainer import (AdaptLMTrainer, DecipherTrainer, LMTrainer,
                          MetricLearningTrainer)
 
-add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'metric'], msg='which task to run')
+add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'metric', 'adapt'], msg='which task to run')
 
 
 class Manager:
@@ -37,7 +37,7 @@ class Manager:
 
 class AdaptManager(Manager):
 
-    data_loader_cls = SparseIpaDataLoader
+    data_loader_cls = DenseIpaDataLoader
     trainer_cls = AdaptLMTrainer
 
     def _get_model(self):

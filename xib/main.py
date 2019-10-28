@@ -2,12 +2,14 @@ from arglib import g, parse_args, show_args
 from cfg import reg
 from devlib import initiate
 from devlib.named_tensor import patch_named_tensors
-from xib.manager import DecipherManager, Manager, MetricLearningManager
+from xib.manager import DecipherManager, Manager, MetricLearningManager, AdaptManager
 
 
 def train():
     if g.task == 'lm':
         manager = Manager()
+    elif g.task == 'adapt':
+        manager = AdaptManager()
     elif g.task == 'metric':
         manager = MetricLearningManager()
     else:

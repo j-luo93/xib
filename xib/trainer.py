@@ -25,7 +25,7 @@ class BaseTrainer(Trainer, metaclass=ABCMeta):
     def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, mode):
         super().__init__()
         self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
-        self.optimizer = optim.Adam(get_trainable_params(self.model), learning_rate)
+        self.optimizer = optim.Adam(get_trainable_params(self.model, named=False), learning_rate)
 
         self.init_params()
 
@@ -103,6 +103,7 @@ class LMTrainer(BaseTrainer):
 
 @init_g_attr
 class AdaptLMTrainer(LMTrainer):
+    pass
 
 
 @init_g_attr

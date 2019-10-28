@@ -1,9 +1,10 @@
+from xib.ipa import get_enum_by_cat
 import logging
 import random
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
-from functools import partial, wraps
+from functools import partial, update_wrapper
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
 
@@ -21,7 +22,7 @@ from xib.families import get_all_distances, get_families
 from xib.ipa import Category, Index, conditions, should_include
 
 # NOTE(j_luo) Batch dataclasses will inherit the customized __repr__.
-batch_class = wraps(partial(dataclass, repr=False))
+batch_class = update_wrapper(partial(dataclass, repr=False), dataclass)
 
 
 @batch_class
@@ -158,8 +159,8 @@ class IpaBatch(BaseBatch):
 
 
 @batch_class
-class SparseIpaBatch(IpaBatch):
-    feat_matrix: Dict[Category, torch.FloatTensor]
+class DenseIpaBatch(IpaBatch):
+    dense_feat_matrix: Dict[Category, torch.FloatTensor] = field(init=False)
 
     def _post_init_helper(self):
         super()._post_init_helper()
@@ -169,11 +170,12 @@ class SparseIpaBatch(IpaBatch):
         fm = self._g2f[self.feat_matrix.rename(None)].refine_names(*names)
         sfms = dict()
         for cat in Category:
+            e = get_enum_by_cat(cat)
             sfm_idx = fm[..., cat.value]
-            sfm = get_zeros(bs, ml, len(cat))
+            sfm = get_zeros(bs, ml, len(e), cpu=True)
             sfm = sfm.scatter(2, sfm_idx.rename(None).unsqueeze(dim=-1), 1.0)
-            sfms[cat] = sfm
-        self.feat_matrix = sfms
+            sfms[cat] = sfm.refine_names('batch', 'length', f'{cat.name}_feat')
+        self.dense_feat_matrix = {k: v.cuda() for k, v in sfms.items()}
 
 
 class IpaDataset(Dataset):
@@ -273,8 +275,8 @@ class IpaDataLoader(BaseIpaDataLoader):
         return batch_cls(collate_return.segments, collate_return.lengths, collate_return.matrices).cuda()
 
 
-class SparseIpaDataLoader(IpaDataLoader):
-    batch_cls = SparseIpaBatch
+class DenseIpaDataLoader(IpaDataLoader):
+    batch_cls = DenseIpaBatch
 
 
 @batch_class

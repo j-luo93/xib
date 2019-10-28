@@ -29,10 +29,13 @@ class FeatEmbedding(nn.Module):
 
     def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, emb_groups, num_feature_groups):
         super().__init__()
-        self.embed_layer = nn.Embedding(num_features, dim)
         self.register_buffer('c_idx', get_tensor(get_effective_c_idx(emb_groups)).refine_names(group_name))
         if len(self.c_idx) > num_feature_groups:
             raise RuntimeError('Something is seriously wrong.')
+        self.embed_layer = self._get_embeddings()
+
+    def _get_embeddings(self):
+        return nn.Embedding(self.num_features, self.dim)
 
     @property
     def effective_num_feature_groups(self):
@@ -50,29 +53,27 @@ class FeatEmbedding(nn.Module):
 
 
 @init_g_attr(default='property')
-class SparseFeatEmbedding(nn.Module):
+class DenseFeatEmbedding(FeatEmbedding):
 
-    def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, emb_groups, num_feature_groups):
-        super().__init__()
+    def _get_embeddings(self):
         emb_dict = dict()
         for cat in Category:
-            if should_include(emb_groups, cat):
+            if should_include(self.emb_groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
-                names = [f'{cat.name}_feat_adapted', 'feat_dim']
-                emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, dim, names=names))
-        self.emb_dict = nn.ModuleDict(emb_dict)
+                emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, self.dim))
+        return nn.ParameterDict(emb_dict)
 
-    def forward(self, sparse_feat_matrices: Dict[Category, FT], padding: BT) -> FT:
+    def forward(self, dense_feat_matrices: Dict[Category, FT], padding: BT) -> FT:
         embs = list()
         for cat in Category:
-            if cat.name in self.emb_dict and cat in sparse_feat_matrices:
-                sfm = sparse_feat_matrices[cat]
-                emb_param = self.emb_dict[cat.name]
+            if cat.name in self.embed_layer and cat in dense_feat_matrices:
+                sfm = dense_feat_matrices[cat]
+                emb_param = self.embed_layer[cat.name]
                 sfm = sfm.align_to('batch', 'length', ...)
                 emb = sfm @ emb_param
                 embs.append(emb)
-        feat_emb = torch.cat(embs, dim=-1)
+        feat_emb = torch.cat(embs, dim=-1).refine_names('batch', 'length', self.char_emb_name)
         return feat_emb
 
 
@@ -80,11 +81,13 @@ class SparseFeatEmbedding(nn.Module):
 class Encoder(nn.Module):
 
     add_argument('window_size', default=3, dtype=int, msg='window size for the cnn kernel')
+    add_argument('dense_input', default=False, dtype=bool, msg='flag to dense input feature matrices')
 
-    def __init__(self, num_features, dim, window_size, hidden_size, emb_groups):
+    def __init__(self, num_features, dim, window_size, hidden_size, emb_groups, dense_input):
         super().__init__()
 
-        self.feat_embedding = FeatEmbedding('feat_emb', 'chosen_feat_group', 'char_emb')
+        emb_cls = DenseFeatEmbedding if dense_input else FeatEmbedding
+        self.feat_embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb')
         self.cat_dim = dim * self.feat_embedding.effective_num_feature_groups
         # IDEA(j_luo) should I define a Rename layer?
         self.conv_layers = nn.Sequential(
@@ -93,7 +96,8 @@ class Encoder(nn.Module):
         self.linear = nn.Linear(self.cat_dim, self.hidden_size)
 
     def forward(self, feat_matrix, pos_to_predict, source_padding):
-        bs, l, _ = feat_matrix.shape
+        bs = source_padding.size('batch')
+        l = source_padding.size('length')
         feat_emb = self.feat_embedding(feat_matrix, source_padding)
         feat_emb = feat_emb.align_to('batch', 'char_emb', 'length')
         # feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
@@ -148,21 +152,22 @@ class Predictor(nn.Module):
 class AdaptLayer(nn.Module):
 
     def __init__(self, emb_groups: str):
+        super().__init__()
         param_dict = dict()
         for cat in Category:
             if should_include(emb_groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
-                names = [f'{cat.name}_feat', f'{cat.name}_feat_adapted']
-                param = nn.Parameter(torch.zeros(nf, nf, names=names))
+                param = nn.Parameter(torch.zeros(nf, nf))
                 param_dict[cat.name] = param
         self.adapters = nn.ParameterDict(param_dict)
 
-    def forward(self, sparse_feat_matrices: Dict[Category, FT]) -> Dict[Category, FT]:
+    def forward(self, dense_feat_matrices: Dict[Category, FT]) -> Dict[Category, FT]:
         ret = dict()
-        for cat, sfm in sparse_feat_matrices.items():
+        for cat, sfm in dense_feat_matrices.items():
             if cat.name in self.adapters:
                 param = self.adapters[cat.name]
-                sfm_adapted = sfm @ param
-                ret[cat] = sfm_adapted
+                probs = param.log_softmax(dim=0).exp()
+                sfm_adapted = sfm @ probs
+                ret[cat] = sfm_adapted.refine_names('batch', 'length', f'{cat.name}_feat_adapted')
         return ret

@@ -54,7 +54,13 @@ for lang in _all_langs:
 
 
 @reg
-class DecipherEnPCV(LMEn):
+class AdaptLMEn(LMEn):
+    task: str = 'adapt'
+    dense_input: bool = True
+
+
+@reg
+class DecipherEn(LMEn):
     task: str = 'decipher'
 
 

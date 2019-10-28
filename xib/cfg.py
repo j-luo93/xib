@@ -1,5 +1,6 @@
-from arglib import Registry
 from dataclasses import dataclass
+
+from arglib import Registry
 
 reg = Registry('cfg')
 
@@ -39,15 +40,15 @@ class LMEnPDST(LMEn):
     emb_groups: str = 'pdst'
 
 
-_all_langs = [
+_all_other_langs = {
     'sh', 'bg', 'fr', 'de', 'lt', 'pt', 'nl', 'ka', 'is', 'ro', 'fi', 'it', 'eo',
     'el', 'cs', 'syc', 'ga', 'ang', 'hy', 'cy', 'tr', 'ms', 'ady', 'sk', 'da', 'fa',
     'gem-pro', 'sl', 'lb', 'es', 'nci', 'gl', 'fo', 'enm', 'io', 'dsb', 'ba', 'tlh',
     'sv', 'no', 'tl', 'la', 'jbo', 'arc', 'he', 'sq', 'ps', 'nn', 'az', 'sga', 'sco',
-    'xib', 'yue'
-]
+    'xib', 'yue', 'eu'
+}
 
-for lang in _all_langs:
+for lang in _all_other_langs:
     cap_lang = lang[0].upper() + lang[1:]
     new_cls = type(f'LM{cap_lang}', (LMEn,), {'lang': lang})
     reg(new_cls)
@@ -57,6 +58,12 @@ for lang in _all_langs:
 class AdaptLMEn(LMEn):
     task: str = 'adapt'
     dense_input: bool = True
+
+
+for lang in _all_other_langs:
+    cap_lang = lang[0].upper() + lang[1:]
+    new_cls = type(f'AdaptLM{cap_lang}', (AdaptLMEn, ), {'lang': lang})
+    reg(new_cls)
 
 
 @reg

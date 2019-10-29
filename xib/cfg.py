@@ -7,6 +7,7 @@ reg = Registry('cfg')
 
 @dataclass
 class SharedConfig:
+    num_workers: int = 1
     hidden_size: int = 100
     num_feature_groups: int = 14
     mode: str = 'pcv'
@@ -58,6 +59,8 @@ for lang in _all_other_langs:
 class AdaptLMEn(LMEn):
     task: str = 'adapt'
     dense_input: bool = True
+    learning_rate: float = 0.02
+    num_steps: int = 1000
 
 
 for lang in _all_other_langs:

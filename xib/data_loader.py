@@ -178,10 +178,23 @@ class DenseIpaBatch(IpaBatch):
         self.dense_feat_matrix = {k: v.cuda() for k, v in sfms.items()}
 
 
+def _get_effective_c_idx(groups):
+    if len(set(groups)) != len(groups):
+        raise ValueError(f'Duplicate values in groups {groups}.')
+    c_idx = list()
+    groups = set(groups)
+    for cat in Category:
+        if cat.name[0].lower() in groups:
+            c_idx.append(cat.value)
+    return c_idx
+
+
 class IpaDataset(Dataset):
 
-    def __init__(self, data_path):
+    def __init__(self, data_path, groups):
         self.data = torch.load(data_path)
+        c_idx = _get_effective_c_idx(groups)
+        self.data['matrices'] = [matrix[:, c_idx] for matrix in self.data['matrices']]
         logging.info(f'Loaded {len(self)} segments in total.')
 
     def __len__(self):
@@ -248,8 +261,8 @@ class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
     add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
     add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
 
-    def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers):
-        dataset = IpaDataset(data_path)
+    def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers, groups: 'p'):
+        dataset = IpaDataset(data_path, groups)
         batch_sampler = BatchSampler(dataset, char_per_batch, shuffle=True)
         cls = type(self)
         super().__init__(dataset, batch_sampler=batch_sampler,

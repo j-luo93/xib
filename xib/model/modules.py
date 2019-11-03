@@ -14,17 +14,6 @@ from xib.ipa import (Category, Name, conditions, get_enum_by_cat,
 from . import BT, FT, LT
 
 
-def get_effective_c_idx(groups):
-    if len(set(groups)) != len(groups):
-        raise ValueError(f'Duplicate values in groups {groups}.')
-    c_idx = list()
-    groups = set(groups)
-    for cat in Category:
-        if cat.name[0].lower() in groups:
-            c_idx.append(cat.value)
-    return c_idx
-
-
 # TODO(j_luo) should not have init_g_attr here.
 @init_g_attr(default='property')
 class FeatEmbedding(nn.Module):

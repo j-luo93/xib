@@ -1,4 +1,3 @@
-from xib.ipa import get_enum_by_cat
 import logging
 import random
 from abc import ABCMeta, abstractmethod
@@ -11,15 +10,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
 import numpy as np
 import pandas as pd
 import torch
+from pycountry import languages
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from arglib import add_argument, g, init_g_attr
 from devlib import (PandasDataLoader, PandasDataset, dataclass_cuda,
                     dataclass_size_repr, get_length_mask, get_range,
                     get_tensor, get_zeros)
-from pycountry import languages
 from xib.families import get_all_distances, get_families
-from xib.ipa import Category, Index, conditions, should_include
+from xib.ipa import (Category, Index, conditions, get_enum_by_cat,
+                     should_include)
 
 # NOTE(j_luo) Batch dataclasses will inherit the customized __repr__.
 batch_class = update_wrapper(partial(dataclass, repr=False), dataclass)
@@ -178,23 +178,10 @@ class DenseIpaBatch(IpaBatch):
         self.dense_feat_matrix = {k: v.cuda() for k, v in sfms.items()}
 
 
-def _get_effective_c_idx(groups):
-    if len(set(groups)) != len(groups):
-        raise ValueError(f'Duplicate values in groups {groups}.')
-    c_idx = list()
-    groups = set(groups)
-    for cat in Category:
-        if cat.name[0].lower() in groups:
-            c_idx.append(cat.value)
-    return c_idx
-
-
 class IpaDataset(Dataset):
 
-    def __init__(self, data_path, groups):
+    def __init__(self, data_path):
         self.data = torch.load(data_path)
-        c_idx = _get_effective_c_idx(groups)
-        self.data['matrices'] = [matrix[:, c_idx] for matrix in self.data['matrices']]
         logging.info(f'Loaded {len(self)} segments in total.')
 
     def __len__(self):
@@ -260,9 +247,10 @@ class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
     add_argument('data_path', dtype='path', msg='path to the feat data in tsv format.')
     add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
     add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
+    add_argument('new_style', default=False, dtype=bool, msg='flag to use new style ipa annotations')
 
-    def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers, groups: 'p'):
-        dataset = IpaDataset(data_path, groups)
+    def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers, feat_groups: 'p'):
+        dataset = IpaDataset(data_path)
         batch_sampler = BatchSampler(dataset, char_per_batch, shuffle=True)
         cls = type(self)
         super().__init__(dataset, batch_sampler=batch_sampler,
@@ -324,10 +312,10 @@ class MetricLearningBatch:
         return self.dist.size(0)
 
 
-def _get_metric_data(data_path: Path, groups: str, family_file_path: Path) -> pd.DataFrame:
+def _get_metric_data(data_path: Path, feat_groups: str, family_file_path: Path) -> pd.DataFrame:
     data = pd.read_csv(data_path, sep='\t')
     data = pd.pivot_table(data, index=['lang1', 'lang2'], columns='category', values='normalized_score').reset_index()
-    cats = [cat.name for cat in Category if should_include(groups, cat)] + ['avg']
+    cats = [cat.name for cat in Category if should_include(feat_groups, cat)] + ['avg']
     cols = ['lang1', 'lang2'] + cats
     data = data[cols]
 
@@ -363,11 +351,11 @@ class MetricLearningDataLoader(PandasDataLoader):
     add_argument('family_file_path', dtype='path', msg='path to the family file')
     add_argument('num_lang_pairs', dtype=int, default=10, msg='number of languages')
 
-    def __init__(self, data_path, num_workers, groups: 'p', family_file_path: 'p', num_lang_pairs: 'p', data=None):
+    def __init__(self, data_path, num_workers, feat_groups: 'p', family_file_path: 'p', num_lang_pairs: 'p', data=None):
         if data is None:
-            data = _get_metric_data(data_path, groups, family_file_path)
+            data = _get_metric_data(data_path, feat_groups, family_file_path)
         self.all_langs = sorted(set(data['lang1']))
-        self.cats = [cat.name for cat in Category if should_include(groups, cat)] + ['avg']
+        self.cats = [cat.name for cat in Category if should_include(feat_groups, cat)] + ['avg']
         super().__init__(data, batch_size=num_lang_pairs, num_workers=num_workers)
 
     def __iter__(self) -> MetricLearningBatch:

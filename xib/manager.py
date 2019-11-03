@@ -62,7 +62,7 @@ class MetricLearningManager(Manager):
 
     add_argument('k_fold', default=10, dtype=int, msg='number of folds for cross validation')
 
-    def __init__(self, k_fold, random_seed, data_path, groups, family_file_path):
+    def __init__(self, k_fold, random_seed, data_path, feat_groups, family_file_path):
         self.model = MetricLearningModel()
         self.data_loader = MetricLearningDataLoader()
         if os.environ.get('CUDA_VISIBLE_DEVICES', False):

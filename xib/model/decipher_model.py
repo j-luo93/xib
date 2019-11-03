@@ -45,7 +45,7 @@ class DecipherModel(nn.Module):
                  dim,
                  adapt_mode,
                  num_self_attn_layers,
-                 groups,
+                 feat_groups,
                  num_samples):
 
         super().__init__()
@@ -93,7 +93,7 @@ class DecipherModel(nn.Module):
         scores = self._get_lm_scores(lm_batch)
         nlls = list()
         for cat, (nll, weight) in scores.items():
-            if should_include(self.groups, cat):
+            if should_include(self.feat_groups, cat):
                 nlls.append(nll * weight)
         nlls = sum(nlls)
         lm_score = self._unpack(nlls, packed_words, bs)

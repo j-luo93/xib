@@ -3,8 +3,7 @@ import torch.nn as nn
 
 from arglib import add_argument, init_g_attr
 from xib.data_loader import MetricLearningBatch
-
-from .modules import get_effective_c_idx
+from xib.model.modules import get_effective_c_idx
 
 
 @init_g_attr(default='property')
@@ -12,9 +11,9 @@ class MetricLearningModel(nn.Module):
 
     add_argument('num_layers', default=1, dtype=int, msg='number of trainable layers.')
 
-    def __init__(self, hidden_size, groups, num_layers):
+    def __init__(self, hidden_size, feat_groups, num_layers):
         super().__init__()
-        effective_num_feat_groups = len(get_effective_c_idx(groups)) + 1  # NOTE(j_luo) +1 due to 'avg' score.
+        effective_num_feat_groups = len(get_effective_c_idx(feat_groups)) + 1  # NOTE(j_luo) +1 due to 'avg' score.
         if num_layers == 1:
             self.regressor = nn.Linear(effective_num_feat_groups, 1)
         else:

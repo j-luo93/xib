@@ -10,7 +10,7 @@ class SharedConfig:
     num_workers: int = 1
     hidden_size: int = 100
     num_feature_groups: int = 14
-    groups: str = 'pcv'
+    feat_groups: str = 'pcv'
 
 
 @reg
@@ -30,12 +30,12 @@ class LMEn(SharedConfig):
 
 @reg
 class LMEnP(LMEn):  # Only deal with ptype.
-    groups: str = 'p'
+    feat_groups: str = 'p'
 
 
 @reg
 class LMEnPDST(LMEn):
-    groups: str = 'pdst'
+    feat_groups: str = 'pdst'
 
 
 _all_other_langs = {

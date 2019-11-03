@@ -10,8 +10,8 @@ from arglib import g, init_g_attr, not_supported_argument_value
 from devlib import freeze
 from devlib.named_tensor import gather
 from xib.data_loader import DenseIpaBatch, IpaBatch
-from xib.ipa import Category, get_enum_by_cat
-from xib.ipax import CategoryX
+from xib.ipa import Category, get_enum_by_cat, get_index
+from xib.ipa.ipax import CategoryX
 
 from . import FT, LT
 from .modules import AdaptLayer, Encoder, Predictor
@@ -19,9 +19,10 @@ from .modules import AdaptLayer, Encoder, Predictor
 Cat = Union[Category, CategoryX]
 
 
+@init_g_attr
 class LM(nn.Module):
 
-    def __init__(self):
+    def __init__(self, new_style: 'p'):
         super().__init__()
         self.encoder = Encoder()
         self.predictor = Predictor()
@@ -37,12 +38,12 @@ class LM(nn.Module):
     def score(self, batch) -> Dict[Cat, FT]:
         distr = self(batch)
         scores = dict()
-        for cat, output in distr.items():
-            i = cat.value
+        for name, output in distr.items():
+            i = get_index(name, new_style=self.new_style)
             target = batch.target_feat[:, i]
             weight = batch.target_weight[:, i]
             log_probs = gather(output, target)
-            scores[cat] = (-log_probs, weight)
+            scores[name] = (-log_probs, weight)
         return scores
 
     @not_supported_argument_value('new_style', True)
@@ -68,7 +69,7 @@ class LM(nn.Module):
 class AdaptedLM(LM):
 
     @not_supported_argument_value('new_style', True)
-    def __init__(self, groups, lm_model_path):
+    def __init__(self, feat_groups, lm_model_path):
         super().__init__()
         saved_dict = torch.load(lm_model_path)
         try:

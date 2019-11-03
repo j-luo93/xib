@@ -9,7 +9,7 @@ import inflection
 from arglib import g
 from devlib import check_explicit_arg
 
-from .ipa import (Category, IPAFeature, conditions, get_enum_by_cat,
+from .ipa import (Category, Index, IPAFeature, conditions, get_enum_by_cat,
                   no_none_predictions)
 from .ipax import CategoryX, DistEnum
 
@@ -38,19 +38,22 @@ Cat = Union[Category, CategoryX]
 Enum = Union[DistEnum, IPAFeature]
 
 
-def should_include(groups: str, cat) -> bool:
-    name = cat.name
-    if name.startswith('PTYPE') and 'p' in groups:
+def should_include(groups: str, cat: Union[Cat, 'Name']) -> bool:
+    try:
+        name = cat.name
+    except AttributeError:
+        name = cat.value
+    if name.startswith('P') and 'p' in groups:
         return True
-    if name.startswith('C_') and 'c' in groups:
+    if name.startswith('C') and 'c' in groups:
         return True
-    if name.startswith('V_') and 'v' in groups:
+    if name.startswith('V') and 'v' in groups:
         return True
-    if name.startswith('D_') and 'd' in groups:
+    if name.startswith('D') and 'd' in groups:
         return True
-    if name.startswith('S_') and 's' in groups:
+    if name.startswith('S') and 's' in groups:
         return True
-    if name.startswith('T_') and 't' in groups:
+    if name.startswith('T') and 't' in groups:
         return True
     return False
 
@@ -128,3 +131,14 @@ class Name:
 
     def __repr__(self):
         return f'Name("{self._name}", fmt={self._fmt})'
+
+
+def get_index(name: Name, *, new_style: bool = None) -> int:
+    check_explicit_arg(new_style)
+    if new_style:
+        name = name.snake.capital.value.strip('_X')
+        cat_cls = CategoryX
+    else:
+        name = name.snake.capital.value
+        cat_cls = Category
+    return cat_cls[name].value

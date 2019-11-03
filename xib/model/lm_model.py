@@ -1,19 +1,22 @@
 import logging
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-from arglib import init_g_attr
+from arglib import g, init_g_attr, not_supported_argument_value
 from devlib import freeze
 from devlib.named_tensor import gather
 from xib.data_loader import DenseIpaBatch, IpaBatch
 from xib.ipa import Category, get_enum_by_cat
+from xib.ipax import CategoryX
 
 from . import FT, LT
 from .modules import AdaptLayer, Encoder, Predictor
+
+Cat = Union[Category, CategoryX]
 
 
 class LM(nn.Module):
@@ -23,7 +26,7 @@ class LM(nn.Module):
         self.encoder = Encoder()
         self.predictor = Predictor()
 
-    def forward(self, batch: IpaBatch) -> Dict[Category, FT]:
+    def forward(self, batch: IpaBatch) -> Dict[Cat, FT]:
         """
         First encode the `feat_matrix` into a vector `h`, then based on it predict the distributions of features.
         """
@@ -31,7 +34,7 @@ class LM(nn.Module):
         distr = self.predictor(h)
         return distr
 
-    def score(self, batch) -> Dict[Category, FT]:
+    def score(self, batch) -> Dict[Cat, FT]:
         distr = self(batch)
         scores = dict()
         for cat, output in distr.items():
@@ -42,7 +45,8 @@ class LM(nn.Module):
             scores[cat] = (-log_probs, weight)
         return scores
 
-    def predict(self, batch, k=-1) -> Dict[Category, Tuple[FT, LT, np.ndarray]]:
+    @not_supported_argument_value('new_style', True)
+    def predict(self, batch, k=-1) -> Dict[Cat, Tuple[FT, LT, np.ndarray]]:
         """
         Predict the top K results for each feature group.
         If k == -1, then everything would be sorted and returned, otherwise take the topk.
@@ -63,6 +67,7 @@ class LM(nn.Module):
 @init_g_attr(default='property')
 class AdaptedLM(LM):
 
+    @not_supported_argument_value('new_style', True)
     def __init__(self, groups, lm_model_path):
         super().__init__()
         saved_dict = torch.load(lm_model_path)

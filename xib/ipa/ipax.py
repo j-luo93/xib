@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 from enum import Enum, auto, unique
-from typing import Callable
+from typing import Callable, List, Type
 
 import inflection
 import numpy as np
+
+import xib.ipa
 
 from . import ipa
 
@@ -43,6 +45,7 @@ def convert(enum: Enum) -> Callable[[Enum], Enum]:
     return wrapper
 
 
+# TODO(j_luo) really need a good way to doing enum. stdlib is not very flexible.
 class DistEnum(Enum):
     """An Enum class that has defined distance functions."""
 
@@ -75,10 +78,19 @@ class DistEnum(Enum):
         raise NotImplementedError()
 
     def _generate_next_value_(name, start, count, last_values):
+        """Override default auto() behavior by starting from 0."""
         if last_values:
             return last_values[-1] + 1
         else:
             return start - 1
+
+    @classmethod
+    def num_groups(cls):
+        raise NotImplementedError()
+
+    @classmethod
+    def get_name(cls):
+        return xib.ipa.Name(cls.__name__, 'camel')
 
 
 def _is_special(feat):
@@ -125,7 +137,7 @@ class CategoryX(Enum):
     V_ROUNDNESS_X = 6
 
     @classmethod
-    def get_enum(cls, name):
+    def get_enum(cls, name: str) -> Type[DistEnum]:
         return _registered[inflection.camelize(name.lower())]
 
 
@@ -135,6 +147,10 @@ class PtypeX(DiscreteEnum):
     CONSONANT = auto()
     VOWEL = auto()
 
+    @classmethod
+    def num_groups(cls):
+        return 1
+
 
 @unique
 @convert(ipa.CVoicing)
@@ -142,6 +158,10 @@ class CVoicingX(DiscreteEnum):
     NONE = auto()
     VOICED = auto()
     VOICELESS = auto()
+
+    @classmethod
+    def num_groups(cls):
+        return 1
 
 
 # Based on https://en.wikipedia.org/wiki/Place_of_articulation#Table_of_gestures_and_passive_articulators_and_resulting_places_of_articulation.
@@ -197,6 +217,10 @@ class Factors:
             new_value = cls[old_value]
             setattr(self, name, new_value)
 
+    def __iter__(self):
+        for name in self.__dataclass_fields__:
+            yield getattr(self, name)
+
     def __sub__(self, other: 'Factors') -> float:
         if type(self) is not type(other):
             raise TypeError(f'Mismatched types, got {type(self)} and {type(other)}.')
@@ -246,6 +270,14 @@ class CPlaceX(ContinuousEnum):
     LABIO_PALATAL = CPP('DISC_LABIO_PALATAL', 'DISC_LABIO_PALATAL')
     LABIO_VELAR = CPP('DISC_LABIO_VELAR', 'DISC_LABIO_VELAR')
     PALATO_ALVEOLO_VELAR = CPP('DISC_PALATO_ALVEOLO_VELAR', 'DISC_PALATO_ALVEOLO_VELAR')
+
+    @classmethod
+    def num_groups(cls):
+        return 2
+
+    @classmethod
+    def parts(cls) -> List[DistEnum]:
+        return [field.type for field in CPP.__dataclass_fields__.values()]
 
 
 @unique
@@ -336,6 +368,14 @@ class CMannerX(ContinuousEnum):
     SIBILANT_FRICATIVE = CMP('FRICATIVE', 'NON_NASAL', 'NONE', 'PULMONIC_EGRESSIVE', 'SIBILANT', 'NONE')
     TRILL = CMP('LIQUID', 'NON_NASAL', 'NONE', 'PULMONIC_EGRESSIVE', 'NONE', 'TRILL')
 
+    @classmethod
+    def num_groups(cls):
+        return 6
+
+    @classmethod
+    def parts(cls) -> List[DistEnum]:
+        return [field.type for field in CMP.__dataclass_fields__.values()]
+
 
 @unique
 @convert(ipa.VHeight)
@@ -349,6 +389,10 @@ class VHeightX(ContinuousEnum):
     NEAR_OPEN = auto()
     OPEN = auto()
 
+    @classmethod
+    def num_groups(cls):
+        return 1
+
 
 @unique
 @convert(ipa.VBackness)
@@ -360,6 +404,10 @@ class VBacknessX(ContinuousEnum):
     NEAR_FRONT = auto()
     FRONT = auto()
 
+    @classmethod
+    def num_groups(cls):
+        return 1
+
 
 @unique
 @convert(ipa.VRoundness)
@@ -367,3 +415,7 @@ class VRoundnessX(DiscreteEnum):
     NONE = auto()
     ROUNDED = auto()
     UNROUNDED = auto()
+
+    @classmethod
+    def num_groups(cls):
+        return 1

@@ -14,6 +14,8 @@ from typing import Type
 
 import inflection
 
+import xib.ipa
+
 
 def get_enum_by_cat(cat) -> Type['IPAFeature']:
     return globals()[inflection.camelize(cat.name.lower())]
@@ -40,6 +42,10 @@ class Category(Enum):
     T_CONTOUR = 12
     T_GLOBAL = 13
 
+    @classmethod
+    def get_enum(cls, name: str) -> Type['IPAFeature']:
+        return globals()[inflection.camelize(name.lower())]
+
 
 class IPAFeature(Enum):
 
@@ -49,6 +55,10 @@ class IPAFeature(Enum):
         cat = get_cat_by_enum(cls)
         c_idx = cat.value
         return Index.get_feature_by_cat(c_idx, f_idx).name
+
+    @classmethod
+    def get_name(cls):
+        return xib.ipa.Name(cls.__name__, 'camel')
 
 
 @dataclass(frozen=True)
@@ -289,20 +299,3 @@ class TContour(IPAFeature):
 class TGlobal(IPAFeature):
     NONE = Index(110, 13, 0)
     DOWNSTEP = Index(111, 13, 1)
-
-
-def should_include(group, cat):
-    name = cat.name
-    if name == 'PTYPE' and 'p' in group:
-        return True
-    if name.startswith('C_') and 'c' in group:
-        return True
-    if name.startswith('V_') and 'v' in group:
-        return True
-    if name.startswith('D_') and 'd' in group:
-        return True
-    if name.startswith('S_') and 's' in group:
-        return True
-    if name.startswith('T_') and 't' in group:
-        return True
-    return False

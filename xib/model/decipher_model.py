@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.nn.modules import MultiheadAttention
 
-from arglib import add_argument, init_g_attr
+from arglib import add_argument, g, init_g_attr, not_supported_argument_value
 from devlib import dataclass_size_repr, get_tensor, get_zeros
 from devlib.named_tensor import expand_as, get_named_range, self_attend
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
@@ -38,6 +38,7 @@ class DecipherModel(nn.Module):
     add_argument('num_samples', default=100, dtype=int, msg='number of samples per sequence')
     add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
 
+    @not_supported_argument_value('new_style', True)
     def __init__(self,
                  lm_model_path,
                  num_features,
@@ -46,6 +47,7 @@ class DecipherModel(nn.Module):
                  num_self_attn_layers,
                  groups,
                  num_samples):
+
         super().__init__()
         self.lm_model = LM()
         saved_dict = torch.load(lm_model_path)

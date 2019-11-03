@@ -1,13 +1,15 @@
 from typing import Dict
 
+import inflection
 import torch
 import torch.nn as nn
 
-from arglib import add_argument, init_g_attr
-from devlib import get_range, get_tensor
+from arglib import add_argument, init_g_attr, not_supported_argument_value
+from devlib import check_explicit_arg, get_range, get_tensor
 from devlib.named_tensor import adv_index, embed, leaky_relu
-from xib.ipa import (Category, conditions, get_enum_by_cat,
-                     no_none_predictions, should_include)
+from xib.ipa import (Category, Name, conditions, get_enum_by_cat,
+                     get_needed_categories, get_none_index,
+                     no_none_predictions, should_include, should_predict_none)
 
 from . import BT, FT, LT
 
@@ -27,22 +29,23 @@ def get_effective_c_idx(groups):
 @init_g_attr(default='property')
 class FeatEmbedding(nn.Module):
 
-    def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, groups, num_feature_groups):
+    def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, groups, num_feature_groups, new_style):
         super().__init__()
-        self.register_buffer('c_idx', get_tensor(get_effective_c_idx(groups)).refine_names(group_name))
-        if len(self.c_idx) > num_feature_groups:
-            raise RuntimeError('Something is seriously wrong.')
+        # self.register_buffer('c_idx', get_tensor(get_effective_c_idx(groups)).refine_names(group_name))
+        # if len(self.c_idx) > num_feature_groups:
+        #     raise RuntimeError('Something is seriously wrong.')
         self.embed_layer = self._get_embeddings()
+        cat_enum_pairs = get_needed_categories(groups, new_style=new_style, breakdown=True)
+        if new_style:
+            self.effective_num_feature_groups = sum([e.num_groups() for _, e in cat_enum_pairs])
+        else:
+            self.effective_num_feature_groups = len(cat_enum_pairs)
 
     def _get_embeddings(self):
         return nn.Embedding(self.num_features, self.dim)
 
-    @property
-    def effective_num_feature_groups(self):
-        return len(self.c_idx)
-
     def forward(self, feat_matrix: LT, padding: BT) -> FT:
-        feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
+        # feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
         feat_emb = embed(self.embed_layer, feat_matrix, self.feat_emb_name)
         feat_emb = feat_emb.flatten([self.group_name, self.feat_emb_name], self.char_emb_name)
         # TODO(j_luo) ugly
@@ -55,6 +58,7 @@ class FeatEmbedding(nn.Module):
 @init_g_attr(default='property')
 class DenseFeatEmbedding(FeatEmbedding):
 
+    @not_supported_argument_value('new_style', True)
     def _get_embeddings(self):
         emb_dict = dict()
         for cat in Category:
@@ -119,38 +123,78 @@ class Encoder(nn.Module):
 @init_g_attr(default='property')
 class Predictor(nn.Module):
 
-    def __init__(self, num_features, hidden_size):
+    def __init__(self, hidden_size, groups, new_style):
         super().__init__()
         self.linear = nn.Linear(hidden_size, hidden_size)
         self.feat_predictors = nn.ModuleDict()
-        for cat in Category:
-            e = get_enum_by_cat(cat)
-            # NOTE(j_luo) ModuleDict can only hanlde str as keys.
-            self.feat_predictors[cat.name] = nn.Linear(hidden_size, len(e))
+        for e in get_needed_categories(groups, new_style=new_style, breakdown=new_style):
+            # NOTE(j_luo) ModuleDict can only handle str as keys.
+            self.feat_predictors[e.__name__] = nn.Linear(hidden_size, len(e))
+        # If new_style, we need to get the necessary indices to convert the breakdown groups into the original feature groups.
+        if new_style:
+            self.conversion_idx = dict()
+            for e in get_needed_categories(self.groups, new_style=True, breakdown=False):
+                if e.num_groups() > 1:
+                    cat_idx = list()
+                    for feat in e:
+                        feat_cat_idx = list()
+                        feat = feat.value
+                        for basic_feat in feat:
+                            idx = basic_feat.value
+                            feat_cat_idx.append(idx)
+                        cat_idx.append(feat_cat_idx)
+                    cat_idx = get_tensor(cat_idx).refine_names('new_style_idx', 'old_style_idx')
+                    self.conversion_idx[e.__name__] = cat_idx
 
     def forward(self, h: FT) -> Dict[str, FT]:
         shared_h = leaky_relu(self.linear(h).refine_names(..., 'shared_repr'), negative_slope=0.1)
         ret = dict()
         for name, layer in self.feat_predictors.items():
-            cat = getattr(Category, name)
-            dim_name = f'{name.lower()}_repr'
+            dim_name = f'{inflection.underscore(name)}_repr'
             out = layer(shared_h).refine_names(..., dim_name)
-            if cat in no_none_predictions:
-                index = no_none_predictions[cat]
-                out[:, index.f_idx] = -999.9
-            ret[cat] = torch.log_softmax(out, dim=-1)
+            if not should_predict_none(name, new_style=self.new_style):
+                f_idx = get_none_index(name)
+                out[:, f_idx] = -999.9
+            ret[Name(name, 'camel')] = out
+
+        # Compose probs for complex feature groups if possible.
+        if self.new_style:
+            for e in get_needed_categories(self.groups, new_style=True, breakdown=False):
+                if e.num_groups() > 1:
+                    assert e not in ret
+                    part_tensors = [ret[part_enum.get_name()] for part_enum in e.parts()]
+                    parts = list()
+                    for i, part_tensor in enumerate(part_tensors):
+                        conversion = self.conversion_idx[e.get_name().value][:, i]
+                        bs = len(part_tensor)
+                        part = part_tensor.rename(None).gather(1, conversion.rename(None).expand(bs, -1))
+                        parts.append(part)
+                    parts = torch.stack(parts, dim=-1)
+                    ret[e.get_name()] = parts.sum(dim=-1)
+                    for part_cat in e.parts():
+                        del ret[part_cat.get_name()]
+        for name in ret:
+            ret[name] = torch.log_softmax(ret[name], dim=-1)
+
         # Deal with conditions for some categories
         for cat, index in conditions.items():
             # Find out the exact value to be conditioned on.
-            condition_cat = Category(index.c_idx)
-            condition_log_probs = ret[condition_cat][:, index.f_idx]
-            ret[cat] = ret[cat] + condition_log_probs.align_as(ret[cat])
+            # TODO(j_luo) ugly Category call.
+            condition_e = get_enum_by_cat(Category(index.c_idx))
+            condition_name = condition_e.__name__ + ('X' if self.new_style else '')
+            cat_name = get_enum_by_cat(cat).__name__ + ('X' if self.new_style else '')
 
+            condition_name = Name(condition_name, 'camel')
+            cat_name = Name(cat_name, 'camel')
+            condition_log_probs = ret[condition_name][:, index.f_idx]
+            # condition_log_probs.align_as(ret[cat_name])
+            ret[cat_name] = ret[cat_name] + condition_log_probs.unsqueeze(dim=1)
         return ret
 
 
 class AdaptLayer(nn.Module):
 
+    @not_supported_argument_value('new_style', True)
     def __init__(self, groups: str):
         super().__init__()
         param_dict = dict()

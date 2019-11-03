@@ -51,9 +51,13 @@ class TestIpax(TestCase):
             ans[0] = 1.0
             ans[:, 0] = 1.0
             ans[0, 0] = 0.0
-            for i in range(1, len(e)):
-                for j in range(1, len(e)):
-                    if e(i).name.startswith('DISC_') or e(j).name.startswith('DISC_'):
+            for i, e_i in enumerate(e):
+                if i == 0:
+                    continue
+                for j, e_j in enumerate(e):
+                    if j == 0:
+                        continue
+                    if e_i.name.startswith('DISC_') or e_j.name.startswith('DISC_'):
                         if i == j:
                             ans[i, j] = 0
                         else:

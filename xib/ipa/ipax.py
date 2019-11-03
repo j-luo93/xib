@@ -45,8 +45,27 @@ def convert(enum: Enum) -> Callable[[Enum], Enum]:
     return wrapper
 
 
-# TODO(j_luo) really need a good way to doing enum. stdlib is not very flexible.
+@dataclass
+class AutoIndex:
+    total_cat = -1
+    total_idx = 0
+
+    g_idx: int
+    c_idx: int
+    f_idx: int
+
+    def __sub__(self, other: 'AutoIndex') -> float:
+        if self.c_idx != other.c_idx:
+            raise TypeError(f'Should not call __sub__ for indices that are in different categories.')
+        diff_g = self.g_idx - other.g_idx
+        diff_f = self.f_idx - other.f_idx
+        if diff_g != diff_f:
+            raise RuntimeError('Something is seriously wrong.')
+        return diff_g
+
+
 class DistEnum(Enum):
+    # TODO(j_luo) really need a good way to doing enum. stdlib is not very flexible.
     """An Enum class that has defined distance functions."""
 
     @classmethod
@@ -78,11 +97,13 @@ class DistEnum(Enum):
         raise NotImplementedError()
 
     def _generate_next_value_(name, start, count, last_values):
-        """Override default auto() behavior by starting from 0."""
-        if last_values:
-            return last_values[-1] + 1
+        if not last_values:
+            AutoIndex.total_cat += 1
+            f_idx = 0
         else:
-            return start - 1
+            f_idx = last_values[-1].f_idx + 1
+        AutoIndex.total_idx += 1
+        return AutoIndex(AutoIndex.total_idx, AutoIndex.total_cat, f_idx)
 
     @classmethod
     def num_groups(cls):
@@ -181,6 +202,10 @@ class CPlaceActiveArticulator(ContinuousEnum):
     DISC_LABIO_VELAR = auto()
     DISC_PALATO_ALVEOLO_VELAR = auto()
 
+    @classmethod
+    def num_groups(cls):
+        return 1
+
 
 @unique
 class CPlacePassiveArticulator(ContinuousEnum):
@@ -201,6 +226,10 @@ class CPlacePassiveArticulator(ContinuousEnum):
     DISC_LABIO_PALATAL = auto()
     DISC_LABIO_VELAR = auto()
     DISC_PALATO_ALVEOLO_VELAR = auto()
+
+    @classmethod
+    def num_groups(cls):
+        return 1
 
 
 @dataclass
@@ -290,12 +319,20 @@ class CMannerSonority(ContinuousEnum):
     LIQUID = auto()
     APPROXIMANT = auto()
 
+    @classmethod
+    def num_groups(cls):
+        return 1
+
 
 @unique
 class CMannerNasality(DiscreteEnum):
     NONE = auto()
     NASAL = auto()
     NON_NASAL = auto()
+
+    @classmethod
+    def num_groups(cls):
+        return 1
 
 
 @unique
@@ -304,6 +341,10 @@ class CMannerLaterality(DiscreteEnum):
     NONE = auto()
     LATERAL = auto()
     NON_LATERAL = auto()
+
+    @classmethod
+    def num_groups(cls):
+        return 1
 
 
 @unique
@@ -314,6 +355,10 @@ class CMannerAirstream(DiscreteEnum):
     GLOTTALIC_INGRESSIVE = auto()
     LINGUAL_INGRESSIVE = auto()
 
+    @classmethod
+    def num_groups(cls):
+        return 1
+
 
 @unique
 class CMannerSibilance(DiscreteEnum):
@@ -321,12 +366,20 @@ class CMannerSibilance(DiscreteEnum):
     SIBILANT = auto()
     NON_SIBILANT = auto()
 
+    @classmethod
+    def num_groups(cls):
+        return 1
+
 
 @unique
 class CMannerVibrancy(DiscreteEnum):
     NONE = auto()
     FLAP = auto()
     TRILL = auto()
+
+    @classmethod
+    def num_groups(cls):
+        return 1
 
 
 @dataclass

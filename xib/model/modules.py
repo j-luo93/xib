@@ -34,7 +34,7 @@ class FeatEmbedding(nn.Module):
         self.register_buffer('c_idx', get_tensor(get_effective_c_idx(feat_groups)).refine_names('chosen_feat_group'))
         cat_enum_pairs = get_needed_categories(feat_groups, new_style=new_style, breakdown=new_style)
         if new_style:
-            self.effective_num_feature_groups = sum([e.num_groups() for _, e in cat_enum_pairs])
+            self.effective_num_feature_groups = sum([e.num_groups() for e in cat_enum_pairs])
         else:
             self.effective_num_feature_groups = len(cat_enum_pairs)
 

@@ -45,13 +45,21 @@ class TestIpax(TestCase):
         ]
         for e in to_test:
             v = 1 / (len(e) - 2)
+            if e in [ipax.CPlaceActiveArticulator, ipax.CPlacePassiveArticulator]:
+                v = 1 / (len(e) - 6)
             ans = np.zeros([len(e), len(e)])
             ans[0] = 1.0
             ans[:, 0] = 1.0
             ans[0, 0] = 0.0
             for i in range(1, len(e)):
                 for j in range(1, len(e)):
-                    ans[i, j] = abs(i - j) * v
+                    if e(i).name.startswith('DISC_') or e(j).name.startswith('DISC_'):
+                        if i == j:
+                            ans[i, j] = 0
+                        else:
+                            ans[i, j] = 1.0
+                    else:
+                        ans[i, j] = abs(i - j) * v
             _test_routine(e, ans)
 
     def test_complex_continuous(self):

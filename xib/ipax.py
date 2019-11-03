@@ -47,14 +47,27 @@ class DistEnum(Enum):
     def _get_distance(cls, feat1, feat2):
         raise NotImplementedError()
 
+    def _generate_next_value_(name, start, count, last_values):
+        if last_values:
+            return last_values[-1] + 1
+        else:
+            return start - 1
+
+
+def _is_special(feat):
+    """Whether `feat` is special: 'NONE' or some discrete value marked by 'DISC_' prefix."""
+    if feat.name == 'NONE':
+        return True
+    return feat.name.startswith('DISC_')
+
 
 class ContinuousEnum(DistEnum):
 
     @classmethod
     def _get_distance(cls, feat1, feat2):
-        if feat1.name == feat2.name == 'NONE':
+        if feat1.name == feat2.name and _is_special(feat1):
             return 0.0
-        if feat1.name == 'NONE' or feat2.name == 'NONE':
+        if _is_special(feat1) or _is_special(feat2):
             return np.inf
         return abs(feat1.value - feat2.value)
 
@@ -75,7 +88,7 @@ class DiscreteEnum(DistEnum):
 # -------------------------------------------------------------- #
 
 @unique
-class Ptype(DiscreteEnum):
+class PtypeX(DiscreteEnum):
     CONSONANT = auto()
     VOWEL = auto()
 
@@ -99,6 +112,11 @@ class CPlaceActiveArticulator(ContinuousEnum):
     RADICAL = auto()
     LARYNGEAL = auto()
 
+    DISC_LABIO_ALVEOLAR = auto()
+    DISC_LABIO_PALATAL = auto()
+    DISC_LABIO_VELAR = auto()
+    DISC_PALATO_ALVEOLO_VELAR = auto()
+
 
 @unique
 class CPlacePassiveArticulator(ContinuousEnum):
@@ -114,6 +132,11 @@ class CPlacePassiveArticulator(ContinuousEnum):
     PHARYNX = auto()
     EPIGLOTTIS = auto()
     GLOTTIS = auto()
+
+    DISC_LABIO_ALVEOLAR = auto()
+    DISC_LABIO_PALATAL = auto()
+    DISC_LABIO_VELAR = auto()
+    DISC_PALATO_ALVEOLO_VELAR = auto()
 
 
 @dataclass
@@ -159,8 +182,6 @@ class CPP(Factors):  # Stands for consonant place parameter.
 # @convert(CPlace)
 @unique
 class CPlaceX(ContinuousEnum):
-    # For places are removed since they are much less attested than the rest:
-    # LABIO_ALVEOLAR, LABIO_PALATAL, LABIO_VELAR, PALATO_ALVEOLO_VELAR
     NONE = CPP('NONE', 'NONE')
     ALVEOLAR = CPP('CORONAL', 'ALVEOLAR_RIDGE')
     ALVEOLO_PALATAL = CPP('DORSAL', 'POSTALVEOLAR')
@@ -174,6 +195,13 @@ class CPlaceX(ContinuousEnum):
     RETROFLEX = CPP('CORONAL', 'HARD_PALATE')
     UVULAR = CPP('DORSAL', 'UVULA')
     VELAR = CPP('DORSAL', 'SOFT_PALATE')
+
+    # Four places that are weird.
+    # LABIO_ALVEOLAR, LABIO_PALATAL, LABIO_VELAR, PALATO_ALVEOLO_VELAR.
+    LABIO_ALVEOLAR = CPP('DISC_LABIO_ALVEOLAR', 'DISC_LABIO_ALVEOLAR')
+    LABIO_PALATAL = CPP('DISC_LABIO_PALATAL', 'DISC_LABIO_PALATAL')
+    LABIO_VELAR = CPP('DISC_LABIO_VELAR', 'DISC_LABIO_VELAR')
+    PALATO_ALVEOLO_VELAR = CPP('DISC_PALATO_ALVEOLO_VELAR', 'DISC_PALATO_ALVEOLO_VELAR')
 
 
 @unique

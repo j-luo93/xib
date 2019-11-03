@@ -14,7 +14,7 @@ from xib.extract_words_impl import extract_words_v6 as extract_words
 from xib.ipa import Category, should_include
 
 from . import FT, LT
-from .lm_model import LMModel
+from .lm_model import LM
 from .modules import FeatEmbedding
 
 
@@ -42,13 +42,12 @@ class DecipherModel(nn.Module):
                  lm_model_path,
                  num_features,
                  dim,
-                 emb_groups,
                  adapt_mode,
                  num_self_attn_layers,
-                 mode,
+                 groups,
                  num_samples):
         super().__init__()
-        self.lm_model = LMModel()
+        self.lm_model = LM()
         saved_dict = torch.load(lm_model_path)
         self.lm_model.load_state_dict(saved_dict['model'])
 
@@ -92,7 +91,7 @@ class DecipherModel(nn.Module):
         scores = self._get_lm_scores(lm_batch)
         nlls = list()
         for cat, (nll, weight) in scores.items():
-            if should_include(self.mode, cat):
+            if should_include(self.groups, cat):
                 nlls.append(nll * weight)
         nlls = sum(nlls)
         lm_score = self._unpack(nlls, packed_words, bs)
@@ -116,6 +115,7 @@ class DecipherModel(nn.Module):
             num_words.scatter_add_(0, idx, inc)
             num_words = num_words.view(batch_size, self.num_samples).refine_names('batch', 'sample')
         return num_words
+
     def _get_lm_scores(self, lm_batch: IpaBatch) -> Dict[Category, FT]:
         max_size = min(300000, lm_batch.batch_size)
         with torch.no_grad():

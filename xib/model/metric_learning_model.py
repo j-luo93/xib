@@ -12,9 +12,9 @@ class MetricLearningModel(nn.Module):
 
     add_argument('num_layers', default=1, dtype=int, msg='number of trainable layers.')
 
-    def __init__(self, hidden_size, emb_groups, num_layers):
+    def __init__(self, hidden_size, groups, num_layers):
         super().__init__()
-        effective_num_feat_groups = len(get_effective_c_idx(emb_groups)) + 1  # NOTE(j_luo) +1 due to 'avg' score.
+        effective_num_feat_groups = len(get_effective_c_idx(groups)) + 1  # NOTE(j_luo) +1 due to 'avg' score.
         if num_layers == 1:
             self.regressor = nn.Linear(effective_num_feat_groups, 1)
         else:

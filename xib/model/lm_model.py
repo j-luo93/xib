@@ -16,7 +16,7 @@ from . import FT, LT
 from .modules import AdaptLayer, Encoder, Predictor
 
 
-class LMModel(nn.Module):
+class LM(nn.Module):
 
     def __init__(self):
         super().__init__()
@@ -61,9 +61,9 @@ class LMModel(nn.Module):
 
 
 @init_g_attr(default='property')
-class AdaptedLMModel(LMModel):
+class AdaptedLM(LM):
 
-    def __init__(self, emb_groups, lm_model_path):
+    def __init__(self, groups, lm_model_path):
         super().__init__()
         saved_dict = torch.load(lm_model_path)
         try:
@@ -85,7 +85,7 @@ class AdaptedLMModel(LMModel):
         freeze(self.encoder)
         freeze(self.predictor)
 
-        self.adapter = AdaptLayer(emb_groups)
+        self.adapter = AdaptLayer(groups)
 
     def forward(self, batch: DenseIpaBatch) -> Dict[Category, FT]:
         sfm_adapted = self.adapter(batch.dense_feat_matrix)

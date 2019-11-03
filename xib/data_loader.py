@@ -311,10 +311,10 @@ class MetricLearningBatch:
         return self.dist.size(0)
 
 
-def _get_metric_data(data_path: Path, emb_groups: str, family_file_path: Path) -> pd.DataFrame:
+def _get_metric_data(data_path: Path, groups: str, family_file_path: Path) -> pd.DataFrame:
     data = pd.read_csv(data_path, sep='\t')
     data = pd.pivot_table(data, index=['lang1', 'lang2'], columns='category', values='normalized_score').reset_index()
-    cats = [cat.name for cat in Category if should_include(emb_groups, cat)] + ['avg']
+    cats = [cat.name for cat in Category if should_include(groups, cat)] + ['avg']
     cols = ['lang1', 'lang2'] + cats
     data = data[cols]
 
@@ -350,11 +350,11 @@ class MetricLearningDataLoader(PandasDataLoader):
     add_argument('family_file_path', dtype='path', msg='path to the family file')
     add_argument('num_lang_pairs', dtype=int, default=10, msg='number of languages')
 
-    def __init__(self, data_path, num_workers, emb_groups: 'p', family_file_path: 'p', num_lang_pairs: 'p', data=None):
+    def __init__(self, data_path, num_workers, groups: 'p', family_file_path: 'p', num_lang_pairs: 'p', data=None):
         if data is None:
-            data = _get_metric_data(data_path, emb_groups, family_file_path)
+            data = _get_metric_data(data_path, groups, family_file_path)
         self.all_langs = sorted(set(data['lang1']))
-        self.cats = [cat.name for cat in Category if should_include(emb_groups, cat)] + ['avg']
+        self.cats = [cat.name for cat in Category if should_include(groups, cat)] + ['avg']
         super().__init__(data, batch_size=num_lang_pairs, num_workers=num_workers)
 
     def __iter__(self) -> MetricLearningBatch:

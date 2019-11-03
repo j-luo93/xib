@@ -291,18 +291,18 @@ class TGlobal(IPAFeature):
     DOWNSTEP = Index(111, 13, 1)
 
 
-def should_include(mode, cat):
+def should_include(group, cat):
     name = cat.name
-    if name == 'PTYPE' and 'p' in mode:
+    if name == 'PTYPE' and 'p' in group:
         return True
-    if name.startswith('C_') and 'c' in mode:
+    if name.startswith('C_') and 'c' in group:
         return True
-    if name.startswith('V_') and 'v' in mode:
+    if name.startswith('V_') and 'v' in group:
         return True
-    if name.startswith('D_') and 'd' in mode:
+    if name.startswith('D_') and 'd' in group:
         return True
-    if name.startswith('S_') and 's' in mode:
+    if name.startswith('S_') and 's' in group:
         return True
-    if name.startswith('T_') and 't' in mode:
+    if name.startswith('T_') and 't' in group:
         return True
     return False

@@ -11,7 +11,7 @@ from devlib import get_trainable_params
 from trainlib import Metric, Metrics, Tracker, Trainer, log_this
 from xib.data_loader import MetricLearningDataLoader
 from xib.evaluator import Evaluator
-from xib.ipa import Category, should_include
+from xib.ipa import should_include
 
 
 @init_g_attr(default='property')
@@ -22,7 +22,7 @@ class BaseTrainer(Trainer, metaclass=ABCMeta):
     add_argument('check_interval', default=2, dtype=int, msg='check metrics after this many steps')
     add_argument('save_interval', default=500, dtype=int, msg='save models after this many steps')
 
-    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, mode):
+    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, groups):
         super().__init__()
         self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
         self.optimizer = optim.Adam(get_trainable_params(self.model, named=False), learning_rate)
@@ -72,7 +72,7 @@ class BaseTrainer(Trainer, metaclass=ABCMeta):
 
 class LMTrainer(BaseTrainer):
 
-    add_argument('mode', default='pcvdst', dtype=str,
+    add_argument('groups', default='pcvdst', dtype=str,
                  msg='what to include during training: p(type), c(onstonant), v(vowel), d(iacritics), s(tress) and t(one).')
 
     def train_loop(self) -> Metrics:
@@ -90,7 +90,7 @@ class LMTrainer(BaseTrainer):
         total_loss = 0.0
         total_weight = 0.0
         for cat, (losses, weights) in scores.items():
-            if should_include(self.mode, cat):
+            if should_include(self.groups, cat):
                 loss = (losses * weights).sum()
                 weight = weights.sum()
                 total_loss += loss
@@ -118,8 +118,8 @@ class DecipherTrainer(LMTrainer):
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
     add_argument('concentration', default=1e-2, dtype=float, msg='concentration hyperparameter')
 
-    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, mode, score_per_word: 'p', concentration: 'p'):
-        super().__init__(model, train_data_loader, num_steps, learning_rate, check_interval, save_interval, log_dir, mode)
+    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, groups, score_per_word: 'p', concentration: 'p'):
+        super().__init__(model, train_data_loader, num_steps, learning_rate, check_interval, save_interval, log_dir, groups)
 
     def train_loop(self) -> Metrics:
         self.model.train()

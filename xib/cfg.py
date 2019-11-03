@@ -10,8 +10,7 @@ class SharedConfig:
     num_workers: int = 1
     hidden_size: int = 100
     num_feature_groups: int = 14
-    mode: str = 'pcv'
-    emb_groups: str = 'pcv'
+    groups: str = 'pcv'
 
 
 @reg
@@ -31,14 +30,12 @@ class LMEn(SharedConfig):
 
 @reg
 class LMEnP(LMEn):  # Only deal with ptype.
-    mode: str = 'p'
-    emb_groups: str = 'p'
+    groups: str = 'p'
 
 
 @reg
 class LMEnPDST(LMEn):
-    mode: str = 'pdst'
-    emb_groups: str = 'pdst'
+    groups: str = 'pdst'
 
 
 _all_other_langs = {

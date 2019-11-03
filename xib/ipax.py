@@ -309,11 +309,11 @@ class CMP(Factors):  # Stands for consonant manner parameter.
 
 @unique
 @convert(ipa.CManner)
-class CMannerX(ContinuousEnum):  # FIXME(j_luo) fix parent class
+class CMannerX(ContinuousEnum):
     NONE = CMP('NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE')
     APPROXIMANT = CMP('APPROXIMANT', 'NON_NASAL', 'NON_LATERAL', 'PULMONIC_EGRESSIVE', 'NONE', 'NONE')
     CLICK = CMP('NONE', 'NON_NASAL', 'NON_LATERAL', 'LINGUAL_INGRESSIVE', 'NONE', 'NONE')
-    # FIXME(j_luo) There might be some bug here at https://github.com/pettarin/ipapy/blob/4026e4e27e857820c12895a7d2e7281b1cff7723/ipapy/data/kirshenbaum.dat#L453,
+    # TODO(j_luo) There might be some bug here at https://github.com/pettarin/ipapy/blob/4026e4e27e857820c12895a7d2e7281b1cff7723/ipapy/data/kirshenbaum.dat#L453,
     # where an ejective fricative is misclassified as an ejective stop.
     EJECTIVE = CMP('STOP', 'NON_NASAL', 'NONE', 'GLOTTALIC_EGRESSIVE', 'NONE', 'NONE')
     EJECTIVE_AFFRICATE = CMP('AFFRICATE', 'NON_NASAL', 'NON_LATERAL', 'GLOTTALIC_EGRESSIVE', 'NONE', 'NONE')

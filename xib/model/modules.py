@@ -12,24 +12,24 @@ from xib.ipa import (Category, conditions, get_enum_by_cat,
 from . import BT, FT, LT
 
 
-def get_effective_c_idx(emb_groups):
-    if len(set(emb_groups)) != len(emb_groups):
-        raise ValueError(f'Duplicate values in emb_groups {emb_groups}.')
+def get_effective_c_idx(groups):
+    if len(set(groups)) != len(groups):
+        raise ValueError(f'Duplicate values in groups {groups}.')
     c_idx = list()
-    groups = set(emb_groups)
+    groups = set(groups)
     for cat in Category:
         if cat.name[0].lower() in groups:
             c_idx.append(cat.value)
     return c_idx
 
 
-# FIXME(j_luo) should not have init_g_attr here.
+# TODO(j_luo) should not have init_g_attr here.
 @init_g_attr(default='property')
 class FeatEmbedding(nn.Module):
 
-    def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, emb_groups, num_feature_groups):
+    def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, groups, num_feature_groups):
         super().__init__()
-        self.register_buffer('c_idx', get_tensor(get_effective_c_idx(emb_groups)).refine_names(group_name))
+        self.register_buffer('c_idx', get_tensor(get_effective_c_idx(groups)).refine_names(group_name))
         if len(self.c_idx) > num_feature_groups:
             raise RuntimeError('Something is seriously wrong.')
         self.embed_layer = self._get_embeddings()
@@ -58,7 +58,7 @@ class DenseFeatEmbedding(FeatEmbedding):
     def _get_embeddings(self):
         emb_dict = dict()
         for cat in Category:
-            if should_include(self.emb_groups, cat):
+            if should_include(self.groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
                 emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, self.dim))
@@ -83,7 +83,7 @@ class Encoder(nn.Module):
     add_argument('window_size', default=3, dtype=int, msg='window size for the cnn kernel')
     add_argument('dense_input', default=False, dtype=bool, msg='flag to dense input feature matrices')
 
-    def __init__(self, num_features, dim, window_size, hidden_size, emb_groups, dense_input):
+    def __init__(self, num_features, dim, window_size, hidden_size, groups, dense_input):
         super().__init__()
 
         emb_cls = DenseFeatEmbedding if dense_input else FeatEmbedding
@@ -151,11 +151,11 @@ class Predictor(nn.Module):
 
 class AdaptLayer(nn.Module):
 
-    def __init__(self, emb_groups: str):
+    def __init__(self, groups: str):
         super().__init__()
         param_dict = dict()
         for cat in Category:
-            if should_include(emb_groups, cat):
+            if should_include(groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
                 param = nn.Parameter(torch.zeros(nf, nf))

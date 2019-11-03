@@ -8,7 +8,7 @@ from xib.data_loader import (ContinuousTextDataLoader, IpaDataLoader,
                              MetricLearningDataLoader, DenseIpaDataLoader)
 from xib.evaluator import Evaluator
 from xib.model.decipher_model import DecipherModel
-from xib.model.lm_model import AdaptedLMModel, LMModel
+from xib.model.lm_model import AdaptedLM, LM
 from xib.model.metric_learning_model import MetricLearningBatch
 from xib.trainer import (AdaptLMTrainer, DecipherTrainer, LMTrainer,
                          MetricLearningTrainer)
@@ -29,7 +29,7 @@ class Manager:
         self.trainer = self.trainer_cls(self.model, self.train_data_loader)
 
     def _get_model(self):
-        return LMModel()
+        return LM()
 
     def train(self):
         self.trainer.train()
@@ -41,7 +41,7 @@ class AdaptManager(Manager):
     trainer_cls = AdaptLMTrainer
 
     def _get_model(self):
-        return AdaptedLMModel()
+        return AdaptedLM()
 
 
 class DecipherManager(Manager):
@@ -62,7 +62,7 @@ class MetricLearningManager(Manager):
 
     add_argument('k_fold', default=10, dtype=int, msg='number of folds for cross validation')
 
-    def __init__(self, k_fold, random_seed, data_path, emb_groups, family_file_path):
+    def __init__(self, k_fold, random_seed, data_path, groups, family_file_path):
         self.model = MetricLearningModel()
         self.data_loader = MetricLearningDataLoader()
         if os.environ.get('CUDA_VISIBLE_DEVICES', False):

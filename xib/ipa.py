@@ -51,7 +51,7 @@ class IPAFeature(Enum):
         return Index.get_feature_by_cat(c_idx, f_idx).name
 
 
-@dataclass
+@dataclass(frozen=True)
 class Index:
     g_idx: int  # global index
     c_idx: int  # category index

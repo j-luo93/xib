@@ -2,18 +2,45 @@ from dataclasses import dataclass
 from enum import Enum, auto, unique
 from typing import Callable
 
+import inflection
 import numpy as np
 
-from .ipa import CManner, CPlace
+from . import ipa
 
 # -------------------------------------------------------------- #
 #                  Useful functions and classes                  #
 # -------------------------------------------------------------- #
 
 
+conversions = dict()
+reverse_conversions = dict()
+_registered = dict()
+
+
 def convert(enum: Enum) -> Callable[[Enum], Enum]:
-    # FIXME(j_luo)
-    return enum
+
+    def wrapper(cls):
+        old_names = set([x.name for x in enum])
+        new_names = set([x.name for x in cls])
+        if old_names != new_names:
+            raise RuntimeError(f'Both enums should have the same constants, but got {old_names} and {new_names}.')
+
+        # Register all enum classes that are converted.
+        _registered[cls.__name__] = cls
+
+        for feat in enum:
+            idx = feat.value
+            if idx in conversions:
+                raise RuntimeError(f'The same index is converted twice.')
+            new_feat = cls[feat.name]
+            if new_feat in reverse_conversions:
+                raise RuntimeError(f'The same feature is converted twice.')
+            conversions[idx] = new_feat
+            reverse_conversions[new_feat] = idx
+
+        return cls
+
+    return wrapper
 
 
 class DistEnum(Enum):
@@ -88,12 +115,29 @@ class DiscreteEnum(DistEnum):
 # -------------------------------------------------------------- #
 
 @unique
+class CategoryX(Enum):
+    PTYPE_X = 0
+    C_VOICING_X = 1
+    C_PLACE_X = 2
+    C_MANNER_X = 3
+    V_HEIGHT_X = 4
+    V_BACKNESS_X = 5
+    V_ROUNDNESS_X = 6
+
+    @classmethod
+    def get_enum(cls, name):
+        return _registered[inflection.camelize(name.lower())]
+
+
+@unique
+@convert(ipa.Ptype)
 class PtypeX(DiscreteEnum):
     CONSONANT = auto()
     VOWEL = auto()
 
 
 @unique
+@convert(ipa.CVoicing)
 class CVoicingX(DiscreteEnum):
     NONE = auto()
     VOICED = auto()
@@ -179,8 +223,8 @@ class CPP(Factors):  # Stands for consonant place parameter.
     passive: CPlacePassiveArticulator
 
 
-# @convert(CPlace)
 @unique
+@convert(ipa.CPlace)
 class CPlaceX(ContinuousEnum):
     NONE = CPP('NONE', 'NONE')
     ALVEOLAR = CPP('CORONAL', 'ALVEOLAR_RIDGE')
@@ -263,8 +307,8 @@ class CMP(Factors):  # Stands for consonant manner parameter.
     vibrancy: CMannerVibrancy
 
 
-# @convert(CManner)
 @unique
+@convert(ipa.CManner)
 class CMannerX(ContinuousEnum):  # FIXME(j_luo) fix parent class
     NONE = CMP('NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE')
     APPROXIMANT = CMP('APPROXIMANT', 'NON_NASAL', 'NON_LATERAL', 'PULMONIC_EGRESSIVE', 'NONE', 'NONE')
@@ -294,6 +338,7 @@ class CMannerX(ContinuousEnum):  # FIXME(j_luo) fix parent class
 
 
 @unique
+@convert(ipa.VHeight)
 class VHeightX(ContinuousEnum):
     NONE = auto()
     CLOSE = auto()
@@ -306,6 +351,7 @@ class VHeightX(ContinuousEnum):
 
 
 @unique
+@convert(ipa.VBackness)
 class VBacknessX(ContinuousEnum):
     NONE = auto()
     BACK = auto()
@@ -316,6 +362,7 @@ class VBacknessX(ContinuousEnum):
 
 
 @unique
+@convert(ipa.VRoundness)
 class VRoundnessX(DiscreteEnum):
     NONE = auto()
     ROUNDED = auto()

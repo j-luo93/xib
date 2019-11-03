@@ -1,8 +1,8 @@
 from unittest import TestCase
 
-from . import ipax
-
 import numpy as np
+
+from . import ipa, ipax
 
 
 def _test_routine(e: ipax.DistEnum, ans: np.ndarray):
@@ -24,7 +24,7 @@ class TestIpax(TestCase):
 
     def test_basic_discrete(self):
         to_test = [
-            ipax.Ptype, ipax.CVoicingX,
+            ipax.PtypeX, ipax.CVoicingX,
             ipax.VRoundnessX, ipax.CMannerNasality,
             ipax.CMannerLaterality, ipax.CMannerAirstream,
             ipax.CMannerSibilance, ipax.CMannerVibrancy
@@ -74,4 +74,12 @@ class TestIpax(TestCase):
             ans = ans / ans.max()
             ans[inf_mask] = 1.0
             _test_routine(e, ans)
-            print(ans)
+
+    def test_conversion(self):
+        for cat in ipax.CategoryX:
+            e = ipax.CategoryX.get_enum(cat.name)
+            old_e = ipa.get_enum_by_cat(ipa.Category[cat.name.rstrip('_X')])
+            for feat in e:
+                idx = old_e[feat.name].value
+                self.assertEqual(ipax.conversions[idx], feat)
+                self.assertEqual(ipax.reverse_conversions[feat], idx)

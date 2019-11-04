@@ -1,3 +1,7 @@
+from devlib import get_zeros
+from devlib import get_tensor
+from xib.ipa import get_new_style_enum
+from arglib import add_argument
 import logging
 from dataclasses import dataclass
 from typing import Dict, Tuple, Union
@@ -22,10 +26,14 @@ Cat = Union[Category, CategoryX]
 @init_g_attr
 class LM(nn.Module):
 
-    def __init__(self, new_style: 'p'):
+    add_argument('use_weighted_loss', default=False, dtype=bool, msg='flag to use weighted loss')
+
+    def __init__(self, new_style: 'p', use_weighted_loss: 'p'):
         super().__init__()
         self.encoder = Encoder()
         self.predictor = Predictor()
+        if use_weighted_loss and not new_style:
+            raise ValueError('Must use new_style if using weighted loss')
 
     def forward(self, batch: IpaBatch) -> Dict[Cat, FT]:
         """
@@ -42,8 +50,18 @@ class LM(nn.Module):
             i = get_index(name, new_style=self.new_style)
             target = batch.target_feat[:, i]
             weight = batch.target_weight[:, i]
-            log_probs = gather(output, target)
-            scores[name] = (-log_probs, weight)
+
+            if self.new_style:
+                e = get_new_style_enum(i)
+                mat = get_tensor(e.get_distance_matrix())
+                mat = mat[target.rename(None)]
+                mat_exp = torch.where(mat > 0, (mat + 1e-8).log(), get_zeros(mat.shape).fill_(-99.9))
+                logits = mat_exp + output
+                score = torch.logsumexp(logits, dim=-1).exp()
+            else:
+                log_probs = gather(output, target)
+                score = -log_probs
+            scores[name] = (score, weight)
         return scores
 
     @not_supported_argument_value('new_style', True)

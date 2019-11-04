@@ -84,6 +84,6 @@ class TestIpax(TestCase):
             e = ipax.CategoryX.get_enum(cat.name)
             old_e = ipa.get_enum_by_cat(ipa.Category[cat.name.rstrip('_X')])
             for feat in e:
-                idx = old_e[feat.name].value
+                idx = old_e[feat.name]
                 self.assertEqual(ipax.conversions[idx], feat)
                 self.assertEqual(ipax.reverse_conversions[feat], idx)

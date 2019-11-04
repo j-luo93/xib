@@ -108,16 +108,11 @@ class Factors(BaseEnumValue):
 
         ret = 0.0
         for name, field in self.__dataclass_fields__.items():
-            # The the maximum distance.
             cls = field.type
 
             self_value = getattr(self, name)
             other_value = getattr(other, name)
 
-            if self_value.name == 'NONE' or other_value.name == 'NONE':
-                raise RuntimeError(f'Should not use this operator on NONE values.')
-
-            # Normalize the score -- some categories have more elements.
             ret += cls.get_distance(self_value, other_value)
         return ret
 
@@ -128,6 +123,9 @@ class DistEnum(Enum):
 
     @classmethod
     def get_distance_matrix(cls) -> np.ndarray:
+        if hasattr(cls, '_cached_distance_matrix'):
+            return cls._cached_distance_matrix
+
         n = len(cls)
         ret = np.zeros([n, n], dtype='float32')
         for i, feat_i in enumerate(cls):
@@ -139,6 +137,8 @@ class DistEnum(Enum):
             raise RuntimeError('Something is terribly wrong.')
         ret = ret / ret.max()
         ret[inf_mask] = 1.0
+
+        cls._cached_distance_matrix = ret
         return ret
 
     @classmethod

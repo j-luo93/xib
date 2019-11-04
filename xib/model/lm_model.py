@@ -57,6 +57,12 @@ class LM(nn.Module):
                 mat = mat[target.rename(None)]
                 mat_exp = torch.where(mat > 0, (mat + 1e-8).log(), get_zeros(mat.shape).fill_(-99.9))
                 logits = mat_exp + output
+                # NOTE(j_luo) For the categories except Ptype, the sums of probs are not 1.0 (they are conditioned on certain values of Ptyle).
+                # As a result, we need to incur penalties based on the remaining prob mass as well.
+                # Specifically, the remaining prob mass will result in a penalty of 1.0, which is e^(0.0).
+                none_probs = (1.0 - output.exp().sum(dim=-1, keepdims=True)).clamp(min=0.0)
+                none_penalty = (1e-8 + none_probs).log().align_as(output)
+                logits = torch.cat([logits, none_penalty], dim=-1)
                 score = torch.logsumexp(logits, dim=-1).exp()
             else:
                 log_probs = gather(output, target)

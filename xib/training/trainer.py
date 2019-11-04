@@ -1,5 +1,6 @@
 import logging
 from abc import ABCMeta, abstractmethod
+from pathlib import Path
 from typing import List
 
 import torch
@@ -8,10 +9,12 @@ import torch.optim as optim
 
 from arglib import add_argument, g, init_g_attr
 from devlib import get_trainable_params
-from trainlib import Metric, Metrics, Tracker, Trainer, log_this
+from trainlib import Metric, Metrics, Tracker, Trainer, get_grad_norm, log_this
 from xib.data_loader import MetricLearningDataLoader
-from xib.evaluator import Evaluator
 from xib.ipa import should_include
+from xib.training import evaluator
+
+from .runner import BaseLMRunner
 
 
 @init_g_attr(default='property')
@@ -62,47 +65,50 @@ class BaseTrainer(Trainer, metaclass=ABCMeta):
     def save(self):
         if self.track % self.save_interval == 0:
             out_path = self.log_dir / 'saved.latest'
-            to_save = {
-                'model': self.model.state_dict(),
-                'g': g.state_dict()
-            }
-            torch.save(to_save, out_path)
-            logging.imp(f'Model saved to {out_path}.')
+            self._save(out_path)
+
+    def _save(self, path: Path):
+        to_save = {
+            'model': self.model.state_dict(),
+            'g': g.state_dict()
+        }
+        torch.save(to_save, path)
+        logging.imp(f'Model saved to {path}.')
 
 
-class LMTrainer(BaseTrainer):
+@init_g_attr
+class LMTrainer(BaseLMRunner, BaseTrainer):
 
     add_argument('feat_groups', default='pcvdst', dtype=str,
                  msg='what to include during training: p(type), c(onstonant), v(vowel), d(iacritics), s(tress) and t(one).')
+
+    def __init__(self, model: 'a', train_data_loader: 'a', evaluator: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups):
+        BaseTrainer.__init__(self, model, train_data_loader)
+        self.best_metrics: Metrics = None
 
     def train_loop(self) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
         batch = next(self.iterator)
         scores = self.model.score(batch)
-        metrics = self._analyze_scores(scores)
+        metrics = self.analyze_scores(scores)
         metrics.loss.mean.backward()
+        grad_norm = get_grad_norm(self.model)
+        grad_norm = Metric('grad_norm', grad_norm * len(batch), len(batch))
+        metrics += grad_norm
         self.optimizer.step()
         return metrics
 
-    def _analyze_scores(self, scores) -> Metrics:
-        metrics = Metrics()
-        total_loss = 0.0
-        total_weight = 0.0
-        for name, (losses, weights) in scores.items():
-            if should_include(self.feat_groups, name):
-                loss = (losses * weights).sum()
-                weight = weights.sum()
-                total_loss += loss
-                total_weight += weight
-                loss = Metric(f'loss_{name}', loss, weight)
-                metrics += loss
-        metrics += Metric('loss', total_loss, total_weight)
-        return metrics
-
-    @property
-    def track(self):
-        return self.tracker.step
+    def save(self):
+        super().save()
+        if self.track % self.save_interval == 0:
+            metrics = self.evaluator.evaluate()
+            logging.info(f'New evaluation metrics is {metrics.loss.mean:.3f}.')
+            if self.best_metrics is None or metrics.loss.mean < self.best_metrics.loss.mean:
+                self.best_metrics = metrics
+                out_path = self.log_dir / 'saved.best'
+                logging.imp(f'Best model updated: new best is {self.best_metrics.loss.mean:.3f}.')
+                self._save(out_path)
 
 
 @init_g_attr
@@ -154,7 +160,7 @@ class MetricLearningTrainer(BaseTrainer):
         self.tracker.add_track('epoch', update_fn='add', finish_when=num_epochs)
 
     def train(self,
-              evaluator: Evaluator,
+              evaluator: evaluator.Evaluator,
               train_langs: List[str],
               dev_langs: List[str],
               fold_idx: int) -> Metrics:

@@ -2,7 +2,8 @@ from arglib import g, parse_args, show_args
 from cfg import reg
 from devlib import initiate
 from devlib.named_tensor import patch_named_tensors
-from xib.manager import DecipherManager, Manager, MetricLearningManager, AdaptManager
+from xib.training.manager import (AdaptManager, DecipherManager, Manager,
+                                  MetricLearningManager)
 
 
 def train():

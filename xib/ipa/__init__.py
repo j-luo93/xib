@@ -132,6 +132,9 @@ class Name:
     def __repr__(self):
         return f'Name("{self._name}", fmt={self._fmt})'
 
+    def __str__(self):
+        return self._name
+
 
 def get_index(name: Name, *, new_style: bool = None) -> int:
     """Given a Name instance, return the category index in the old style."""

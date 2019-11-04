@@ -4,14 +4,14 @@ import random
 
 from arglib import add_argument, init_g_attr
 from trainlib import Metrics, set_random_seeds
-from xib.data_loader import (ContinuousTextDataLoader, IpaDataLoader,
-                             MetricLearningDataLoader, DenseIpaDataLoader)
-from xib.evaluator import Evaluator
+from xib.data_loader import (ContinuousTextDataLoader, DenseIpaDataLoader,
+                             IpaDataLoader, MetricLearningDataLoader)
 from xib.model.decipher_model import DecipherModel
-from xib.model.lm_model import AdaptedLM, LM
+from xib.model.lm_model import LM, AdaptedLM
 from xib.model.metric_learning_model import MetricLearningBatch
-from xib.trainer import (AdaptLMTrainer, DecipherTrainer, LMTrainer,
-                         MetricLearningTrainer)
+from xib.training.evaluator import Evaluator, LMEvaluator
+from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer, LMTrainer,
+                                  MetricLearningTrainer)
 
 add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'metric', 'adapt'], msg='which task to run')
 
@@ -26,7 +26,8 @@ class Manager:
         if os.environ.get('CUDA_VISIBLE_DEVICES', False):
             self.model.cuda()
         self.train_data_loader = self.data_loader_cls()
-        self.trainer = self.trainer_cls(self.model, self.train_data_loader)
+        self.evaluator = LMEvaluator(self.model, self.train_data_loader)
+        self.trainer = self.trainer_cls(self.model, self.train_data_loader, self.evaluator)
 
     def _get_model(self):
         return LM()

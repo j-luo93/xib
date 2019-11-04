@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto, unique
 from typing import Callable, List, Type
@@ -31,24 +32,35 @@ def convert(enum: Enum) -> Callable[[Enum], Enum]:
         _registered[cls.__name__] = cls
 
         for feat in enum:
-            idx = feat.value
-            if idx in conversions:
+            if feat in conversions:
                 raise RuntimeError(f'The same index is converted twice.')
             new_feat = cls[feat.name]
             if new_feat in reverse_conversions:
                 raise RuntimeError(f'The same feature is converted twice.')
-            conversions[idx] = new_feat
-            reverse_conversions[new_feat] = idx
+            conversions[feat] = new_feat
+            reverse_conversions[new_feat] = feat
 
         return cls
 
     return wrapper
 
 
+class BaseEnumValue(ABC):
+
+    @abstractmethod
+    def __sub__(self, other):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def is_complex(cls) -> bool:
+        pass
+
+
 @dataclass
-class AutoIndex:
+class AutoIndex(BaseEnumValue):
     total_cat = -1
-    total_idx = 0
+    total_idx = -1
 
     g_idx: int
     c_idx: int
@@ -62,6 +74,52 @@ class AutoIndex:
         if diff_g != diff_f:
             raise RuntimeError('Something is seriously wrong.')
         return diff_g
+
+    @classmethod
+    def is_complex(cls) -> bool:
+        return False
+
+
+@dataclass
+class Factors(BaseEnumValue):
+    """Base class for CPP and CMP that autuomatically converts a string attribute to an enum element."""
+
+    def __len__(self):
+        return len(self.__dataclass_fields__)
+
+    @classmethod
+    def is_complex(cls) -> bool:
+        return True
+
+    def __post_init__(self):
+        for name, field in self.__dataclass_fields__.items():
+            cls = field.type
+            old_value = getattr(self, name)
+            new_value = cls[old_value]
+            setattr(self, name, new_value)
+
+    def __iter__(self):
+        for name in self.__dataclass_fields__:
+            yield getattr(self, name)
+
+    def __sub__(self, other: 'Factors') -> float:
+        if type(self) is not type(other):
+            raise TypeError(f'Mismatched types, got {type(self)} and {type(other)}.')
+
+        ret = 0.0
+        for name, field in self.__dataclass_fields__.items():
+            # The the maximum distance.
+            cls = field.type
+
+            self_value = getattr(self, name)
+            other_value = getattr(other, name)
+
+            if self_value.name == 'NONE' or other_value.name == 'NONE':
+                raise RuntimeError(f'Should not use this operator on NONE values.')
+
+            # Normalize the score -- some categories have more elements.
+            ret += cls.get_distance(self_value, other_value)
+        return ret
 
 
 class DistEnum(Enum):
@@ -230,44 +288,6 @@ class CPlacePassiveArticulator(ContinuousEnum):
     @classmethod
     def num_groups(cls):
         return 1
-
-
-@dataclass
-class Factors:
-    """Base class for CPP and CMP that autuomatically converts a string attribute to an enum element."""
-
-    def __len__(self):
-        return len(self.__dataclass_fields__)
-
-    def __post_init__(self):
-        for name, field in self.__dataclass_fields__.items():
-            cls = field.type
-            old_value = getattr(self, name)
-            new_value = cls[old_value]
-            setattr(self, name, new_value)
-
-    def __iter__(self):
-        for name in self.__dataclass_fields__:
-            yield getattr(self, name)
-
-    def __sub__(self, other: 'Factors') -> float:
-        if type(self) is not type(other):
-            raise TypeError(f'Mismatched types, got {type(self)} and {type(other)}.')
-
-        ret = 0.0
-        for name, field in self.__dataclass_fields__.items():
-            # The the maximum distance.
-            cls = field.type
-
-            self_value = getattr(self, name)
-            other_value = getattr(other, name)
-
-            if self_value.name == 'NONE' or other_value.name == 'NONE':
-                raise RuntimeError(f'Should not use this operator on NONE values.')
-
-            # Normalize the score -- some categories have more elements.
-            ret += cls.get_distance(self_value, other_value)
-        return ret
 
 
 @dataclass

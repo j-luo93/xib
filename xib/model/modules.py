@@ -1,3 +1,5 @@
+from xib.ipa import get_new_style_enum
+import numpy as np
 from typing import Dict
 
 import inflection
@@ -10,6 +12,7 @@ from devlib.named_tensor import adv_index, embed, leaky_relu
 from xib.ipa import (Category, Name, conditions, get_enum_by_cat,
                      get_needed_categories, get_none_index,
                      no_none_predictions, should_include, should_predict_none)
+from xib.ipa.ipax import conversions
 
 from . import BT, FT, LT
 
@@ -24,9 +27,13 @@ def get_effective_c_idx(feat_groups):
             c_idx.append(cat.value)
     return c_idx
 
+
 # TODO(j_luo) should not have init_g_attr here.
 @init_g_attr(default='property')
 class FeatEmbedding(nn.Module):
+
+    # FIXME(j_luo)  do we need it
+    # add_argument('new_style_num_features', default=0, dtype=int, msg='number features for new style ipa')
 
     def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, feat_groups, num_feature_groups, new_style):
         super().__init__()
@@ -35,6 +42,17 @@ class FeatEmbedding(nn.Module):
         cat_enum_pairs = get_needed_categories(feat_groups, new_style=new_style, breakdown=new_style)
         if new_style:
             self.effective_num_feature_groups = sum([e.num_groups() for e in cat_enum_pairs])
+            simple_conversions = np.zeros([num_features], dtype='int64')
+            max_len = max(len(new_feat.value) for new_feat in conversions.values() if new_feat.value.is_complex())
+            complex_conversions = np.zeros([num_features, max_len], dtype='int64')
+            for old_feat, new_feat in conversions.items():
+                if new_feat.value.is_complex():
+                    l = len(new_feat.value)
+                    complex_conversions[old_feat.value.g_idx, :l] = [x.value.g_idx for x in new_feat.value]
+                else:
+                    simple_conversions[old_feat.value.g_idx] = new_feat.value.g_idx
+            self.simple_conversions = get_tensor(simple_conversions)
+            self.complex_conversions = get_tensor(complex_conversions)
         else:
             self.effective_num_feature_groups = len(cat_enum_pairs)
 
@@ -43,6 +61,19 @@ class FeatEmbedding(nn.Module):
 
     def forward(self, feat_matrix: LT, padding: BT) -> FT:
         feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
+        # Convert old style to new style ipa features.
+        if self.new_style:
+            new_feat_matrix = list()
+            for c_idx, one_feat_group in zip(self.c_idx.unbind(dim=self.group_name), feat_matrix.unbind(dim=self.group_name)):
+                one_feat_group = one_feat_group.rename(None)
+                new_enum = get_new_style_enum(c_idx.item())
+                l = new_enum.num_groups()
+                if l > 1:
+                    new_feat_matrix.append(self.complex_conversions[one_feat_group][..., :l])
+                else:
+                    new_feat_matrix.append(self.simple_conversions[one_feat_group].unsqueeze(dim=-1))
+            new_feat_matrix = torch.cat(new_feat_matrix, dim=-1).refine_names(*feat_matrix.names)
+            feat_matrix = new_feat_matrix
         feat_emb = embed(self.embed_layer, feat_matrix, self.feat_emb_name)
         feat_emb = feat_emb.flatten([self.group_name, self.feat_emb_name], self.char_emb_name)
         # TODO(j_luo) ugly
@@ -137,8 +168,8 @@ class Predictor(nn.Module):
                         feat_cat_idx = list()
                         feat = feat.value
                         for basic_feat in feat:
-                            idx = basic_feat.value
-                            feat_cat_idx.append(idx)
+                            auto_index = basic_feat.value
+                            feat_cat_idx.append(auto_index.f_idx)
                         cat_idx.append(feat_cat_idx)
                     cat_idx = get_tensor(cat_idx).refine_names('new_style_idx', 'old_style_idx')
                     self.conversion_idx[e.__name__] = cat_idx
@@ -167,7 +198,8 @@ class Predictor(nn.Module):
                         part = part_tensor.rename(None).gather(1, conversion.rename(None).expand(bs, -1))
                         parts.append(part)
                     parts = torch.stack(parts, dim=-1)
-                    ret[e.get_name()] = parts.sum(dim=-1)
+                    dim_name = f'{inflection.underscore(e.get_name().value)}_repr'
+                    ret[e.get_name()] = parts.sum(dim=-1).refine_names('batch', dim_name)
                     for part_cat in e.parts():
                         del ret[part_cat.get_name()]
         for name in ret:

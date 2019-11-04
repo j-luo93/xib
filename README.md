@@ -6,4 +6,5 @@
     - [x] Change the loss function accordingly.
     - [x] Make sure the old function still works.
     - [x] Change data_loader.py accordingly
-    - [ ] Train it
+    - [x] Train it
+    - [ ] Use weighted loss

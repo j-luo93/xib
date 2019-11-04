@@ -134,11 +134,17 @@ class Name:
 
 
 def get_index(name: Name, *, new_style: bool = None) -> int:
+    """Given a Name instance, return the category index in the old style."""
     check_explicit_arg(new_style)
     if new_style:
         name = name.snake.capital.value.strip('_X')
-        cat_cls = CategoryX
     else:
         name = name.snake.capital.value
-        cat_cls = Category
-    return cat_cls[name].value
+    return Category[name].value
+
+
+def get_new_style_enum(c_idx: int) -> DistEnum:
+    """Given c_idx in the old style, return the corresponding enum class in the new style."""
+    old_cat = Category(c_idx)
+    new_enum = CategoryX.get_enum(old_cat.name + '_X')
+    return new_enum

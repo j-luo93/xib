@@ -26,13 +26,14 @@ Cat = Union[Category, CategoryX]
 @init_g_attr
 class LM(nn.Module):
 
-    add_argument('use_weighted_loss', default=False, dtype=bool, msg='flag to use weighted loss')
+    add_argument('weighted_loss', default='', dtype=str,
+                 choices=['', 'mr', 'ot'], msg='what type of weighted loss to use')
 
-    def __init__(self, new_style: 'p', use_weighted_loss: 'p'):
+    def __init__(self, new_style: 'p', weighted_loss: 'p'):
         super().__init__()
         self.encoder = Encoder()
         self.predictor = Predictor()
-        if use_weighted_loss and not new_style:
+        if weighted_loss and not new_style:
             raise ValueError('Must use new_style if using weighted loss')
 
     def forward(self, batch: IpaBatch) -> Dict[Cat, FT]:
@@ -51,22 +52,32 @@ class LM(nn.Module):
             target = batch.target_feat[:, i]
             weight = batch.target_weight[:, i]
 
-            if self.new_style:
+            if self.weighted_loss == '':
+                log_probs = gather(output, target)
+                score = -log_probs
+            else:
                 e = get_new_style_enum(i)
                 mat = get_tensor(e.get_distance_matrix())
                 mat = mat[target.rename(None)]
-                mat_exp = torch.where(mat > 0, (mat + 1e-8).log(), get_zeros(mat.shape).fill_(-99.9))
-                logits = mat_exp + output
-                # NOTE(j_luo) For the categories except Ptype, the sums of probs are not 1.0 (they are conditioned on certain values of Ptyle).
-                # As a result, we need to incur penalties based on the remaining prob mass as well.
-                # Specifically, the remaining prob mass will result in a penalty of 1.0, which is e^(0.0).
-                none_probs = (1.0 - output.exp().sum(dim=-1, keepdims=True)).clamp(min=0.0)
-                none_penalty = (1e-8 + none_probs).log().align_as(output)
-                logits = torch.cat([logits, none_penalty], dim=-1)
-                score = torch.logsumexp(logits, dim=-1).exp()
-            else:
-                log_probs = gather(output, target)
-                score = -log_probs
+                if self.weighted_loss == 'mr':
+                    mat_exp = torch.where(mat > 0, (mat + 1e-8).log(), get_zeros(mat.shape).fill_(-99.9))
+                    logits = mat_exp + output
+                    # NOTE(j_luo) For the categories except Ptype, the sums of probs are not 1.0 (they are conditioned on certain values of Ptyle).
+                    # As a result, we need to incur penalties based on the remaining prob mass as well.
+                    # Specifically, the remaining prob mass will result in a penalty of 1.0, which is e^(0.0).
+                    none_probs = (1.0 - output.exp().sum(dim=-1, keepdims=True)).clamp(min=0.0)
+                    none_penalty = (1e-8 + none_probs).log().align_as(output)
+                    logits = torch.cat([logits, none_penalty], dim=-1)
+                    score = torch.logsumexp(logits, dim=-1).exp()
+                elif self.weighted_loss == 'ot':
+                    if not self.training:
+                        raise RuntimeError('Cannot use OT for training.')
+
+                    log_probs = gather(output, target)
+                    probs = log_probs.exp()
+                    score = (mat * probs).sum(dim=-1)
+                else:
+                    raise ValueError(f'Cannot recognize {self.weighted_loss}.')
             scores[name] = (score, weight)
         return scores
 

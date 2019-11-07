@@ -33,8 +33,8 @@ class LM(nn.Module):
         super().__init__()
         self.encoder = Encoder()
         self.predictor = Predictor()
-        if weighted_loss and not new_style:
-            raise ValueError('Must use new_style if using weighted loss')
+        # if weighted_loss and not new_style:
+        #     raise ValueError('Must use new_style if using weighted loss')
 
     def forward(self, batch: IpaBatch) -> Dict[Cat, FT]:
         """
@@ -73,8 +73,11 @@ class LM(nn.Module):
                     if not self.training:
                         raise RuntimeError('Cannot use OT for training.')
 
-                    log_probs = gather(output, target)
-                    probs = log_probs.exp()
+                    probs = output.exp()
+                    # We have to incur penalties based on the remaining prob mass as well.
+                    none_probs = (1.0 - probs.sum(dim=-1, keepdims=True)).clamp(min=0.0)
+                    mat = torch.cat([mat, get_tensor(torch.ones_like(none_probs.rename(None)))], dim=-1)
+                    probs = torch.cat([probs, none_probs], dim=-1)
                     score = (mat * probs).sum(dim=-1)
                 else:
                     raise ValueError(f'Cannot recognize {self.weighted_loss}.')

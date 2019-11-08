@@ -8,14 +8,14 @@ import numpy as np
 import pandas as pd
 import pycountry
 import torch
-from tqdm import tqdm
-
-import xib.cfg as cfg
 from ipapy.ipachar import (DG_C_MANNER, DG_C_PLACE, DG_C_VOICING,
                            DG_DIACRITICS, DG_S_BREAK, DG_S_LENGTH, DG_S_STRESS,
                            DG_T_CONTOUR, DG_T_GLOBAL, DG_T_LEVEL, DG_TYPES,
                            DG_V_BACKNESS, DG_V_HEIGHT, DG_V_ROUNDNESS)
 from ipapy.ipastring import IPAString
+from tqdm import tqdm
+
+from xib.ipa import Category
 
 tqdm.pandas()
 
@@ -126,6 +126,7 @@ def de_none(s):
 if __name__ == "__main__":
     in_path = Path(sys.argv[1])
     lang = sys.argv[2]
+    out_path = Path(sys.argv[3])
     assert lang, 'Specify lang'
 
     with in_path.open('r', encoding='utf8') as fin:
@@ -227,18 +228,17 @@ if __name__ == "__main__":
 
     merged_df['ipa_segment'] = merged_df['merged_ipa'].progress_apply(lambda lst: '-'.join(lst))
 
-    for feat in cfg.Category:
+    for feat in Category:
         col = feat.name.lower()
         new_col = f'{col}_idx'
-        cat_cls = getattr(cfg, inflection.camelize(feat.name.lower()))
+        cat_cls = Category.get_enum(col)
         merged_df[new_col] = merged_df[col].progress_apply(lambda lst: [getattr(
             cat_cls, x.replace('-', '_').upper()).value.g_idx for x in lst])
 
-    col_names = [f'{feat.name.lower()}_idx' for feat in cfg.Category]
+    col_names = [f'{feat.name.lower()}_idx' for feat in Category]
 
     filtered = merged_df[['ipa_segment', 'merged_ipa'] + col_names]
 
-    out_path = f'/scratch/j_luo/data/phones/phones_{lang}_idx.pth'
     segments = filtered['ipa_segment'].values
     matrices = list()
     for r, s in tqdm(filtered.iterrows(), total=len(filtered)):

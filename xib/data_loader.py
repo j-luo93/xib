@@ -287,8 +287,7 @@ class ContinuousTextIpaBatch(BaseBatch):
 
 class ContinuousTextDataLoader(IpaDataLoader):
 
-    def _prepare_batch(self, collate_return: CollateReturn) -> ContinuousTextIpaBatch:
-        return ContinuousTextIpaBatch(collate_return.segments, collate_return.lengths, collate_return.matrices)
+    batch_cls = ContinuousTextIpaBatch
 
 # ------------------------------------------------------------- #
 #                         Metric learner                        #

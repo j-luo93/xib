@@ -72,6 +72,14 @@ class DecipherEn(LMEn):
 
 
 @reg
+class DecipherEnTest(DecipherEn):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path = 'data/decipher_en_test.pth'
+
+
+@reg
 class MetricPCV(SharedConfig):
     num_epochs: int = 500
     save_interval: int = 10

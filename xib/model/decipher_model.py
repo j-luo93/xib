@@ -7,7 +7,7 @@ from torch.distributions.categorical import Categorical
 from torch.nn.modules import MultiheadAttention
 
 from arglib import add_argument, g, init_g_attr, not_supported_argument_value
-from devlib import dataclass_size_repr, get_tensor, get_zeros
+from devlib import dataclass_numpy, dataclass_size_repr, get_tensor, get_zeros
 from devlib.named_tensor import expand_as, get_named_range, self_attend
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v6 as extract_words
@@ -27,6 +27,7 @@ class PackedWords:
     word_positions: LT
 
     __repr__ = dataclass_size_repr
+    numpy = dataclass_numpy
 
 
 @init_g_attr(default='property')
@@ -88,6 +89,24 @@ class DecipherModel(nn.Module):
         # Get the lm score.
         # FIXME(j_luo) add unique somewhere
         packed_words = self._pack(samples, batch.feat_matrix)
+        # DEBUG(j_luo)
+        # segments = [segment.split('-') for segment in batch.segments]
+        # pw = packed_words.numpy()
+        # from collections import defaultdict
+        # all_tmp = defaultdict(lambda: defaultdict(list))
+        # for bi, si, wps, wl in zip(pw.batch_indices, pw.sample_indices, pw.word_positions, pw.word_lengths):
+        #     tmp = [segments[bi][wp] for i, wp in enumerate(wps) if i < wl]
+        #     all_tmp[bi][si].append(tmp)
+        # for bi in all_tmp:
+        #     for si in range(self.num_samples):
+        #         print(''.join(segments[bi]), si, end='')
+        #         if si in all_tmp[bi]:
+        #             tmp = [''.join(t) for t in all_tmp[bi][si]]
+        #         else:
+        #             tmp = list()
+        #         print('', tmp)
+        # breakpoint()  # DEBUG(j_luo)
+
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
         lm_batch = self._prepare_batch(packed_words)  # FIXME(j_luo)  This is actually continous batching.
         scores = self._get_lm_scores(lm_batch)
@@ -146,7 +165,7 @@ class DecipherModel(nn.Module):
             packed_words.word_feat_matrices.rename(None),
             batch_name='batch',
             length_name='length'
-        )
+        ).cuda()
 
     @staticmethod
     def _pack(samples: LT, feat_matrix: LT) -> PackedWords:
@@ -181,7 +200,7 @@ class DecipherModel(nn.Module):
             idx = (bi * self.num_samples + si).rename(None)
             ret.scatter_add_(0, idx, lm_score.rename(None))
             ret = ret.view(batch_size, self.num_samples).refine_names('batch', 'sample')
-        return ret
+        return -ret  # NOTE(j_luo) NLL are losses, not scores.
 
     def _sample(self, label_probs: FT, source_padding: FT) -> Tuple[LT, FT]:
         """Return samples based on `label_probs`."""

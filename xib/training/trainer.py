@@ -131,13 +131,15 @@ class DecipherTrainer(LMTrainer):
         self.model.train()
         self.optimizer.zero_grad()
         batch = next(self.iterator)
-        scores = self.model(batch)
+        ret = self.model(batch)
         bs = batch.feat_matrix.size('batch')
-        sample_probs = (scores['sample_log_probs'] * self.concentration).log_softmax(dim='sample').exp()
-        final_scores = scores['lm_score'] + scores['word_score'] * self.score_per_word
-        score = (sample_probs * final_scores).sum()
-        lm_score = Metric('lm_score', scores['lm_score'].sum(), bs)
-        word_score = Metric('word_score', scores['word_score'].sum(), bs)
+        breakpoint()  # DEBUG(j_luo)
+        modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
+        sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
+        final_ret = ret['lm_score'] + ret['word_score'] * self.score_per_word
+        score = (sample_probs * final_ret).sum()
+        lm_score = Metric('lm_score', ret['lm_score'].sum(), bs)
+        word_score = Metric('word_score', ret['word_score'].sum(), bs)
         score = Metric('score', score, bs)
         metrics = Metrics(score, lm_score, word_score)
         loss = -score.mean

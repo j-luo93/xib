@@ -19,6 +19,6 @@ setup(
     packages=find_packages(),
     ext_modules=cythonize(
         ext_modules,
-        annotate=True),
+        annotate=True),  # DEBUG(j_luo) remove this
     include_dirs=[np.get_include()]
 )

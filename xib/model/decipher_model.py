@@ -10,10 +10,10 @@ from arglib import add_argument, g, init_g_attr, not_supported_argument_value
 from devlib import dataclass_numpy, dataclass_size_repr, get_tensor, get_zeros
 from devlib.named_tensor import expand_as, get_named_range, self_attend
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
-from xib.extract_words_impl import extract_words_v6 as extract_words
+from xib.extract_words_impl import extract_words_v7 as extract_words
 from xib.ipa import Category, should_include
 
-from . import FT, LT
+from . import FT, LT, BT
 from .lm_model import LM
 from .modules import FeatEmbedding
 
@@ -87,24 +87,24 @@ class DecipherModel(nn.Module):
         samples, sample_log_probs = self._sample(label_probs, batch.source_padding)
 
         # Get the lm score.
-        # FIXME(j_luo) add unique somewhere
-        packed_words = self._pack(samples, batch.feat_matrix)
+        # TODO(j_luo) unique is still a bit buggy -- BIO is the same as IIO.
+        packed_words, is_unique = self._pack(samples, batch.lengths, batch.feat_matrix)
         # DEBUG(j_luo)
-        # segments = [segment.split('-') for segment in batch.segments]
-        # pw = packed_words.numpy()
-        # from collections import defaultdict
-        # all_tmp = defaultdict(lambda: defaultdict(list))
-        # for bi, si, wps, wl in zip(pw.batch_indices, pw.sample_indices, pw.word_positions, pw.word_lengths):
-        #     tmp = [segments[bi][wp] for i, wp in enumerate(wps) if i < wl]
-        #     all_tmp[bi][si].append(tmp)
-        # for bi in all_tmp:
-        #     for si in range(self.num_samples):
-        #         print(''.join(segments[bi]), si, end='')
-        #         if si in all_tmp[bi]:
-        #             tmp = [''.join(t) for t in all_tmp[bi][si]]
-        #         else:
-        #             tmp = list()
-        #         print('', tmp)
+        segments = [segment.split('-') for segment in batch.segments]
+        pw = packed_words.numpy()
+        from collections import defaultdict
+        all_tmp = defaultdict(lambda: defaultdict(list))
+        for bi, si, wps, wl in zip(pw.batch_indices, pw.sample_indices, pw.word_positions, pw.word_lengths):
+            tmp = [segments[bi][wp] for i, wp in enumerate(wps) if i < wl]
+            all_tmp[bi][si].append(tmp)
+        for bi in all_tmp:
+            for si in range(self.num_samples):
+                print(''.join(segments[bi]), si, end='')
+                if si in all_tmp[bi]:
+                    tmp = [''.join(t) for t in all_tmp[bi][si]]
+                else:
+                    tmp = list()
+                print('', tmp)
         # breakpoint()  # DEBUG(j_luo)
 
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
@@ -123,7 +123,8 @@ class DecipherModel(nn.Module):
         return {
             'word_score': word_score,
             'lm_score': lm_score,
-            'sample_log_probs': sample_log_probs
+            'sample_log_probs': sample_log_probs,
+            'is_unique': is_unique
         }
 
     def _get_word_score(self, packed_words: PackedWords, batch_size: int) -> FT:
@@ -167,18 +168,19 @@ class DecipherModel(nn.Module):
             length_name='length'
         ).cuda()
 
-    @staticmethod
-    def _pack(samples: LT, feat_matrix: LT) -> PackedWords:
+    def _pack(self, samples: LT, lengths: LT, feat_matrix: LT) -> Tuple[PackedWords, BT]:
         # TODO(j_luo) ugly
         with torch.no_grad():
             feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
             samples = samples.align_to('batch', 'sample', 'length').int()
-            batch_indices, sample_indices, word_positions, word_lengths = extract_words(
-                samples.cpu().numpy(), num_threads=4)
+            lengths = lengths.align_to('batch', 'sample').expand(-1, self.num_samples).int()
+            batch_indices, sample_indices, word_positions, word_lengths, is_unique = extract_words(
+                samples.cpu().numpy(), lengths.cpu().numpy(), num_threads=4)
             batch_indices = get_tensor(batch_indices).refine_names('batch_word').long()
             sample_indices = get_tensor(sample_indices).refine_names('batch_word').long()
             word_positions = get_tensor(word_positions).refine_names('batch_word', 'position').long()
             word_lengths = get_tensor(word_lengths).refine_names('batch_word').long()
+            is_unique = get_tensor(is_unique).refine_names('batch', 'sample').bool()
 
             key = (
                 batch_indices.align_as(word_positions).rename(None),
@@ -186,7 +188,7 @@ class DecipherModel(nn.Module):
             )
             word_feat_matrices = feat_matrix.rename(None)[key]
             word_feat_matrices = word_feat_matrices.refine_names('batch_word', 'position', 'feat_group')
-            return PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions)
+            return PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions), is_unique
 
     def _unpack(self, lm_score: FT, packed_words: PackedWords, batch_size: int) -> FT:
         with torch.no_grad():

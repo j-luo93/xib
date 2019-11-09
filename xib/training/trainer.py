@@ -40,7 +40,7 @@ class BaseTrainer(Trainer, metaclass=ABCMeta):
 
     @log_this(log_level='IMP')
     def _init_params(self, init_matrix=True, init_vector=False, init_higher_tensor=False):
-        for name, p in self.model.named_parameters():
+        for name, p in get_trainable_params(self.model, named=True):
             if p.dim() == 2 and init_matrix:
                 nn.init.xavier_uniform_(p)
             elif p.dim() == 1 and init_vector:

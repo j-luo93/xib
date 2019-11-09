@@ -1,19 +1,22 @@
-from dataclasses import dataclass
-from typing import Dict, Tuple
+from collections import defaultdict
+from dataclasses import InitVar, dataclass
+from typing import Dict, List, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.nn.modules import MultiheadAttention
 
 from arglib import add_argument, g, init_g_attr, not_supported_argument_value
-from devlib import dataclass_numpy, dataclass_size_repr, get_tensor, get_zeros
+from devlib import (cached_property, dataclass_numpy, dataclass_size_repr,
+                    get_tensor, get_zeros)
 from devlib.named_tensor import expand_as, get_named_range, self_attend
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v7 as extract_words
 from xib.ipa import Category, should_include
 
-from . import FT, LT, BT
+from . import BT, FT, LT
 from .lm_model import LM
 from .modules import FeatEmbedding
 
@@ -25,9 +28,40 @@ class PackedWords:
     batch_indices: LT
     sample_indices: LT
     word_positions: LT
+    num_samples: int
+    orig_segments: InitVar[np.ndarray] = None
 
     __repr__ = dataclass_size_repr
     numpy = dataclass_numpy
+
+    def __post_init__(self, orig_segments):
+        self._orig_segments = orig_segments
+
+    def _check_orig_segments(self):
+        if self._orig_segments is None:
+            raise RuntimeError(f'orig_segments was not passed to __init__ call.')
+
+    @cached_property
+    def segments(self) -> np.ndarray:
+        self._check_orig_segments()
+        ret = list()
+        for bi in self.batch_indices.cpu().numpy():
+            ret.append(self._orig_segments[bi])
+        return np.asarray(ret)
+
+    @cached_property
+    def sampled_segments(self) -> np.ndarray:
+        self._check_orig_segments()
+        segments = [segment.split('-') for segment in self._orig_segments]
+        pw = self.numpy()
+        all_words = defaultdict(lambda: defaultdict(list))
+        for bi, si, wps, wl in zip(pw.batch_indices, pw.sample_indices, pw.word_positions, pw.word_lengths):
+            chars = [segments[bi][wp] for i, wp in enumerate(wps) if i < wl]
+            all_words[bi][si].append('-'.join(chars))
+        ret = list()
+        for bi in all_words:
+            ret.append([all_words[bi][si] for si in range(self.num_samples)])
+        return np.asarray(ret)
 
 
 @init_g_attr(default='property')
@@ -88,24 +122,7 @@ class DecipherModel(nn.Module):
 
         # Get the lm score.
         # TODO(j_luo) unique is still a bit buggy -- BIO is the same as IIO.
-        packed_words, is_unique = self._pack(samples, batch.lengths, batch.feat_matrix)
-        # DEBUG(j_luo)
-        segments = [segment.split('-') for segment in batch.segments]
-        pw = packed_words.numpy()
-        from collections import defaultdict
-        all_tmp = defaultdict(lambda: defaultdict(list))
-        for bi, si, wps, wl in zip(pw.batch_indices, pw.sample_indices, pw.word_positions, pw.word_lengths):
-            tmp = [segments[bi][wp] for i, wp in enumerate(wps) if i < wl]
-            all_tmp[bi][si].append(tmp)
-        for bi in all_tmp:
-            for si in range(self.num_samples):
-                print(''.join(segments[bi]), si, end='')
-                if si in all_tmp[bi]:
-                    tmp = [''.join(t) for t in all_tmp[bi][si]]
-                else:
-                    tmp = list()
-                print('', tmp)
-        # breakpoint()  # DEBUG(j_luo)
+        packed_words, is_unique = self._pack(samples, batch.lengths, batch.feat_matrix, batch.segments)
 
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
         lm_batch = self._prepare_batch(packed_words)  # FIXME(j_luo)  This is actually continous batching.
@@ -114,7 +131,7 @@ class DecipherModel(nn.Module):
         for cat, (nll, weight) in scores.items():
             if should_include(self.feat_groups, cat):
                 nlls.append(nll * weight)
-        nlls = sum(nlls)
+        nlls = sum(nlls) / lm_batch.lengths  # NOTE(j_luo) Average NLL by word length
         lm_score = self._unpack(nlls, packed_words, bs)
 
         # Compute word score that corresponds to the number of readable words.
@@ -168,7 +185,7 @@ class DecipherModel(nn.Module):
             length_name='length'
         ).cuda()
 
-    def _pack(self, samples: LT, lengths: LT, feat_matrix: LT) -> Tuple[PackedWords, BT]:
+    def _pack(self, samples: LT, lengths: LT, feat_matrix: LT, segments: np.ndarray) -> Tuple[PackedWords, BT]:
         # TODO(j_luo) ugly
         with torch.no_grad():
             feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
@@ -188,7 +205,10 @@ class DecipherModel(nn.Module):
             )
             word_feat_matrices = feat_matrix.rename(None)[key]
             word_feat_matrices = word_feat_matrices.refine_names('batch_word', 'position', 'feat_group')
-            return PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions), is_unique
+            packed_words = PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions,
+                                       self.num_samples,
+                                       orig_segments=segments)
+            return packed_words, is_unique
 
     def _unpack(self, lm_score: FT, packed_words: PackedWords, batch_size: int) -> FT:
         with torch.no_grad():

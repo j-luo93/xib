@@ -129,7 +129,7 @@ class AdaptedLM(LM):
         freeze(self.encoder)
         freeze(self.predictor)
 
-        self.adapter = AdaptLayer(groups)
+        self.adapter = AdaptLayer(feat_groups)
 
     def forward(self, batch: DenseIpaBatch) -> Dict[Category, FT]:
         sfm_adapted = self.adapter(batch.dense_feat_matrix)

@@ -43,7 +43,7 @@ _all_other_langs = {
     'el', 'cs', 'syc', 'ga', 'ang', 'hy', 'cy', 'tr', 'ms', 'ady', 'sk', 'da', 'fa',
     'gem-pro', 'sl', 'lb', 'es', 'nci', 'gl', 'fo', 'enm', 'io', 'dsb', 'ba', 'tlh',
     'sv', 'no', 'tl', 'la', 'jbo', 'arc', 'he', 'sq', 'ps', 'nn', 'az', 'sga', 'sco',
-    'xib', 'yue', 'eu'
+    'xib', 'yue', 'eu', 'xaq'
 }
 
 for lang in _all_other_langs:

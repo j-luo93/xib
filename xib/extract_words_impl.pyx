@@ -1,3 +1,5 @@
+# distutils: language = c++
+
 import cython
 from cython.parallel import prange
 
@@ -5,12 +7,15 @@ import numpy as np
 cimport numpy as np
 cimport openmp
 
+from libcpp.set cimport set
+from libcpp.vector cimport vector
+
 DTYPE = np.intc
 
 cdef int B = 0
 cdef int I = 1
 cdef int O = 2
-cdef int N = 4
+cdef int N = 3
 
 cdef inline (bint, bint, bint) where(int value, int last_value, int next_value) nogil:
     cdef bint start = (value == B) or (value == I and (last_value == N or last_value == O))
@@ -18,7 +23,7 @@ cdef inline (bint, bint, bint) where(int value, int last_value, int next_value) 
     cdef bint wrap_up = add and (next_value != I)
     return start, add, wrap_up
 
-cdef first_pass(const int[:, :, ::1] samples):
+cdef first_pass(const int[:, :, ::1] samples, const int[:, ::1] sample_lengths, int num_threads):
     cdef Py_ssize_t batch_size = samples.shape[0]
     cdef Py_ssize_t num_samples = samples.shape[1]
     cdef Py_ssize_t max_len = samples.shape[2]
@@ -43,8 +48,27 @@ cdef first_pass(const int[:, :, ::1] samples):
     cdef bint add
     cdef bint wrap_up
 
+    is_unique_storage = np.zeros([batch_size, num_samples], dtype=DTYPE)
+    cdef int[:, ::1] is_unique = is_unique_storage
+
+    cdef vector[set[vector[int]]] all_samples_by_thread = vector[set[vector[int]]]()
+    cdef vector[vector[int]] this_sample_by_thread =  vector[vector[int]]()
+    cdef int thread_number
+    cdef int sample_length
+    cdef bint in_set
+
+    for _ in range(num_threads):
+        all_samples_by_thread.push_back(set[vector[int]]())
+        this_sample_by_thread.push_back(vector[int]())
+
     for i in prange(batch_size, nogil=True):
+        # Clear the sample set for the thread.
+        thread_number = openmp.omp_get_thread_num()
+        all_samples_by_thread.at(thread_number).clear()
+
         for j in range(num_samples):
+            this_sample_by_thread.at(thread_number).clear()
+            sample_length = sample_lengths[i, j]
             length = 0
             max_length = 0
             count = 0
@@ -69,8 +93,17 @@ cdef first_pass(const int[:, :, ::1] samples):
 
                 last_value = value
 
+                if k < sample_length:
+                    this_sample_by_thread.at(thread_number).push_back(value)
+
             word_counts[i, j] = count
             max_lengths[i, j] = max_length
+
+            # Compute whether this sample is unique.
+            in_set = all_samples_by_thread.at(thread_number).count(this_sample_by_thread.at(thread_number))
+            if not in_set:
+                is_unique[i, j] = 1
+                all_samples_by_thread.at(thread_number).insert(this_sample_by_thread.at(thread_number))
 
     # Compute offsets.
     offsets_storage = np.zeros([batch_size * num_samples], dtype=np.int_)
@@ -79,7 +112,7 @@ cdef first_pass(const int[:, :, ::1] samples):
 
     offsets[1:] = accum_counts[:-1]
     offsets_2d_storage = offsets_storage.reshape([batch_size, num_samples])
-    return word_counts_storage, max_lengths_storage, offsets_2d_storage
+    return word_counts_storage, max_lengths_storage, offsets_2d_storage, is_unique_storage
 
 cdef second_pass(const int[:, :, ::1] samples, const long[:, ::1] offsets, long total_num_words, int max_word_len):
     batch_indices_storage = np.zeros([total_num_words], dtype=DTYPE)
@@ -140,10 +173,10 @@ cdef second_pass(const int[:, :, ::1] samples, const long[:, ::1] offsets, long 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def extract_words_v6(const int[:, :, ::1] samples, int num_threads=1):
+def extract_words_v7(const int[:, :, ::1] samples, const int[:, ::1] sample_lengths, int num_threads=1):
     openmp.omp_set_num_threads(num_threads)
     # First pass to calculate total number of words and max length of words.
-    word_counts, max_lengths, offsets = first_pass(samples)
+    word_counts, max_lengths, offsets, is_unique = first_pass(samples, sample_lengths, num_threads)
     cdef long total_num_words = word_counts.sum()
     cdef int max_word_len = max_lengths.max()
 
@@ -151,4 +184,4 @@ def extract_words_v6(const int[:, :, ::1] samples, int num_threads=1):
     batch_indices, sample_indices, word_positions, word_lengths = second_pass(
         samples, offsets, total_num_words, max_word_len)
 
-    return batch_indices, sample_indices, word_positions, word_lengths
+    return batch_indices, sample_indices, word_positions, word_lengths, is_unique

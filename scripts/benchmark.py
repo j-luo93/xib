@@ -1,29 +1,50 @@
 import cProfile
 import pstats
-import timeit
 import sys
+import timeit
 
 import numpy as np
 import pyximport
 
 from devlib import pad_to_dense
-from xib.extract_words_impl import extract_words_v6
+from xib.extract_words_impl import extract_words_v7
+
+
+B, I, O, N = 0, 1, 2, 3
+
+
+def where(value, last_value, next_value):
+    start = (value == B) or (value == I and (last_value == None or last_value == O))
+    add = (value == B) or (value == I)
+    wrap_up = add and (next_value != I)
+    return start, add, wrap_up
 
 
 def get_random_test(size, array_only=False):
     np.random.seed(1234)
     arr = np.random.randint(0, high=3, size=size, dtype=np.int32)
+    sample_lengths = np.random.randint(0, high=3, size=size[:-1], dtype=np.int32) + 1
     if array_only:
-        return arr
+        return arr, sample_lengths
     batch_size, num_samples, max_len = arr.shape
 
     batch_indices = list()
     sample_indices = list()
     word_positions = list()
     word_lengths = list()
+    is_unique = list()
 
     for i in range(batch_size):
+        all_samples = set()
+        unique = list()
         for j in range(num_samples):
+            sample = tuple(arr[i, j, :sample_lengths[i, j]])
+            if sample not in all_samples:
+                unique.append(1)
+                all_samples.add(sample)
+            else:
+                unique.append(0)
+
             last_value = None
             next_value = arr[i, j, 0]
             word = list()
@@ -48,13 +69,15 @@ def get_random_test(size, array_only=False):
                     word = list()
 
                 last_value = value
+        is_unique.append(unique)
 
     batch_indices = np.asarray(batch_indices)
     sample_indices = np.asarray(sample_indices)
     word_positions = pad_to_dense(word_positions, dtype=np.int32)
     word_lengths = np.asarray(word_lengths)
+    is_unique = np.asarray(is_unique, dtype=np.int32)
 
-    return arr, batch_indices, sample_indices, word_positions, word_lengths
+    return arr, sample_lengths, batch_indices, sample_indices, word_positions, word_lengths, is_unique
 
 
 if __name__ == "__main__":
@@ -66,21 +89,24 @@ if __name__ == "__main__":
 
     # arr, _, _, _, _ = get_random_test([200, 100, 20])
     # cProfile.runctx(
-    #     "extract_words_v6(arr)", globals(), locals(), "Profile.prof")
+    #     "extract_words_v7(arr)", globals(), locals(), "Profile.prof")
 
     # s = pstats.Stats("Profile.prof")
     # s.strip_dirs().sort_stats("time").print_stats()
     num_threads = int(sys.argv[1])
 
     print(timeit.timeit(
-        f'extract_words_v6(arr, num_threads={num_threads})',
-        'from __main__ import extract_words_v6, get_random_test; arr = get_random_test([2000, 100, 20], array_only=True)', number=100))
+        f'extract_words_v7(arr, sample_lengths, num_threads={num_threads})',
+        'from __main__ import extract_words_v7, get_random_test; arr, sample_lengths = get_random_test([2000, 100, 20], array_only=True)', number=100))
 
-    # arr, batch_indices, sample_indices, word_positions, word_lengths = get_random_test([200, 100, 20])
+    arr, sample_lengths, batch_indices, sample_indices, word_positions, word_lengths, is_unique = get_random_test([
+                                                                                                                  200, 10, 3])
 
-    # ret_batch_indices, ret_sample_indices, ret_word_positions, ret_word_lengths = extract_words_v6(arr)
+    ret_batch_indices, ret_sample_indices, ret_word_positions, ret_word_lengths, ret_is_unique = extract_words_v7(
+        arr, sample_lengths)
 
-    # if not np.array_equal(batch_indices, ret_batch_indices) or not np.array_equal(sample_indices, ret_sample_indices) or not np.array_equal(word_positions, ret_word_positions)or not np.array_equal(word_lengths, ret_word_lengths):
-    #     raise RuntimeError('Did not pass!')
-    # else:
-    #     print('Passed!')
+    # or not np.array_equal(is_unique, ret_is_unique):
+    if not np.array_equal(batch_indices, ret_batch_indices) or not np.array_equal(sample_indices, ret_sample_indices) or not np.array_equal(word_positions, ret_word_positions)or not np.array_equal(word_lengths, ret_word_lengths) or not np.array_equal(is_unique, ret_is_unique):
+        raise RuntimeError('Did not pass!')
+    else:
+        print('Passed!')

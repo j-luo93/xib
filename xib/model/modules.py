@@ -1,16 +1,15 @@
-from xib.ipa import get_new_style_enum
-import numpy as np
 from typing import Dict
 
 import inflection
+import numpy as np
 import torch
 import torch.nn as nn
 
 from arglib import add_argument, init_g_attr, not_supported_argument_value
 from devlib import check_explicit_arg, get_range, get_tensor
-from devlib.named_tensor import adv_index, embed, leaky_relu
+from devlib.named_tensor import adv_index, embed
 from xib.ipa import (Category, Name, conditions, get_enum_by_cat,
-                     get_needed_categories, get_none_index,
+                     get_needed_categories, get_new_style_enum, get_none_index,
                      no_none_predictions, should_include, should_predict_none)
 from xib.ipa.ipax import conversions
 
@@ -140,7 +139,7 @@ class Encoder(nn.Module):
         output = output.refine_names('batch', 'char_conv_repr', 'length')  # size: bs x D x l
         output = self.linear(output.align_to(..., 'char_conv_repr'))  # size: bs x l x n_hid
         output = output.refine_names('batch', 'length', 'hidden_repr')
-        output = leaky_relu(output, negative_slope=0.1)
+        output = nn.functional.leaky_relu(output, negative_slope=0.1)
         # NOTE(j_luo) This is actually quite wasteful because we are discarding all the irrelevant information, which is computed anyway. This is equivalent to training on ngrams.
         # TODO(j_luo) ugly
         h = output.rename(None)[batch_i, pos_to_predict.rename(None)]
@@ -175,11 +174,10 @@ class Predictor(nn.Module):
                     self.conversion_idx[e.__name__] = cat_idx
 
     def forward(self, h: FT) -> Dict[str, FT]:
-        shared_h = leaky_relu(self.linear(h).refine_names(..., 'shared_repr'), negative_slope=0.1)
+        shared_h = nn.functional.leaky_relu(self.linear(h).refine_names(..., 'shared_repr'), negative_slope=0.1)
         ret = dict()
         for name, layer in self.feat_predictors.items():
-            dim_name = f'{inflection.underscore(name)}_repr'
-            out = layer(shared_h).refine_names(..., dim_name)
+            out = layer(shared_h).refine_names(..., name)
             if not should_predict_none(name, new_style=self.new_style):
                 f_idx = get_none_index(name)
                 out[:, f_idx] = -999.9
@@ -198,7 +196,7 @@ class Predictor(nn.Module):
                         part = part_tensor.rename(None).gather(1, conversion.rename(None).expand(bs, -1))
                         parts.append(part)
                     parts = torch.stack(parts, dim=-1)
-                    dim_name = f'{inflection.underscore(e.get_name().value)}_repr'
+                    dim_name = e.get_name().value
                     ret[e.get_name()] = parts.sum(dim=-1).refine_names('batch', dim_name)
                     for part_cat in e.parts():
                         del ret[part_cat.get_name()]

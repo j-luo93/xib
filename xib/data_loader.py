@@ -32,7 +32,7 @@ class BaseBatch:
     # TODO(j_luo) use the plurals
     feat_matrix: torch.LongTensor
     source_padding: torch.BoolTensor = field(init=False)
-    # HACK(j_luo) This is a hack. If we have a way of inheriting names, then this is not necessary.
+    # TODO(j_luo) This is a hack. If we have a way of inheriting names, then this is not necessary.
     batch_name: str = field(default='batch', repr=False)
     length_name: str = field(default='length', repr=False)
 
@@ -147,7 +147,7 @@ class IpaBatch(BaseBatch):
             self.target_weight[mask, idx] = 0.0
 
         # NOTE(j_luo) Refine names.
-        # IDEA(j_luo) We can move this process a bit earlier to DataLoader (serialization not yet implemented for named tensors).
+        # TODO(j_luo) We can move this process a bit earlier to DataLoader (serialization not yet implemented for named tensors).
         self.pos_to_predict = self.pos_to_predict.refine_names(self.batch_name)
         self.target_feat = self.target_feat.refine_names(self.batch_name, 'feat_group')
         self.target_weight = self.target_weight.refine_names(self.batch_name, 'feat_group')
@@ -282,7 +282,7 @@ class DenseIpaDataLoader(IpaDataLoader):
 
 @batch_class
 class ContinuousTextIpaBatch(BaseBatch):
-    pass
+    gold_tag_seq: Optional[torch.LongTensor] = None
 
 
 class ContinuousTextDataLoader(IpaDataLoader):

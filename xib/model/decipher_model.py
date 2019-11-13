@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -87,6 +87,7 @@ class DecipherModel(nn.Module):
     add_argument('num_self_attn_layers', default=2, dtype=int, msg='number of self attention layers')
     add_argument('num_samples', default=100, dtype=int, msg='number of samples per sequence')
     add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
+    add_argument('supervised', dtype=bool, default=False, msg='supervised mode')
 
     @not_supported_argument_value('new_style', True)
     def __init__(self,
@@ -96,7 +97,8 @@ class DecipherModel(nn.Module):
                  adapt_mode,
                  num_self_attn_layers,
                  feat_groups,
-                 num_samples):
+                 num_samples,
+                 supervised):
 
         super().__init__()
         self.lm_model = LM()
@@ -118,6 +120,9 @@ class DecipherModel(nn.Module):
             nn.Linear(cat_dim, 3)  # BIO.
         )
 
+        self.label_predictor[0].refine_names('weight', ['hid_repr', 'self_attn_repr'])
+        self.label_predictor[2].refine_names('weight', ['label', 'hid_repr'])
+
     def _adapt(self, packed_feat_matrix: LT) -> LT:
         if self.adapt_mode == 'none':
             return packed_feat_matrix
@@ -131,16 +136,23 @@ class DecipherModel(nn.Module):
         out = out.align_to('length', 'batch', 'char_emb_for_label')
         for i, layer in enumerate(self.self_attn_layers):
             out, _ = self_attend(layer, out, f'self_attn_repr')
-        logits = self.label_predictor(out.rename(None)).refine_names(*out.names)
-        logits = logits.rename(**{f'self_attn_repr': 'label'}) * 0.01
-        label_probs = logits.log_softmax(dim=-1).exp()
-        samples, sample_log_probs = self._sample(label_probs, batch.source_padding)
+        logits = self.label_predictor(out) * 0.01  # HACK(j_luo) use 0.01 to make it smooth
+        label_probs = logits.log_softmax(dim='label').exp()
+
+        if self.supervised:
+            gold_tag_seq = batch.gold_tag_seq
+            if gold_tag_seq is None:
+                raise RuntimeError(f'Gold tag sequence must be provided in supervised mode.')
+        else:
+            gold_tag_seq = None
+        # FIXME(j_luo) Need to change num_samples property.
+        samples, sample_log_probs = self._sample(label_probs, batch.source_padding, gold_tag_seq=gold_tag_seq)
 
         # Get the lm score.
         # TODO(j_luo) unique is still a bit buggy -- BIO is the same as IIO.
         packed_words, is_unique = self._pack(samples, batch.lengths, batch.feat_matrix, batch.segments)
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
-        lm_batch = self._prepare_batch(packed_words)  # FIXME(j_luo)  This is actually continous batching.
+        lm_batch = self._prepare_batch(packed_words)  # TODO(j_luo)  This is actually continous batching.
         scores = self._get_lm_scores(lm_batch)
         nlls = list()
         for cat, (nll, weight) in scores.items():
@@ -173,6 +185,7 @@ class DecipherModel(nn.Module):
             si = packed_words.sample_indices
             idx = (bi * self.num_samples + si).rename(None)
             inc = get_zeros(packed_words.batch_indices.size('batch_word')).fill_(1.0)
+            # TODO(j_luo) add scatter_add_ to named_tensor module
             num_words.scatter_add_(0, idx, inc)
             num_words = num_words.view(batch_size, self.num_samples).refine_names('batch', 'sample')
         return num_words
@@ -189,15 +202,13 @@ class DecipherModel(nn.Module):
             }
             for cat in cats:
                 scores, weights = all_scores[cat]
-                names = scores[0].names
-                scores = torch.cat([score.rename(None) for score in scores], dim=0).refine_names(*names)
-                weights = torch.cat([weight.rename(None) for weight in weights], dim=0).refine_names(*names)
+                scores = torch.cat(scores, names='batch', new_name='batch')
+                weights = torch.cat(weights, names='batch', new_name='batch')
                 all_scores[cat] = (scores, weights)
         return all_scores
 
     @staticmethod
     def _prepare_batch(packed_words: PackedWords) -> IpaBatch:
-        # TODO(j_luo) Why does add_module (methods from Tensor) show up in the list autocompletion in PackedWords.
         # TODO(j_luo) ugly
         return IpaBatch(
             None,
@@ -208,7 +219,6 @@ class DecipherModel(nn.Module):
         ).cuda()
 
     def _pack(self, samples: LT, lengths: LT, feat_matrix: LT, segments: np.ndarray) -> Tuple[PackedWords, BT]:
-        # TODO(j_luo) ugly
         with torch.no_grad():
             feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
             samples = samples.align_to('batch', 'sample', 'length').int()
@@ -221,6 +231,7 @@ class DecipherModel(nn.Module):
             word_lengths = get_tensor(word_lengths).refine_names('batch_word').long()
             is_unique = get_tensor(is_unique).refine_names('batch', 'sample').bool()
 
+            # TODO(j_luo) ugly
             key = (
                 batch_indices.align_as(word_positions).rename(None),
                 word_positions.rename(None)
@@ -238,11 +249,12 @@ class DecipherModel(nn.Module):
             bi = packed_words.batch_indices
             si = packed_words.sample_indices
             idx = (bi * self.num_samples + si).rename(None)
+            # TODO(j_luo) ugly
             ret.scatter_add_(0, idx, nlls.rename(None))
             ret = ret.view(batch_size, self.num_samples).refine_names('batch', 'sample')
         return -ret  # NOTE(j_luo) NLL are losses, not scores.
 
-    def _sample(self, label_probs: FT, source_padding: FT) -> Tuple[LT, FT]:
+    def _sample(self, label_probs: FT, source_padding: FT, gold_tag_seq: Optional[FT] = None) -> Tuple[LT, FT]:
         """Return samples based on `label_probs`."""
         # Ignore padded indices.
         label_probs = label_probs.align_to('batch', 'length', 'label')
@@ -257,6 +269,10 @@ class DecipherModel(nn.Module):
         label_distr = Categorical(probs=label_probs.rename(None))
         label_samples = label_distr.sample([self.num_samples]).refine_names('sample', 'batch', 'length')
         label_samples = label_samples.align_to('batch', 'sample', 'length')
+        # Add the ground truth if needed.
+        if gold_tag_seq is not None:
+            gold_tag_seq = gold_tag_seq.align_to('batch', 'sample', 'length')
+            label_samples = torch.cat([label_samples, gold_tag_seq], dim='sample')
         batch_idx = get_named_range(label_samples.size('batch'), 'batch').align_as(label_samples).rename(None)
         length_idx = get_named_range(label_samples.size('length'), 'length').align_as(label_samples).rename(None)
         label_sample_probs = label_probs.rename(None)[batch_idx, length_idx, label_samples.rename(None)]

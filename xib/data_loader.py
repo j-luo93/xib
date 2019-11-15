@@ -1,5 +1,6 @@
 import logging
 import random
+import re
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from xib.ipa import (Category, Index, conditions, get_enum_by_cat,
 
 # NOTE(j_luo) Batch dataclasses will inherit the customized __repr__.
 batch_class = update_wrapper(partial(dataclass, repr=False), dataclass)
+
+B, I, O = 0, 1, 2
 
 
 @batch_class
@@ -188,7 +191,16 @@ class IpaDataset(Dataset):
         return len(self.data['segments'])
 
     def __getitem__(self, idx):
-        return self.data['segments'][idx], self.data['matrices'][idx]
+        segment = self.data['segments'][idx]
+        segment = re.sub(r'\s+', ' ', segment).replace(' ', '- ')
+        segment = ''.join([s[0] for s in segment.split('-')])
+        matrix = self.data['matrices'][idx]
+        length = len(matrix)
+        return {
+            'segment': segment,
+            'matrix': matrix,
+            'length': length
+        }
 
 
 @dataclass
@@ -196,21 +208,37 @@ class CollateReturn:
     segments: np.ndarray
     lengths: torch.LongTensor
     matrices: torch.LongTensor
+    gold_tag_seqs: Optional[torch.LongTensor] = None
+    c_segments: Optional[np.ndarray] = None
+    # c_lengths: Optional[torch.Tensor] = None
+    # c_matrices: Optional[torch.Tensor] = None
 
 
 def collate_fn(batch) -> CollateReturn:
-    segments = list()
-    matrices = list()
-    lengths = list()
-    for segment, matrix in batch:
-        length = len(matrix)
-        segments.append(segment)
-        lengths.append(length)
-        matrices.append(matrix)
-    matrices = torch.nn.utils.rnn.pad_sequence(matrices, batch_first=True)
-    segments = np.asarray(segments)
-    lengths = torch.LongTensor(lengths)
-    return CollateReturn(segments, lengths, matrices)
+
+    def collate_helper(key, cls, pad=False):
+        ret = [item[key] for item in batch]
+        if cls is np.ndarray:
+            return np.asarray(ret)
+        elif cls is torch.Tensor:
+            if pad:
+                ret = torch.nn.utils.rnn.pad_sequence(ret, batch_first=True)
+            else:
+                ret = torch.LongTensor(ret)
+            return ret
+        else:
+            raise ValueError(f'Unsupported class "{cls}".')
+
+    segments = collate_helper('segment', np.ndarray)
+    matrices = collate_helper('matrix', torch.Tensor, pad=True)
+    lengths = collate_helper('length', torch.Tensor)
+    c_segments = gold_tag_seqs = None
+    if 'gold_tag_seq' in batch[0]:
+        c_segments = collate_helper('c_segment', np.ndarray)
+        gold_tag_seqs = collate_helper('gold_tag_seq', torch.Tensor, pad=True)
+        # c_matrices = collate_helper('c_matrix', torch.Tensor, pad=True)
+        # c_lengths = collate_helper('c_length', torch.Tensor)
+    return CollateReturn(segments, lengths, matrices, c_segments=c_segments, gold_tag_seqs=gold_tag_seqs)
 
 
 @init_g_attr
@@ -249,8 +277,10 @@ class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
     add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
     add_argument('new_style', default=False, dtype=bool, msg='flag to use new style ipa annotations')
 
+    dataset_cls = None
+
     def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers, feat_groups: 'p'):
-        dataset = IpaDataset(data_path)
+        dataset = type(self).dataset_cls(data_path)
         batch_sampler = BatchSampler(dataset, char_per_batch, shuffle=True)
         cls = type(self)
         super().__init__(dataset, batch_sampler=batch_sampler,
@@ -263,31 +293,67 @@ class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
     def __iter__(self):
         for collate_return in super().__iter__():
             batch = self._prepare_batch(collate_return)
-            yield batch
+            yield batch.cuda()
 
 
 class IpaDataLoader(BaseIpaDataLoader):
 
     batch_cls: Type[BaseBatch] = IpaBatch
+    dataset_cls: Type[Dataset] = IpaDataset
 
     def _prepare_batch(self, collate_return: CollateReturn) -> IpaBatch:
         cls = type(self)
         batch_cls = cls.batch_cls
-        return batch_cls(collate_return.segments, collate_return.lengths, collate_return.matrices).cuda()
+        return batch_cls(collate_return.segments, collate_return.lengths, collate_return.matrices)
 
 
 class DenseIpaDataLoader(IpaDataLoader):
     batch_cls = DenseIpaBatch
 
 
+class ContinuousIpaDataset(IpaDataset):
+
+    def __getitem__(self, idx):
+        ret = super().__getitem__(idx)
+        words = ret['segment'].split()
+        ret['gold_tag_seq'] = torch.LongTensor(sum([[B] + [I] * (len(word) - 1) for word in words], list()))
+        ret['c_segment'] = ''.join(words)
+        # ret['c_length'] = len(ret['gold_tag_seq'])
+        assert len(ret['matrix']) == len(ret['c_segment'])
+        # is_whitespace = torch.BoolTensor([c.isspace() for c in ret['segment']])
+        # ret['c_matrix'] = ret['matrix'][~is_whitespace]
+        return ret
+
+
 @batch_class
 class ContinuousTextIpaBatch(BaseBatch):
-    gold_tag_seq: Optional[torch.LongTensor] = None
+    gold_tag_seqs: Optional[torch.LongTensor] = None
+    orig_segments: Optional[np.ndarray] = None
+    # orig_lengths: Optional[torch.Tensor] = None
+    # orig_feat_matrix: Optional[torch.Tensor] = None
+
+    def _post_init_helper(self):
+        super()._post_init_helper()
+        self.gold_tag_seqs.rename_('batch', 'length')
 
 
 class ContinuousTextDataLoader(IpaDataLoader):
 
     batch_cls = ContinuousTextIpaBatch
+    dataset_cls = ContinuousIpaDataset
+
+    def _prepare_batch(self, collate_return: CollateReturn) -> IpaBatch:
+        cls = type(self)
+        batch_cls = cls.batch_cls
+        return batch_cls(
+            collate_return.c_segments,
+            collate_return.lengths,
+            collate_return.matrices,
+            gold_tag_seqs=collate_return.gold_tag_seqs,
+            orig_segments=collate_return.segments
+        )
+        # orig_lengths=collate_return.lengths,
+        # orig_feat_matrix=collate_return.matrices
 
 # ------------------------------------------------------------- #
 #                         Metric learner                        #

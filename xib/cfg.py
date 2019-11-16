@@ -69,6 +69,7 @@ for lang in _all_other_langs:
 @reg
 class DecipherEn(LMEn):
     task: str = 'decipher'
+    mode: str = 'local-supervised'
 
 
 @reg

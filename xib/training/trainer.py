@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from arglib import add_argument, g, init_g_attr
-from devlib import get_trainable_params
+from devlib import get_length_mask, get_trainable_params
 from trainlib import Metric, Metrics, Tracker, Trainer, get_grad_norm, log_this
 from xib.data_loader import ContinuousTextIpaBatch, MetricLearningDataLoader
 from xib.ipa import should_include
@@ -124,6 +124,7 @@ class DecipherTrainer(LMTrainer):
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
     add_argument('concentration', default=1e-2, dtype=float, msg='concentration hyperparameter')
     add_argument('supervised', dtype=bool, default=False, msg='supervised mode')
+    add_argument('mode', default='local-supervised', dtype=str, choices=['local-supervised'], msg='training mode')
 
     def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups, score_per_word: 'p', concentration: 'p'):
         super().__init__(model, train_data_loader, num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups)
@@ -134,26 +135,41 @@ class DecipherTrainer(LMTrainer):
         batch: ContinuousTextIpaBatch = next(self.iterator)
         ret = self.model(batch)
         bs = batch.feat_matrix.size('batch')
-        breakpoint()  # DEBUG(j_luo)
-        if g.supervised:
-            modified_seq_log_probs = ret['seq_scores'] + (~ret['is_unique']).float() * (-999.9)
-            seq_log_probs = modified_seq_log_probs.log_softmax(dim='sample')
-            target_log_probs = seq_log_probs.align_to('batch', 'sample', 'seq_feat')[:, 0]
-            loss = Metric('loss', -target_log_probs.sum(), bs)
+        # modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
+        # sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
+        if g.mode == 'local-supervised':
+            target_log_probs = ret['label_log_probs'].gather('label', batch.gold_tag_seqs)
+            length_mask = get_length_mask(batch.lengths, batch.lengths.max()).refine_names('batch', 'length')
+            losses = (length_mask.float().align_as(target_log_probs) * target_log_probs)
+            loss = Metric('loss', -losses.sum(), bs)
             metrics = Metrics(loss)
             loss = loss.mean
-        else:
-            modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
-            sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
-            final_ret = ret['lm_score'] + ret['word_score'] * self.score_per_word
-            score = (sample_probs * final_ret).sum()
-            lm_score = Metric('lm_score', ret['lm_score'].sum(), bs)
-            word_score = Metric('word_score', ret['word_score'].sum(), bs)
-            score = Metric('score', score, bs)
-            metrics = Metrics(score, lm_score, word_score)
-            loss = -score.mean
+
+        # if g.supervised:
+        #     modified_seq_log_probs = ret['seq_scores'] + (~ret['is_unique']).float() * (-999.9)
+        #     seq_log_probs = modified_seq_log_probs.log_softmax(dim='sample')
+        #     target_log_probs = seq_log_probs.align_to('batch', 'sample', 'seq_feat')[:, 0]
+
+        #     risk = (sample_probs * (1.0 - seq_log_probs.exp())).sum()
+        #     seq_loss = -target_log_probs.sum()
+        #     total_loss = risk + seq_loss
+        #     risk = Metric('risk', risk, bs)
+        #     seq_loss = Metric('seq_loss', seq_loss, bs)
+        #     total_loss = Metric('total_loss', total_loss, bs)
+        #     metrics = Metrics(seq_loss, risk, total_loss)
+        #     loss = total_loss.mean
+        # else:
+        #     final_ret = ret['lm_score'] + ret['word_score'] * self.score_per_word
+        #     score = (sample_probs * final_ret).sum()
+        #     lm_score = Metric('lm_score', ret['lm_score'].sum(), bs)
+        #     word_score = Metric('word_score', ret['word_score'].sum(), bs)
+        #     score = Metric('score', score, bs)
+        #     metrics = Metrics(score, lm_score, word_score)
+        #     loss = -score.mean
         loss.backward()
         self.optimizer.step()
+        grad_norm = get_grad_norm(self.model)
+        metrics += Metric('grad_norm', grad_norm, bs)
         return metrics
 
 # ------------------------------------------------------------- #

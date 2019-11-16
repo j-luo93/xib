@@ -12,7 +12,7 @@ import torch.nn as nn
 
 from arglib import g, init_g_attr, not_supported_argument_value
 from devlib import freeze
-from devlib.named_tensor import gather
+# from devlib.named_tensor import gather
 from xib.data_loader import DenseIpaBatch, IpaBatch
 from xib.ipa import Category, get_enum_by_cat, get_index
 from xib.ipa.ipax import CategoryX
@@ -53,7 +53,8 @@ class LM(nn.Module):
             weight = batch.target_weight[:, i]
 
             if self.weighted_loss == '':
-                log_probs = gather(output, target)
+                # log_probs = gather(output, target)
+                log_probs = output.gather(name.value, target)
                 score = -log_probs
             else:
                 e = get_new_style_enum(i)

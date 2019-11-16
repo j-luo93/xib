@@ -1,3 +1,4 @@
+from trainlib import get_grad_norm
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
 from typing import Dict, List, Optional, Tuple
@@ -11,7 +12,7 @@ from torch.nn.modules import MultiheadAttention
 from arglib import add_argument, g, init_g_attr, not_supported_argument_value
 from devlib import (cached_property, dataclass_numpy, dataclass_size_repr,
                     freeze, get_tensor, get_zeros)
-from devlib.named_tensor import expand_as, get_named_range, self_attend
+from devlib.named_tensor import NoName, expand_as, get_named_range, self_attend
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v7 as extract_words
 from xib.ipa import Category, should_include
@@ -77,6 +78,26 @@ class PackedWords:
         return tuple(zip(segments, nlls.cpu().numpy()))
 
 
+class PositionalEmbedding(nn.Module):
+
+    def __init__(self, n_pos, dim):
+        super().__init__()
+        embeddings = torch.zeros(n_pos, dim)
+        position_enc = np.array([
+            [pos / np.power(10000, 2 * (j // 2) / dim) for j in range(dim)]
+            for pos in range(n_pos)
+        ])
+        embeddings[:, 0::2] = torch.FloatTensor(np.sin(position_enc[:, 0::2]))
+        embeddings[:, 1::2] = torch.FloatTensor(np.cos(position_enc[:, 1::2]))
+        self.register_buffer('embeddings', embeddings)
+
+    def forward(self, positions: LT):
+        with NoName(self.embeddings, positions):
+            ret = self.embeddings[positions]
+        new_names = positions.names + ('char_emb_for_label', )
+        return ret.refine_names(*new_names)
+
+
 @init_g_attr(default='property')
 class DecipherModel(nn.Module):
 
@@ -110,6 +131,7 @@ class DecipherModel(nn.Module):
         self.self_attn_layers = nn.ModuleList()
         for _ in range(num_self_attn_layers):
             self.self_attn_layers.append(MultiheadAttention(cat_dim, 4))
+        self.positional_embedding = PositionalEmbedding(512, cat_dim)
 
         self.label_predictor = nn.Sequential(
             nn.Linear(cat_dim, cat_dim),
@@ -137,11 +159,16 @@ class DecipherModel(nn.Module):
         bs = batch.batch_size
         # Get the samples of label sequences first.
         out = self.emb_for_label(batch.feat_matrix, batch.source_padding)
+        positions = get_named_range(batch.feat_matrix.size('length'), name='length')
+        pos_emb = self.positional_embedding(positions)
+        out = out + pos_emb
         out = out.align_to('length', 'batch', 'char_emb_for_label')
-        for i, layer in enumerate(self.self_attn_layers):
-            out, _ = self_attend(layer, out, f'self_attn_repr')
+        # DEBUG(j_luo)
+        # for i, layer in enumerate(self.self_attn_layers):
+        #     out, _ = self_attend(layer, out, f'self_attn_repr')
         logits = self.label_predictor(out)  # * 0.01  # HACK(j_luo) use 0.01 to make it smooth
-        label_probs = logits.log_softmax(dim='label').exp()
+        label_log_probs = logits.log_softmax(dim='label')
+        label_probs = label_log_probs.exp()
 
         if self.supervised:
             gold_tag_seqs = batch.gold_tag_seqs
@@ -168,9 +195,9 @@ class DecipherModel(nn.Module):
         nlls = nlls.unflatten('batch', [('batch_word', bw), ('position', p)])
         nlls = nlls.sum(dim='position')
         lm_score = self._unpack(nlls, packed_words, bs)
-        print(packed_words.sampled_segments)
-        print(packed_words.sampled_segments_by_batch)
-        print(packed_words.get_segment_nlls(nlls))
+        # print(packed_words.sampled_segments)
+        # print(packed_words.sampled_segments_by_batch)
+        # print(packed_words.get_segment_nlls(nlls))
 
         # Compute word score that corresponds to the number of readable words.
         word_score = self._get_word_score(packed_words, bs)
@@ -179,7 +206,9 @@ class DecipherModel(nn.Module):
             'word_score': word_score,
             'lm_score': lm_score,
             'sample_log_probs': sample_log_probs,
-            'is_unique': is_unique
+            'is_unique': is_unique,
+            'label_probs': label_probs,
+            'label_log_probs': label_log_probs,
         }
         if self.supervised:
             features = torch.stack([ret['sample_log_probs'], ret['lm_score'], ret['word_score']], new_name='seq_feat')

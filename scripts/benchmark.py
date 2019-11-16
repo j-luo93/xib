@@ -7,7 +7,7 @@ import numpy as np
 import pyximport
 
 from devlib import pad_to_dense
-from xib.extract_words_impl import extract_words_v7
+from xib.extract_words_impl import extract_words_v8
 
 
 B, I, O, N = 0, 1, 2, 3
@@ -48,9 +48,10 @@ def get_random_test(size, array_only=False):
             last_value = None
             next_value = arr[i, j, 0]
             word = list()
-            for k in range(max_len):
+            sample_length = sample_lengths[i, j]
+            for k in range(sample_length):
                 value = next_value
-                if k < max_len - 1:
+                if k < sample_length - 1:
                     next_value = arr[i, j, k + 1]
                 else:
                     next_value = None
@@ -96,13 +97,13 @@ if __name__ == "__main__":
     num_threads = int(sys.argv[1])
 
     print(timeit.timeit(
-        f'extract_words_v7(arr, sample_lengths, num_threads={num_threads})',
-        'from __main__ import extract_words_v7, get_random_test; arr, sample_lengths = get_random_test([2000, 100, 20], array_only=True)', number=100))
+        f'extract_words_v8(arr, sample_lengths, num_threads={num_threads})',
+        'from __main__ import extract_words_v8, get_random_test; arr, sample_lengths = get_random_test([2000, 100, 20], array_only=True)', number=100))
 
     arr, sample_lengths, batch_indices, sample_indices, word_positions, word_lengths, is_unique = get_random_test([
                                                                                                                   200, 10, 3])
 
-    ret_batch_indices, ret_sample_indices, ret_word_positions, ret_word_lengths, ret_is_unique = extract_words_v7(
+    ret_batch_indices, ret_sample_indices, ret_word_positions, ret_word_lengths, ret_is_unique = extract_words_v8(
         arr, sample_lengths)
 
     # or not np.array_equal(is_unique, ret_is_unique):

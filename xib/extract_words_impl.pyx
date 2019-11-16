@@ -74,9 +74,9 @@ cdef first_pass(const int[:, :, ::1] samples, const int[:, ::1] sample_lengths, 
             count = 0
             last_value = N
             next_value = samples[i, j, 0]
-            for k in range(max_len):
+            for k in range(sample_length):
                 value = next_value
-                if k + 1 < max_len:
+                if k + 1 < sample_length:
                     next_value = samples[i, j, k + 1]
                 else:
                     next_value = N
@@ -93,8 +93,7 @@ cdef first_pass(const int[:, :, ::1] samples, const int[:, ::1] sample_lengths, 
 
                 last_value = value
 
-                if k < sample_length:
-                    this_sample_by_thread.at(thread_number).push_back(value)
+                this_sample_by_thread.at(thread_number).push_back(value)
 
             word_counts[i, j] = count
             max_lengths[i, j] = max_length
@@ -114,7 +113,12 @@ cdef first_pass(const int[:, :, ::1] samples, const int[:, ::1] sample_lengths, 
     offsets_2d_storage = offsets_storage.reshape([batch_size, num_samples])
     return word_counts_storage, max_lengths_storage, offsets_2d_storage, is_unique_storage
 
-cdef second_pass(const int[:, :, ::1] samples, const long[:, ::1] offsets, long total_num_words, int max_word_len):
+cdef second_pass(
+        const int[:, :, ::1] samples,
+        const int [:, ::1] sample_lengths,
+        const long[:, ::1] offsets,
+        long total_num_words,
+        int max_word_len):
     batch_indices_storage = np.zeros([total_num_words], dtype=DTYPE)
     sample_indices_storage = np.zeros([total_num_words], dtype=DTYPE)
     word_positions_storage = np.zeros([total_num_words, max_word_len], dtype=DTYPE)
@@ -126,13 +130,13 @@ cdef second_pass(const int[:, :, ::1] samples, const long[:, ::1] offsets, long 
 
     cdef Py_ssize_t batch_size = samples.shape[0]
     cdef Py_ssize_t num_samples = samples.shape[1]
-    cdef Py_ssize_t max_len = samples.shape[2]
 
     cdef Py_ssize_t offset
     cdef Py_ssize_t length
     cdef int last_value
     cdef int next_value
     cdef int value
+    cdef int sample_length
 
     cdef Py_ssize_t i
     cdef Py_ssize_t j
@@ -148,9 +152,10 @@ cdef second_pass(const int[:, :, ::1] samples, const long[:, ::1] offsets, long 
             length = 0
             last_value = N
             next_value = samples[i, j, 0]
-            for k in range(max_len):
+            sample_length = sample_lengths[i, j]
+            for k in range(sample_length):
                 value = next_value
-                if k < max_len - 1:
+                if k < sample_length - 1:
                     next_value = samples[i, j, k + 1]
                 else:
                     next_value = N
@@ -173,7 +178,7 @@ cdef second_pass(const int[:, :, ::1] samples, const long[:, ::1] offsets, long 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def extract_words_v7(const int[:, :, ::1] samples, const int[:, ::1] sample_lengths, int num_threads=1):
+def extract_words_v8(const int[:, :, ::1] samples, const int[:, ::1] sample_lengths, int num_threads=1):
     openmp.omp_set_num_threads(num_threads)
     # First pass to calculate total number of words and max length of words.
     word_counts, max_lengths, offsets, is_unique = first_pass(samples, sample_lengths, num_threads)
@@ -182,6 +187,6 @@ def extract_words_v7(const int[:, :, ::1] samples, const int[:, ::1] sample_leng
 
     # Now we can extract words.
     batch_indices, sample_indices, word_positions, word_lengths = second_pass(
-        samples, offsets, total_num_words, max_word_len)
+        samples, sample_lengths, offsets, total_num_words, max_word_len)
 
     return batch_indices, sample_indices, word_positions, word_lengths, is_unique

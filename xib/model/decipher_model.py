@@ -1,4 +1,3 @@
-from trainlib import get_grad_norm
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
 from typing import Dict, List, Optional, Tuple
@@ -13,8 +12,9 @@ from arglib import add_argument, g, init_g_attr, not_supported_argument_value
 from devlib import (cached_property, dataclass_numpy, dataclass_size_repr,
                     freeze, get_tensor, get_zeros)
 from devlib.named_tensor import NoName, expand_as, get_named_range, self_attend
+from trainlib import get_grad_norm
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
-from xib.extract_words_impl import extract_words_v7 as extract_words
+from xib.extract_words_impl import extract_words_v8 as extract_words
 from xib.ipa import Category, should_include
 
 from . import BT, FT, LT
@@ -118,6 +118,7 @@ class DecipherModel(nn.Module):
     add_argument('num_self_attn_layers', default=2, dtype=int, msg='number of self attention layers')
     add_argument('num_samples', default=100, dtype=int, msg='number of samples per sequence')
     add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
+    add_argument('dropout', default=0.2, dtype=float, msg='dropout rate')
 
     @not_supported_argument_value('new_style', True)
     def __init__(self,
@@ -142,7 +143,7 @@ class DecipherModel(nn.Module):
         cat_dim = dim * self.emb_for_label.effective_num_feature_groups
         self.self_attn_layers = nn.ModuleList()
         for _ in range(num_self_attn_layers):
-            self.self_attn_layers.append(SelfAttention(cat_dim, 4))
+            self.self_attn_layers.append(SelfAttention(cat_dim, 4, dropout=g.dropout))
         self.positional_embedding = PositionalEmbedding(512, cat_dim)
 
         self.label_predictor = nn.Sequential(
@@ -181,6 +182,12 @@ class DecipherModel(nn.Module):
         logits = self.label_predictor(out)  # * 0.01  # HACK(j_luo) use 0.01 to make it smooth
         label_log_probs = logits.log_softmax(dim='label')
         label_probs = label_log_probs.exp()
+        # NOTE(j_luo) O is equivalent to None.
+        mask = expand_as(batch.source_padding, label_probs)
+        source = expand_as(get_tensor([0.0, 0.0, 1.0]).refine_names('label').float(), label_probs)
+        # TODO(j_luo) ugly
+        label_probs = label_probs.rename(None).masked_scatter(mask.rename(None), source.rename(None))
+        label_probs = label_probs.refine_names('length', 'batch', 'label')
 
         if self.supervised:
             gold_tag_seqs = batch.gold_tag_seqs
@@ -188,7 +195,6 @@ class DecipherModel(nn.Module):
                 raise RuntimeError(f'Gold tag seqsuence must be provided in supervised mode.')
         else:
             gold_tag_seqs = None
-        # FIXME(j_luo) Need to change num_samples property.
         samples, sample_log_probs = self._sample(label_probs, batch.source_padding, gold_tag_seqs=gold_tag_seqs)
 
         # Get the lm score.
@@ -207,6 +213,8 @@ class DecipherModel(nn.Module):
         nlls = nlls.unflatten('batch', [('batch_word', bw), ('position', p)])
         nlls = nlls.sum(dim='position')
         lm_score = self._unpack(nlls, packed_words, bs)
+
+        # DEBUG(j_luo)
         # print(packed_words.sampled_segments)
         # print(packed_words.sampled_segments_by_batch)
         # print(packed_words.get_segment_nlls(nlls))
@@ -312,11 +320,6 @@ class DecipherModel(nn.Module):
         # Ignore padded indices.
         label_probs = label_probs.align_to('batch', 'length', 'label')
         source_padding = source_padding.align_to('batch', 'length')
-        # NOTE(j_luo) O is equivalent to None.
-        mask = expand_as(source_padding, label_probs)
-        source = expand_as(get_tensor([0.0, 0.0, 1.0]).refine_names('label').float(), label_probs)
-        # TODO(j_luo) ugly
-        label_probs = label_probs.rename(None).masked_scatter(mask.rename(None), source.rename(None))
 
         # Get packed batches.
         label_distr = Categorical(probs=label_probs.rename(None))

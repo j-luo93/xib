@@ -70,6 +70,7 @@ for lang in _all_other_langs:
 class DecipherEn(LMEn):
     task: str = 'decipher'
     mode: str = 'local-supervised'
+    learning_rate: float = 5e-4
 
 
 @reg

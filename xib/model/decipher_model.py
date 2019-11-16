@@ -98,6 +98,18 @@ class PositionalEmbedding(nn.Module):
         return ret.refine_names(*new_names)
 
 
+class SelfAttention(MultiheadAttention):
+    """Always set `_qkv_same_embed_dim` to False."""
+
+    @property
+    def _qkv_same_embed_dim(self):
+        return False
+
+    @_qkv_same_embed_dim.setter
+    def _qkv_same_embed_dim(self, value):
+        pass
+
+
 @init_g_attr(default='property')
 class DecipherModel(nn.Module):
 
@@ -130,7 +142,7 @@ class DecipherModel(nn.Module):
         cat_dim = dim * self.emb_for_label.effective_num_feature_groups
         self.self_attn_layers = nn.ModuleList()
         for _ in range(num_self_attn_layers):
-            self.self_attn_layers.append(MultiheadAttention(cat_dim, 4))
+            self.self_attn_layers.append(SelfAttention(cat_dim, 4))
         self.positional_embedding = PositionalEmbedding(512, cat_dim)
 
         self.label_predictor = nn.Sequential(
@@ -164,8 +176,8 @@ class DecipherModel(nn.Module):
         out = out + pos_emb
         out = out.align_to('length', 'batch', 'char_emb_for_label')
         # DEBUG(j_luo)
-        # for i, layer in enumerate(self.self_attn_layers):
-        #     out, _ = self_attend(layer, out, f'self_attn_repr')
+        for i, layer in enumerate(self.self_attn_layers):
+            out, _ = self_attend(layer, out, f'self_attn_repr')
         logits = self.label_predictor(out)  # * 0.01  # HACK(j_luo) use 0.01 to make it smooth
         label_log_probs = logits.log_softmax(dim='label')
         label_probs = label_log_probs.exp()

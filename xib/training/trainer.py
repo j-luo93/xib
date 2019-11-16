@@ -124,7 +124,8 @@ class DecipherTrainer(LMTrainer):
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
     add_argument('concentration', default=1e-2, dtype=float, msg='concentration hyperparameter')
     add_argument('supervised', dtype=bool, default=False, msg='supervised mode')
-    add_argument('mode', default='local-supervised', dtype=str, choices=['local-supervised'], msg='training mode')
+    add_argument('mode', default='local-supervised', dtype=str,
+                 choices=['local-supervised', 'global-supervised'], msg='training mode')
 
     def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups, score_per_word: 'p', concentration: 'p'):
         super().__init__(model, train_data_loader, num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups)
@@ -137,13 +138,22 @@ class DecipherTrainer(LMTrainer):
         bs = batch.feat_matrix.size('batch')
         # modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
         # sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
-        if g.mode == 'local-supervised':
-            target_log_probs = ret['label_log_probs'].gather('label', batch.gold_tag_seqs)
+        metrics = Metrics()
+        if 'supervised' in g.mode:
+            local_target_log_probs = ret['label_log_probs'].gather('label', batch.gold_tag_seqs)
             length_mask = get_length_mask(batch.lengths, batch.lengths.max()).refine_names('batch', 'length')
-            losses = (length_mask.float().align_as(target_log_probs) * target_log_probs)
-            loss = Metric('loss', -losses.sum(), bs)
-            metrics = Metrics(loss)
-            loss = loss.mean
+            local_losses = (length_mask.float().align_as(local_target_log_probs) * local_target_log_probs)
+            local_loss = Metric('local_loss', -local_losses.sum(), bs)
+            metrics += local_loss
+        if g.mode == 'local-supervised':
+            total_loss = Metric('total_loss', local_loss.total, bs)
+        elif g.mode == 'global-supervised':
+            modified_seq_log_probs = ret['seq_scores'] + (~ret['is_unique']).float() * (-999.9)
+            seq_log_probs = modified_seq_log_probs.log_softmax(dim='sample')
+            global_target_log_probs = seq_log_probs.align_to('batch', 'sample', 'seq_feat')[:, 0]
+            global_loss = Metric('global_loss', -global_target_log_probs.sum(), bs)
+            metrics += global_loss
+            total_loss = Metric('total_loss', local_loss.total + global_loss.total, bs)
 
         # if g.supervised:
         #     modified_seq_log_probs = ret['seq_scores'] + (~ret['is_unique']).float() * (-999.9)
@@ -166,7 +176,8 @@ class DecipherTrainer(LMTrainer):
         #     score = Metric('score', score, bs)
         #     metrics = Metrics(score, lm_score, word_score)
         #     loss = -score.mean
-        loss.backward()
+        metrics += total_loss
+        total_loss.mean.backward()
         self.optimizer.step()
         grad_norm = get_grad_norm(self.model)
         metrics += Metric('grad_norm', grad_norm, bs)

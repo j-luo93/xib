@@ -223,7 +223,9 @@ class DecipherModel(nn.Module):
             'label_log_probs': label_log_probs,
         }
         if self.supervised:
-            features = torch.stack([ret['sample_log_probs'], ret['lm_score'], ret['word_score']], new_name='seq_feat')
+            # features = torch.stack([ret['lm_score'], ret['word_score']], new_name='seq_feat')
+            features = torch.stack([ret['sample_log_probs'].exp(), ret['lm_score'],
+                                    ret['word_score']], new_name='seq_feat')
             seq_scores = self.seq_scorer(features).squeeze(dim='score')
             ret['seq_scores'] = seq_scores
         return ret

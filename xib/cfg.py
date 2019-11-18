@@ -82,6 +82,15 @@ class DecipherEnTest(DecipherEn):
 
 
 @reg
+class DecipherEsTest(DecipherEn):
+    lang = 'es'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path = 'data/Spanish.clean.100.pth'
+
+
+@reg
 class MetricPCV(SharedConfig):
     num_epochs: int = 500
     save_interval: int = 10

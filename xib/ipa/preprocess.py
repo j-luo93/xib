@@ -262,14 +262,14 @@ def get_pth_content(df, progress=False):
     return out
 
 
-def pipeline(source: Source):
-    cnt, _, df = get_ipa_data(source)
+def pipeline(source: Source, progress=False):
+    cnt, _, df = get_ipa_data(source, progress=progress)
     if cnt > 0:
         raise RuntimeError(f'Some tokens are invalid.')
 
-    apply_all(df)
-    cleaned_df = clean_data(df)
-    merged_df = merge(cleaned_df)
-    indexify(merged_df)
-    out = get_pth_content(merged_df)
+    apply_all(df, progress=progress)
+    cleaned_df = clean_data(df, progress=progress)
+    merged_df = merge(cleaned_df, progress=progress)
+    indexify(merged_df, progress=progress)
+    out = get_pth_content(merged_df, progress=progress)
     return out

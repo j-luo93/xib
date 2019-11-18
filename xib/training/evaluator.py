@@ -3,8 +3,8 @@ from typing import List, Sequence
 import pandas as pd
 import torch
 
-from arglib import init_g_attr
-from trainlib import Metric, Metrics
+from dev_misc.arglib import init_g_attr
+from dev_misc.trainlib import Metric, Metrics
 from xib.data_loader import MetricLearningBatch, MetricLearningDataLoader
 from xib.model.metric_learning_model import MetricLearningModel
 

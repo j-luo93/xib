@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from arglib import Registry
+from dev_misc.arglib import Registry
 
 reg = Registry('cfg')
 

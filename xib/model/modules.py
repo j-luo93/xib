@@ -1,13 +1,14 @@
 from typing import Dict
 
-import inflection
 import numpy as np
 import torch
 import torch.nn as nn
 
-from arglib import add_argument, init_g_attr, not_supported_argument_value
-from devlib import check_explicit_arg, get_range, get_tensor
-from devlib.named_tensor import adv_index, embed
+from dev_misc.arglib import (add_argument, init_g_attr,
+                             not_supported_argument_value)
+from dev_misc.devlib import get_range, get_tensor
+from dev_misc.devlib.named_tensor import adv_index, embed
+from dev_misc.utils import check_explicit_arg
 from xib.ipa import (Category, Name, conditions, get_enum_by_cat,
                      get_needed_categories, get_new_style_enum, get_none_index,
                      no_none_predictions, should_include, should_predict_none)

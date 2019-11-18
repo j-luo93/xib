@@ -14,10 +14,10 @@ import torch
 from pycountry import languages
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from arglib import add_argument, g, init_g_attr
-from devlib import (PandasDataLoader, PandasDataset, dataclass_cuda,
-                    dataclass_size_repr, get_length_mask, get_range,
-                    get_tensor, get_zeros)
+from dev_misc.arglib import add_argument, g, init_g_attr
+from dev_misc.devlib import (PandasDataLoader, PandasDataset, dataclass_cuda,
+                             dataclass_size_repr, get_length_mask, get_range,
+                             get_tensor, get_zeros)
 from xib.families import get_all_distances, get_families
 from xib.ipa import (Category, Index, conditions, get_enum_by_cat,
                      should_include)

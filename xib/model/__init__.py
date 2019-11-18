@@ -1,6 +1,6 @@
 import torch
 
-from arglib import add_argument
+from dev_misc.arglib import add_argument
 
 # IDEA(j_luo) typing!
 LT = torch.LongTensor

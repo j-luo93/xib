@@ -1,7 +1,7 @@
-from arglib import g, parse_args, show_args
 from cfg import reg
-from devlib import initiate
-from devlib.named_tensor import patch_named_tensors
+from dev_misc.arglib import g, parse_args, show_args
+from dev_misc.devlib import initiate
+from dev_misc.devlib.named_tensor import patch_named_tensors
 from xib.training.manager import (AdaptManager, DecipherManager, Manager,
                                   MetricLearningManager)
 

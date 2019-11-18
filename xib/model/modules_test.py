@@ -2,11 +2,9 @@ from unittest import TestCase
 
 import torch
 
-from arglib import reset_repo
-from xib.ipa import ipax
+from dev_misc.arglib import reset_repo
+from xib.ipa import Name, ipa, ipax
 
-from xib.ipa import Name
-from xib.ipa import ipa
 from .modules import Predictor
 
 

@@ -7,9 +7,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from arglib import add_argument, g, init_g_attr
-from devlib import get_length_mask, get_trainable_params
-from trainlib import Metric, Metrics, Tracker, Trainer, get_grad_norm, log_this
+from dev_misc.arglib import add_argument, g, init_g_attr
+from dev_misc.devlib import get_length_mask
+from dev_misc.trainlib import (Metric, Metrics, Tracker, Trainer,
+                               get_grad_norm, get_trainable_params, log_this)
 from xib.data_loader import ContinuousTextIpaBatch, MetricLearningDataLoader
 from xib.ipa import should_include
 from xib.training import evaluator
@@ -18,7 +19,7 @@ from .runner import BaseLMRunner
 
 
 @init_g_attr(default='property')
-class BaseTrainer(Trainer, metaclass=ABCMeta):
+class BaseTrainer(Trainer):
 
     add_argument('num_steps', default=10, dtype=int, msg='number of steps to train')
     add_argument('learning_rate', default=2e-3, dtype=float, msg='learning rate')
@@ -27,7 +28,8 @@ class BaseTrainer(Trainer, metaclass=ABCMeta):
 
     def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups):
         super().__init__()
-        self.tracker.add_track('step', update_fn='add', finish_when=num_steps)
+        self.tracker.add_trackable('step', total=num_steps)
+        self.tracker.ready()
         self.optimizer = optim.Adam(get_trainable_params(self.model, named=False), learning_rate)
 
         self.init_params()
@@ -98,6 +100,16 @@ class LMTrainer(BaseLMRunner, BaseTrainer):
         metrics += grad_norm
         self.optimizer.step()
         return metrics
+
+    def train(self, *args, **kwargs):
+        accum_metrics = Metrics()
+        while not self.tracker.is_finished('step'):
+            metrics = self.train_loop(*args, **kwargs)
+            accum_metrics += metrics
+            self.tracker.update('step')
+
+            self.check_metrics(accum_metrics)
+            self.save()
 
     def save(self):
         super().save()
@@ -195,7 +207,7 @@ class MetricLearningTrainer(BaseTrainer):
 
     def __init__(self, model: 'a', data_loader: 'a', num_epochs, learning_rate, check_interval, save_interval, log_dir):
         Trainer.__init__(self)
-        self.tracker.add_track('epoch', update_fn='add', finish_when=num_epochs)
+        self.tracker.add_track('epoch', total=num_epochs)
 
     def train(self,
               evaluator: evaluator.Evaluator,
@@ -208,7 +220,7 @@ class MetricLearningTrainer(BaseTrainer):
         # Main boy.
         accum_metrics = Metrics()
         best_mse = None
-        while not self.tracker.is_finished:
+        while not self.tracker.is_finished('epoch'):
             # Get data first.
             metrics = self.train_loop(train_langs)
             accum_metrics += metrics

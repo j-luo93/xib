@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import torch
@@ -8,13 +8,16 @@ import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.nn.modules import MultiheadAttention
 
-from arglib import add_argument, g, init_g_attr, not_supported_argument_value
-from devlib import (cached_property, dataclass_numpy, dataclass_size_repr,
-                    freeze, get_tensor, get_zeros)
-from devlib.named_tensor import NoName, expand_as, get_named_range, self_attend
-from trainlib import get_grad_norm
+from dev_misc.arglib import (add_argument, g, init_g_attr,
+                             not_supported_argument_value)
+from dev_misc.devlib import (dataclass_numpy, dataclass_size_repr, get_tensor,
+                             get_zeros)
+from dev_misc.devlib.named_tensor import (NoName, expand_as, get_named_range,
+                                          self_attend)
+from dev_misc.trainlib import freeze
+from dev_misc.utils import cached_property
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
-from xib.extract_words_impl import extract_words_v8 as extract_words
+from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
 from xib.ipa import Category, should_include
 
 from . import BT, FT, LT

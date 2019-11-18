@@ -6,8 +6,8 @@ from typing import List, Tuple, Union
 
 import inflection
 
-from arglib import g
-from devlib import check_explicit_arg
+from dev_misc.arglib import g
+from dev_misc.utils import check_explicit_arg
 
 from .ipa import (Category, Index, IPAFeature, conditions, get_enum_by_cat,
                   no_none_predictions)

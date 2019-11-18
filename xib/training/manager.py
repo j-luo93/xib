@@ -2,8 +2,8 @@ import logging
 import os
 import random
 
-from arglib import add_argument, init_g_attr
-from trainlib import Metrics, set_random_seeds
+from dev_misc.arglib import add_argument, init_g_attr
+from dev_misc.trainlib import Metrics, set_random_seeds
 from xib.data_loader import (ContinuousTextDataLoader, DenseIpaDataLoader,
                              IpaDataLoader, MetricLearningDataLoader)
 from xib.model.decipher_model import DecipherModel

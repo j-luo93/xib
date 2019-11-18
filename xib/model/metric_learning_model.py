@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from arglib import add_argument, init_g_attr
+from dev_misc.arglib import add_argument, init_g_attr
 from xib.data_loader import MetricLearningBatch
 from xib.model.modules import get_effective_c_idx
 

@@ -1,7 +1,3 @@
-from devlib import get_zeros
-from devlib import get_tensor
-from xib.ipa import get_new_style_enum
-from arglib import add_argument
 import logging
 from dataclasses import dataclass
 from typing import Dict, Tuple, Union
@@ -10,11 +6,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from arglib import g, init_g_attr, not_supported_argument_value
-from devlib import freeze
-# from devlib.named_tensor import gather
+from dev_misc.arglib import (add_argument, g, init_g_attr,
+                             not_supported_argument_value)
+from dev_misc.devlib import get_tensor, get_zeros
+from dev_misc.trainlib import freeze
 from xib.data_loader import DenseIpaBatch, IpaBatch
-from xib.ipa import Category, get_enum_by_cat, get_index
+from xib.ipa import Category, get_enum_by_cat, get_index, get_new_style_enum
 from xib.ipa.ipax import CategoryX
 
 from . import FT, LT

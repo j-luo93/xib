@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Callable, Sequence, TextIO, Tuple, Union
+from typing import Callable, Iterator, Sequence, TextIO, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -124,7 +124,7 @@ def de_none(s):
     return 'none' if s is None else s
 
 
-Source = Union[Sequence, TextIO]
+Source = Iterator[str]
 
 
 def get_ipa_data(source: Source, progress=False) -> Tuple[int, int, pd.DataFrame]:

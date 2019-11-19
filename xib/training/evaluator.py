@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from typing import List, Sequence
 
 import pandas as pd
@@ -8,14 +9,18 @@ from dev_misc.trainlib import Metric, Metrics
 from xib.data_loader import MetricLearningBatch, MetricLearningDataLoader
 from xib.model.metric_learning_model import MetricLearningModel
 
-from .runner import BaseLMRunner
+from .runner import BaseLMRunner, BaseDecipherRunner
 
 
-class BaseEvaluator:
+class BaseEvaluator(ABC):
 
     def __init__(self, model, data_loader):
         self.model = model
         self.data_loader = data_loader
+
+    @abstractmethod
+    def evaluate(self):
+        pass
 
 
 @init_g_attr()
@@ -34,6 +39,18 @@ class LMEvaluator(BaseEvaluator, BaseLMRunner):
                 metrics = self.analyze_scores(scores)
                 all_metrics += metrics
         return all_metrics
+
+
+class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
+
+    def evaluate(self) -> Metrics:
+        with torch.no_grad():
+            self.model.eval()
+            accum_metrics = Metrics()
+            for batch in self.data_loader:
+                metrics = self.get_metrics(batch)
+                accum_metrics += metrics
+            return accum_metrics
 
 
 class Evaluator(BaseEvaluator):

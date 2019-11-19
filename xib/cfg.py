@@ -85,9 +85,11 @@ class DecipherEnTest(DecipherEn):
 class DecipherEsTest(DecipherEn):
     lang = 'es'
 
+    dev_data_path: str = 'data/Spanish.clean.100.dev.ipa'
+
     def __post_init__(self):
         super().__post_init__()
-        self.data_path = 'data/Spanish.clean.100.pth'
+        self.data_path = 'data/Spanish.clean.100.ipa'
 
 
 @reg

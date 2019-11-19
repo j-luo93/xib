@@ -15,7 +15,8 @@ from xib.data_loader import ContinuousTextIpaBatch, MetricLearningDataLoader
 from xib.ipa import should_include
 from xib.training import evaluator
 
-from .runner import BaseLMRunner
+from .evaluator import DecipherEvaluator
+from .runner import BaseDecipherRunner, BaseLMRunner
 
 
 @init_g_attr(default='property')
@@ -111,15 +112,15 @@ class LMTrainer(BaseLMRunner, BaseTrainer):
             self.check_metrics(accum_metrics)
             self.save()
 
-    def save(self):
+    def save(self, name='loss'):
         super().save()
         if self.track % self.save_interval == 0:
             metrics = self.evaluator.evaluate()
-            logging.info(f'New evaluation metrics is {metrics.loss.mean:.3f}.')
-            if self.best_metrics is None or metrics.loss.mean < self.best_metrics.loss.mean:
+            logging.info(f'New evaluation metrics is {getattr(metrics, name).mean:.3f}.')
+            if self.best_metrics is None or getattr(metrics, name).mean < getattr(self.best_metrics, name).mean:
                 self.best_metrics = metrics
                 out_path = self.log_dir / 'saved.best'
-                logging.imp(f'Best model updated: new best is {self.best_metrics.loss.mean:.3f}.')
+                logging.imp(f'Best model updated: new best is {getattr(self.best_metrics, name).mean:.3f}.')
                 self._save(out_path)
 
 
@@ -130,8 +131,7 @@ class AdaptLMTrainer(LMTrainer):
         pass
 
 
-@init_g_attr
-class DecipherTrainer(LMTrainer):
+class DecipherTrainer(BaseDecipherRunner, LMTrainer):
 
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
     add_argument('concentration', default=1e-2, dtype=float, msg='concentration hyperparameter')
@@ -139,33 +139,32 @@ class DecipherTrainer(LMTrainer):
     add_argument('mode', default='local-supervised', dtype=str,
                  choices=['local-supervised', 'global-supervised'], msg='training mode')
 
-    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups, score_per_word: 'p', concentration: 'p'):
-        super().__init__(model, train_data_loader, num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups)
+    def __init__(self, model, train_data_loader, evaluator):
+        super().__init__(model, train_data_loader, g.num_steps, g.learning_rate,
+                         g.check_interval, g.save_interval, g.log_dir, g.feat_groups)
+        self.evaluator = evaluator
+        self.tracker.add_min_trackable('best_loss')
+
+    def train(self, *args, **kwargs):
+        accum_metrics = Metrics()
+        while not self.tracker.is_finished('step'):
+            metrics = self.train_loop(*args, **kwargs)
+            accum_metrics += metrics
+            self.tracker.update('step')
+
+            self.check_metrics(accum_metrics)
+            if self.tracker.step % g.save_interval == 0:
+                self.save(name='local_loss')
+                eval_metrics = self.evaluator.evaluate()
+                self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
 
     def train_loop(self) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
-        batch: ContinuousTextIpaBatch = next(self.iterator)
-        ret = self.model(batch)
-        bs = batch.feat_matrix.size('batch')
+        batch = next(self.iterator)
+        metrics = self.get_metrics(batch)
         # modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
         # sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
-        metrics = Metrics()
-        if 'supervised' in g.mode:
-            local_target_log_probs = ret['label_log_probs'].gather('label', batch.gold_tag_seqs)
-            length_mask = get_length_mask(batch.lengths, batch.lengths.max()).refine_names('batch', 'length')
-            local_losses = (length_mask.float().align_as(local_target_log_probs) * local_target_log_probs)
-            local_loss = Metric('local_loss', -local_losses.sum(), bs)
-            metrics += local_loss
-        if g.mode == 'local-supervised':
-            total_loss = Metric('total_loss', local_loss.total, bs)
-        elif g.mode == 'global-supervised':
-            modified_seq_log_probs = ret['seq_scores'] + (~ret['is_unique']).float() * (-999.9)
-            seq_log_probs = modified_seq_log_probs.log_softmax(dim='sample')
-            global_target_log_probs = seq_log_probs.align_to('batch', 'sample', 'seq_feat')[:, 0]
-            global_loss = Metric('global_loss', -global_target_log_probs.sum(), bs)
-            metrics += global_loss
-            total_loss = Metric('total_loss', local_loss.total + global_loss.total, bs)
 
         # if g.supervised:
         #     modified_seq_log_probs = ret['seq_scores'] + (~ret['is_unique']).float() * (-999.9)
@@ -188,11 +187,10 @@ class DecipherTrainer(LMTrainer):
         #     score = Metric('score', score, bs)
         #     metrics = Metrics(score, lm_score, word_score)
         #     loss = -score.mean
-        metrics += total_loss
-        total_loss.mean.backward()
+        metrics.total_loss.mean.backward()
         self.optimizer.step()
         grad_norm = get_grad_norm(self.model)
-        metrics += Metric('grad_norm', grad_norm, bs)
+        metrics += Metric('grad_norm', grad_norm, batch.batch_size)
         return metrics
 
 # ------------------------------------------------------------- #

@@ -2,6 +2,7 @@ import logging
 import os
 import random
 
+from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
 from dev_misc.trainlib import Metrics, set_random_seeds
 from xib.data_loader import (ContinuousTextDataLoader, DenseIpaDataLoader,
@@ -12,6 +13,8 @@ from xib.model.metric_learning_model import MetricLearningBatch
 from xib.training.evaluator import Evaluator, LMEvaluator
 from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer, LMTrainer,
                                   MetricLearningTrainer)
+
+from .evaluator import DecipherEvaluator
 
 add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'metric', 'adapt'], msg='which task to run')
 
@@ -47,11 +50,23 @@ class AdaptManager(Manager):
 
 class DecipherManager(Manager):
 
+    add_argument('dev_data_path', dtype='path', msg='Path to dev data.')
+
     data_loader_cls = ContinuousTextDataLoader
     trainer_cls = DecipherTrainer
 
     def _get_model(self):
         return DecipherModel()
+
+    def __init__(self):
+        self.model = self._get_model()
+        if os.environ.get('CUDA_VISIBLE_DEVICES', False):
+            self.model.cuda()
+        self.train_data_loader = self.data_loader_cls()
+        dev_data_loader = ContinuousTextDataLoader(data_path=g.dev_data_path)
+        self.evaluator = DecipherEvaluator(self.model, dev_data_loader)
+        self.trainer = self.trainer_cls(self.model, self.train_data_loader, self.evaluator)
+
 
 # ------------------------------------------------------------- #
 #                         Metric learner                        #

@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Callable, Iterator, Sequence, TextIO, Tuple, Union
+from typing import Callable, Iterator, List, Sequence, TextIO, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -107,8 +107,82 @@ def standardize(s):
     return ''.join(to_standardize.get(c, c) for c in s)
 
 
-def get_string(s):
+def get_string(s: str) -> IPAString:
     return IPAString(unicode_string=clean(sub(standardize(s))))
+
+
+def get_dg_value(s: IPAString, dg) -> List:
+    return [c.dg_value(dg) for c in s.ipa_chars]
+
+
+name2dg = {
+    'ptype': DG_TYPES,
+    'c_voicing': DG_C_VOICING,
+    'c_place': DG_C_PLACE,
+    'c_manner': DG_C_MANNER,
+    'v_height': DG_V_HEIGHT,
+    'v_backness': DG_V_BACKNESS,
+    'v_roundness': DG_V_ROUNDNESS,
+    'diacritics': DG_DIACRITICS,
+    's_stress': DG_S_STRESS,
+    's_length': DG_S_LENGTH,
+    's_break': DG_S_BREAK,
+    't_level': DG_T_LEVEL,
+    't_contour': DG_T_CONTOUR,
+    't_global': DG_T_GLOBAL
+}
+
+
+class Segment:
+
+    def __init__(self, token: str):
+        self.ipa = get_string(token)
+        self.token = token
+        self._merged = False
+        if len(self.ipa) == 0:
+            raise ValueError('Invalid IPA string.')
+        self._apply_all()
+        self._merge()
+        self._indexify()
+        self.feat_matrix = self._get_feat_matrix()
+
+    def _apply_all(self):
+        for name, dg in name2dg.items():
+            setattr(self, name, get_dg_value(self.ipa, dg))
+        if self.ptype[0] not in ['consonant', 'vowel']:
+            raise ValueError('Invalid IPA string.')
+
+    def __getitem__(self, feat: str):
+        if self._merged:
+            try:
+                return self.datum_cols[feat]
+            except KeyError:
+                return self.datum_inds[feat]
+        else:
+            try:
+                return getattr(self, feat)
+            except AttributeError:
+                raise KeyError(f'Key {feat} not found.')
+
+    def _merge(self):
+        datum = merge_ipa(self, self.ipa, self.token)
+        if not datum:
+            raise ValueError('Invalid IPA string.')
+        self.merged_ipa = datum[2]
+        self.datum_cols = {
+            feat: datum[3 + i]
+            for i, feat in enumerate(normal_feats + feats_to_merge)
+        }
+        self._merged = True
+
+    def _indexify(self):
+        self.datum_inds = {
+            f'{feat}_idx': indexify_ipa(feat, value)
+            for feat, value in self.datum_cols.items()
+        }
+
+    def _get_feat_matrix(self) -> torch.LongTensor:
+        return get_feat_matrix(self)
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):
@@ -117,7 +191,7 @@ def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False)
 
 
 def apply(df, dg, col_name, progress=False):
-    df[col_name] = _apply(df['ipa'], lambda s: [c.dg_value(dg) for c in s.ipa_chars], progress=progress)
+    df[col_name] = _apply(df['ipa'], lambda s: get_dg_value(s, dg), progress=progress)
 
 
 def de_none(s):
@@ -137,8 +211,8 @@ def get_ipa_data(source: Source, progress=False) -> Tuple[int, int, pd.DataFrame
     for token in iterator:
         token = token.strip()
         try:
-            ipa = get_string(token)
-            data.append((token, ipa))
+            segment = Segment(token)
+            data.append((segment.token, segment.ipa))
         except ValueError:
             cnt += 1
         total += 1
@@ -148,26 +222,8 @@ def get_ipa_data(source: Source, progress=False) -> Tuple[int, int, pd.DataFrame
 
 
 def apply_all(df, progress=False):
-    # ptype stands for phone type.
-    apply(df, DG_TYPES, 'ptype', progress=progress)
-    # Consonants have three features: voicing, place, and manner
-    apply(df, DG_C_VOICING, 'c_voicing', progress=progress)
-    apply(df, DG_C_PLACE, 'c_place', progress=progress)
-    apply(df, DG_C_MANNER, 'c_manner', progress=progress)
-    # Vowels have three features: height, backness, and roundness.
-    apply(df, DG_V_HEIGHT, 'v_height', progress=progress)
-    apply(df, DG_V_BACKNESS, 'v_backness', progress=progress)
-    apply(df, DG_V_ROUNDNESS, 'v_roundness', progress=progress)
-    # Diacritics are grouped into one.
-    apply(df, DG_DIACRITICS, 'diacritics', progress=progress)
-    # Suprasegmentals have three groups: stress, length and break.
-    apply(df, DG_S_STRESS, 's_stress', progress=progress)
-    apply(df, DG_S_LENGTH, 's_length', progress=progress)
-    apply(df, DG_S_BREAK, 's_break', progress=progress)
-    # Tones have three groups:  level, contour and global.
-    apply(df, DG_T_LEVEL, 't_level', progress=progress)
-    apply(df, DG_T_CONTOUR, 't_contour', progress=progress)
-    apply(df, DG_T_GLOBAL, 't_global', progress=progress)
+    for name, dg in name2dg.items():
+        apply(df, dg, name, progress=progress)
 
 
 def clean_data(df, progress=False):
@@ -180,9 +236,48 @@ def clean_data(df, progress=False):
     return clean_df
 
 
+normal_feats = ['ptype', 'c_voicing', 'c_place', 'c_manner', 'v_height', 'v_backness', 'v_roundness']
+feats_to_merge = ['diacritics', 's_stress', 's_length', 's_break', 't_level', 't_contour', 't_global']
+
+
+def merge_ipa(s: Union[pd.Series, Segment], ipa: IPAString, segment: str) -> List:
+    i = 0
+    keep = True
+    datum_cols = {feat: list() for feat in normal_feats + feats_to_merge}
+    merged_ipa = list()
+    ptypes = s['ptype']
+    while i < len(ptypes):
+            # Get ptype and normal features first.
+        for feat in normal_feats:
+            datum_cols[feat].append(de_none(s[feat][i]))
+
+        # Try to merge characters if needed.
+        j = i + 1
+        datum_c_to_merge = dict.fromkeys(feats_to_merge)
+        while j < len(ptypes) and ptypes[j] not in ['consonant', 'vowel']:
+            # Attach j-th char to i-th.
+            for feat in feats_to_merge:
+                value = s[feat][j]
+                if value is not None:
+                    try:
+                        assert datum_c_to_merge[feat] is None
+                        datum_c_to_merge[feat] = value
+                    except:
+                        errors[(feat)].append(s)
+                        keep = False
+            j += 1
+        merged_ipa.append(ipa[i:j])
+        i = j
+        for feat in feats_to_merge:
+            datum_cols[feat].append(de_none(datum_c_to_merge[feat]))
+    datum = [segment, ipa, merged_ipa] + [datum_cols[feat] for feat in normal_feats + feats_to_merge]
+    if keep:
+        return datum
+    else:
+        return list()
+
+
 def merge(df, progress=False):
-    normal_feats = ['ptype', 'c_voicing', 'c_place', 'c_manner', 'v_height', 'v_backness', 'v_roundness']
-    feats_to_merge = ['diacritics', 's_stress', 's_length', 's_break', 't_level', 't_contour', 't_global']
 
     data = list()
     errors = defaultdict(list)
@@ -190,39 +285,9 @@ def merge(df, progress=False):
     if progress:
         iterator = tqdm(iterator)
     for r, s in iterator:
-        i = 0
-        ptypes = s['ptype']
         ipa = s['ipa']
-        segment = s['segment']
-        keep = True
-        datum_cols = {feat: list() for feat in normal_feats + feats_to_merge}
-        merged_ipa = list()
-        while i < len(ptypes):
-            # Get ptype and normal features first.
-            for feat in normal_feats:
-                datum_cols[feat].append(de_none(s[feat][i]))
-
-            # Try to merge characters if needed.
-            j = i + 1
-            datum_c_to_merge = dict.fromkeys(feats_to_merge)
-            while j < len(ptypes) and ptypes[j] not in ['consonant', 'vowel']:
-                # Attach j-th char to i-th.
-                for feat in feats_to_merge:
-                    value = s[feat][j]
-                    if value is not None:
-                        try:
-                            assert datum_c_to_merge[feat] is None
-                            datum_c_to_merge[feat] = value
-                        except:
-                            errors[(feat)].append(s)
-                            keep = False
-                j += 1
-            merged_ipa.append(ipa[i:j])
-            i = j
-            for feat in feats_to_merge:
-                datum_cols[feat].append(de_none(datum_c_to_merge[feat]))
-        datum = [segment, ipa, merged_ipa] + [datum_cols[feat] for feat in normal_feats + feats_to_merge]
-        if keep:
+        datum = merge_ipa(s, ipa)
+        if datum:
             data.append(datum)
 
     merged_df = pd.DataFrame(data, columns=['segment', 'ipa', 'merged_ipa'] + normal_feats + feats_to_merge)
@@ -232,19 +297,29 @@ def merge(df, progress=False):
     return merged_df
 
 
+def indexify_ipa(col: str, lst: List) -> List:
+    cat_cls = Category.get_enum(col)
+    return [getattr(cat_cls, x.replace('-', '_').upper()).value.g_idx for x in lst]
+
+
 def indexify(df, progress=False):
     for feat in Category:
         col = feat.name.lower()
         new_col = f'{col}_idx'
-        cat_cls = Category.get_enum(col)
-        df[new_col] = _apply(df[col], lambda lst: [getattr(cat_cls, x.replace(
-            '-', '_').upper()).value.g_idx for x in lst], progress=progress)
+        df[new_col] = _apply(df[col], lambda col: indexify_ipa(col, lst), progress=progress)
+
+
+def get_feat_matrix(s: Union[pd.Series, Segment]) -> torch.LongTensor:
+    arr = np.stack([s[col] for col in idx_col_names], axis=1)
+    tensor = torch.from_numpy(arr)
+    return tensor
+
+
+idx_col_names = [f'{feat.name.lower()}_idx' for feat in Category]
 
 
 def get_pth_content(df, progress=False):
-    col_names = [f'{feat.name.lower()}_idx' for feat in Category]
-
-    filtered = df[['ipa_segment', 'merged_ipa'] + col_names]
+    filtered = df[['ipa_segment', 'merged_ipa'] + idx_col_names]
 
     segments = filtered['ipa_segment'].values
     matrices = list()
@@ -252,8 +327,7 @@ def get_pth_content(df, progress=False):
     if progress:
         iterator = tqdm(iterator, total=len(filtered))
     for r, s in iterator:
-        arr = np.stack([s[col] for col in col_names], axis=1)
-        tensor = torch.from_numpy(arr)
+        tensor = get_feat_matrix(s)
         matrices.append(tensor)
     out = {
         'segments': segments,

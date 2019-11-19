@@ -5,7 +5,7 @@ import torch
 from devlib import initiate
 from arglib import add_argument, parse_args, g
 
-from xib.ipa.preprocess import (apply_all, clean_data, get_ipa_data,
+from xib.ipa.process import (apply_all, clean_data, get_ipa_data,
                                 get_pth_content, indexify, merge)
 
 if __name__ == "__main__":

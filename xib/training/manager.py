@@ -2,6 +2,8 @@ import logging
 import os
 import random
 
+import torch
+
 from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
 from dev_misc.trainlib import Metrics, set_random_seeds
@@ -51,6 +53,7 @@ class AdaptManager(Manager):
 class DecipherManager(Manager):
 
     add_argument('dev_data_path', dtype='path', msg='Path to dev data.')
+    add_argument('saved_path', dtype='path')
 
     data_loader_cls = ContinuousTextDataLoader
     trainer_cls = DecipherTrainer
@@ -62,6 +65,8 @@ class DecipherManager(Manager):
         self.model = self._get_model()
         if os.environ.get('CUDA_VISIBLE_DEVICES', False):
             self.model.cuda()
+        if g.saved_path:
+            self.model.load_state_dict(torch.load(g.saved_path)['model'])
         self.train_data_loader = self.data_loader_cls()
         dev_data_loader = ContinuousTextDataLoader(data_path=g.dev_data_path)
         self.evaluator = DecipherEvaluator(self.model, dev_data_loader)

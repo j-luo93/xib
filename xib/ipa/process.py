@@ -270,7 +270,7 @@ class Segment(BaseSegment):
         return ret
 
     def to_span(self) -> Span:
-        span = Span(str(self), 0, len(self))
+        span = Span(str(self), 0, len(self) - 1)
         return span
 
 
@@ -309,7 +309,14 @@ class SegmentWindow(BaseSegment):
         return segment[seg_idx]
 
     def to_segmentation(self) -> Segmentation:
-        spans = [segment.to_span() for segment in self._segments]
+        spans = list()
+        offset = 0
+        for segment in self._segments:
+            span = segment.to_span()
+            span.start += offset
+            span.end += offset
+            offset = span.end + 1
+            spans.append(span)
         return Segmentation(spans)
 
 

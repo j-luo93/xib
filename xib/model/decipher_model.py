@@ -1,3 +1,4 @@
+from torch.nn.modules.transformer import TransformerEncoderLayer
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
 from typing import Dict, List, Optional, Tuple
@@ -118,6 +119,25 @@ class SelfAttention(MultiheadAttention):
         pass
 
 
+class TestTransformerEncoderLayer(TransformerEncoderLayer):
+    # DEBUG(j_luo) change name pls
+
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+        super(TransformerEncoderLayer, self).__init__()
+        self.self_attn = SelfAttention(d_model, nhead, dropout=dropout)
+        # Implementation of Feedforward model
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.activation = torch.nn.functional.gelu
+
+
 @init_g_attr(default='property')
 class DecipherModel(nn.Module):
 
@@ -151,7 +171,7 @@ class DecipherModel(nn.Module):
         cat_dim = dim * self.emb_for_label.effective_num_feature_groups
         self.self_attn_layers = nn.ModuleList()
         for _ in range(num_self_attn_layers):
-            self.self_attn_layers.append(SelfAttention(cat_dim, 4, dropout=g.dropout))
+            self.self_attn_layers.append(TestTransformerEncoderLayer(cat_dim, 4, cat_dim, dropout=g.dropout))
         self.positional_embedding = PositionalEmbedding(512, cat_dim)
 
         self.label_predictor = nn.Sequential(
@@ -186,7 +206,10 @@ class DecipherModel(nn.Module):
         out = out.align_to('length', 'batch', 'char_emb_for_label')
         # DEBUG(j_luo)
         for i, layer in enumerate(self.self_attn_layers):
-            out, _ = self_attend(layer, out, f'self_attn_repr')
+            # out, _ = self_attend(layer, out, f'self_attn_repr')
+            with NoName(out, batch.source_padding):
+                out = layer(out, src_key_padding_mask=batch.source_padding)
+        out = out.refine_names('length', 'batch', None)
         logits = self.label_predictor(out)  # * 0.01  # HACK(j_luo) use 0.01 to make it smooth
         label_log_probs = logits.log_softmax(dim='label')
         label_probs = label_log_probs.exp()

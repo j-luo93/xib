@@ -1,3 +1,4 @@
+from .optim import AdamInverseSqrtWithWarmup
 import logging
 from abc import ABCMeta, abstractmethod
 from pathlib import Path
@@ -147,6 +148,13 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
         self.tracker.add_min_trackable('best_loss')
         self.tracker.add_max_trackable('best_f1')
 
+        self.optimizer = AdamInverseSqrtWithWarmup(get_trainable_params(
+            self.model, named=False), g.learning_rate, betas=(0.9, 0.98))
+
+    # # DEBUG(j_luo)
+    # def init_params(self):
+    #     pass
+
     def train(self, *args, **kwargs):
         accum_metrics = Metrics()
         while not self.tracker.is_finished('step'):
@@ -159,6 +167,7 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
                 eval_metrics = self.save(name='f1')
                 self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
                 self.tracker.update('best_f1', value=eval_metrics.f1.total)
+                logging.info(eval_metrics.get_table(title='dev'))
 
     def train_loop(self) -> Metrics:
         self.model.train()
@@ -192,7 +201,8 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
         metrics.total_loss.mean.backward()
         self.optimizer.step()
         grad_norm = get_grad_norm(self.model)
-        metrics += Metric('grad_norm', grad_norm, batch.batch_size)
+        weight = (~batch.source_padding).sum()
+        metrics += Metric('grad_norm', grad_norm * weight, weight)
         return metrics
 
 # ------------------------------------------------------------- #

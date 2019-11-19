@@ -3,6 +3,8 @@ from unittest import TestCase
 import torch
 
 from dev_misc.arglib import reset_repo
+from dev_misc.devlib.named_tensor import (patch_named_tensors,
+                                          unpatch_named_tensors)
 from xib.ipa import Name, ipa, ipax
 
 from .modules import Predictor
@@ -12,6 +14,10 @@ class TestPredictor(TestCase):
 
     def setUp(self):
         reset_repo()
+        patch_named_tensors()
+
+    def tearDown(self):
+        unpatch_named_tensors()
 
     def test_predictor_new_style(self):
         pred = Predictor(20, 'pcv', True)

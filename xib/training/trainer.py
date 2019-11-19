@@ -112,7 +112,7 @@ class LMTrainer(BaseLMRunner, BaseTrainer):
             self.check_metrics(accum_metrics)
             self.save()
 
-    def save(self, name='loss'):
+    def save(self, name='loss') -> Metrics:
         super().save()
         if self.track % self.save_interval == 0:
             metrics = self.evaluator.evaluate()
@@ -122,6 +122,7 @@ class LMTrainer(BaseLMRunner, BaseTrainer):
                 out_path = self.log_dir / 'saved.best'
                 logging.imp(f'Best model updated: new best is {getattr(self.best_metrics, name).mean:.3f}.')
                 self._save(out_path)
+            return metrics
 
 
 @init_g_attr
@@ -144,6 +145,7 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
                          g.check_interval, g.save_interval, g.log_dir, g.feat_groups)
         self.evaluator = evaluator
         self.tracker.add_min_trackable('best_loss')
+        self.tracker.add_max_trackable('best_f1')
 
     def train(self, *args, **kwargs):
         accum_metrics = Metrics()
@@ -154,9 +156,9 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
 
             self.check_metrics(accum_metrics)
             if self.tracker.step % g.save_interval == 0:
-                self.save(name='local_loss')
-                eval_metrics = self.evaluator.evaluate()
+                eval_metrics = self.save(name='f1')
                 self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
+                self.tracker.update('best_f1', value=eval_metrics.f1.total)
 
     def train_loop(self) -> Metrics:
         self.model.train()

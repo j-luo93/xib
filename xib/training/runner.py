@@ -1,7 +1,8 @@
 from dev_misc import g
-from dev_misc.devlib import get_length_mask
+from dev_misc.devlib import IT, get_length_mask
 from dev_misc.trainlib import Metric, Metrics
 from xib.data_loader import ContinuousTextIpaBatch
+from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
 from xib.ipa import should_include
 
 

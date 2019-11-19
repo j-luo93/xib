@@ -24,6 +24,10 @@ class TestSegment(TestCase):
         seg = Segment('θɹiː')
         self.assertEqual(str(seg), 'θ-ɹ-iː')
 
+    def test_getitem(self):
+        seg = Segment('θɹiː')
+        self.assertEqual(seg[2], 'iː')
+
 
 class TestSegmentWindow(TestCase):
 
@@ -47,3 +51,9 @@ class TestSegmentWindow(TestCase):
         sw = SegmentWindow([seg1, seg2])
         self.assertListEqual(sw.gold_tag_seq.cpu().numpy().tolist(), [B, I, I, B, I, I])
         self.assertEqual(str(sw), 'θ-ɹ-iː θ-ɹ-iː')
+
+    def test_getitem(self):
+        seg1 = Segment('θɹiː')
+        seg2 = Segment('θɹiː')
+        sw = SegmentWindow([seg1, seg2])
+        self.assertEqual(sw[3], 'θ')

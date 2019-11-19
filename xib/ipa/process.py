@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from dataclasses import dataclass
 from itertools import zip_longest
 from typing import Callable, Iterator, List, Sequence, TextIO, Tuple, Union
 
@@ -141,6 +142,29 @@ name2dg = {
 }
 
 
+@dataclass
+class Span:
+    value: str
+    start: int
+    end: int
+
+    def __eq__(self, other: 'Span'):
+        if not isinstance(other, Span):
+            return False
+        return self.start == other.start and self.end == other.end
+
+
+@dataclass
+class Segmentation:
+    spans: List[Span]
+
+    def __len__(self):
+        return len(self.spans)
+
+    def __iter__(self):
+        yield from self.spans
+
+
 class BaseSegment(ABC):
 
     @property
@@ -165,6 +189,10 @@ class BaseSegment(ABC):
         cls = type(self)
         return f'{cls.__name__}("{self}")'
 
+    @abstractmethod
+    def __getitem__(self, idx: int) -> str:
+        """Get the corresponding unit (merged) given the index."""
+
 
 class Segment(BaseSegment):
 
@@ -179,14 +207,19 @@ class Segment(BaseSegment):
         self._indexify()
 
     def __len__(self):
-        return len(self.feat_matrix)
+        return len(self.merged_ipa)
 
     @property
     def gold_tag_seq(self) -> LT:
         return torch.LongTensor([B] + [I] * (len(self) - 1))
 
+    @property
+    def merged_ipa_str(self) -> List[str]:
+        """Represent `merged_ipa`, a list of IPAChar, as a list of units."""
+        return [''.join(map(str, unit)) for unit in self.merged_ipa]
+
     def __str__(self):
-        return '-'.join(''.join(map(str, unit)) for unit in self.merged_ipa)
+        return '-'.join(self.merged_ipa_str)
 
     def _apply_all(self):
         for name, dg in name2dg.items():
@@ -194,7 +227,13 @@ class Segment(BaseSegment):
         if self.ptype[0] not in ['consonant', 'vowel']:
             raise ValueError('Invalid IPA string.')
 
-    def __getitem__(self, feat: str):
+    def __getitem__(self, feat_or_idx: Union[int, str]):
+        if isinstance(feat_or_idx, str):
+            return self._legacy_getitem(feat_or_idx)
+        else:
+            return self.merged_ipa_str[feat_or_idx]
+
+    def _legacy_getitem(self, feat: str):
         if self._merged:
             try:
                 return self.datum_cols[feat]
@@ -225,7 +264,14 @@ class Segment(BaseSegment):
 
     @cached_property
     def feat_matrix(self) -> LT:
-        return get_feat_matrix(self)
+        ret = get_feat_matrix(self)
+        if len(ret) != len(self):
+            raise RuntimeError(f'Feature matrix has a different length from merged_ipa.')
+        return ret
+
+    def to_span(self) -> Span:
+        span = Span(str(self), 0, len(self))
+        return span
 
 
 class SegmentWindow(BaseSegment):
@@ -247,6 +293,24 @@ class SegmentWindow(BaseSegment):
 
     def __str__(self):
         return ' '.join(str(segment) for segment in self._segments)
+
+    def __getitem__(self, idx: int):
+        if not isinstance(idx, (np.integer, int)):
+            raise TypeError(f'Expecting int/np.integer, but got {type(idx)}')
+        if idx >= len(self):
+            raise IndexError(f'Index {idx} out of bound for length {len(self)}.')
+
+        length = 0
+        for segment in self._segments:
+            length += len(segment)
+            if length > idx:
+                break
+        seg_idx = idx - (length - len(segment))
+        return segment[seg_idx]
+
+    def to_segmentation(self) -> Segmentation:
+        spans = [segment.to_span() for segment in self._segments]
+        return Segmentation(spans)
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):

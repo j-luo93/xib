@@ -17,13 +17,13 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 from dev_misc.arglib import add_argument, g, init_g_attr
 from dev_misc.devlib import BaseBatch as BaseBatchDev
 from dev_misc.devlib import (PandasDataLoader, PandasDataset, batch_class,
-                             dataclass_cuda, dataclass_size_repr,
+                             dataclass_cuda, dataclass_size_repr, get_array,
                              get_length_mask, get_range, get_tensor, get_zeros)
 from xib.families import get_all_distances, get_families
 from xib.ipa import (Category, Index, conditions, get_enum_by_cat,
                      should_include)
 
-from .ipa.process import Segment, SegmentWindow
+from xib.ipa.process import Segment, SegmentWindow
 
 
 @batch_class
@@ -184,7 +184,7 @@ class IpaDataset(Dataset):
     def __init__(self, data_path: Path):
         segments = self._get_segment_dict(data_path)
         self.data = {
-            'segments': np.asarray(list(segments.keys())),
+            'segments': get_array(list(segments.keys())),
             'matrices': [segment.feat_matrix for segment in segments.values()]
         }
         logging.info(f'Loaded {len(self)} segments in total.')
@@ -226,7 +226,7 @@ def collate_fn(batch) -> CollateReturn:
     def collate_helper(key, cls, pad=False):
         ret = [item[key] for item in batch]
         if cls is np.ndarray:
-            return np.asarray(ret)
+            return get_array(ret)
         elif cls is torch.Tensor:
             if pad:
                 ret = torch.nn.utils.rnn.pad_sequence(ret, batch_first=True)
@@ -342,7 +342,7 @@ class ContinuousTextIpaDataset(IpaDataset):
                         segment_windows.append(segment_window)
                     last_end = end
         self.data = {
-            'segments': np.asarray(segment_windows),
+            'segments': get_array(segment_windows),
             'matrices': [torch.cat([segment.feat_matrix for segment in segment_window], dim=0) for segment_window in segment_windows]
         }
         logging.info(f'Loaded {len(self)} segments in total.')
@@ -357,7 +357,6 @@ class ContinuousTextIpaDataset(IpaDataset):
 @batch_class
 class ContinuousTextIpaBatch(BaseBatch):
     gold_tag_seqs: Optional[torch.LongTensor] = None
-    orig_segments: Optional[np.ndarray] = None
     # orig_lengths: Optional[torch.Tensor] = None
     # orig_feat_matrix: Optional[torch.Tensor] = None
 

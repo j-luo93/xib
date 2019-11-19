@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -10,8 +10,8 @@ from torch.nn.modules import MultiheadAttention
 
 from dev_misc.arglib import (add_argument, g, init_g_attr,
                              not_supported_argument_value)
-from dev_misc.devlib import (dataclass_numpy, dataclass_size_repr, get_tensor,
-                             get_zeros)
+from dev_misc.devlib import (dataclass_numpy, dataclass_size_repr, get_array,
+                             get_tensor, get_zeros)
 from dev_misc.devlib.named_tensor import (NoName, expand_as, get_named_range,
                                           self_attend)
 from dev_misc.trainlib import freeze
@@ -19,6 +19,7 @@ from dev_misc.utils import cached_property
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
 from xib.ipa import Category, should_include
+from xib.ipa.process import Segmentation, Span
 
 from . import BT, FT, LT
 from .lm_model import LM
@@ -33,48 +34,52 @@ class PackedWords:
     sample_indices: LT
     word_positions: LT
     num_samples: int
-    orig_segments: InitVar[np.ndarray]
+    orig_segments: np.ndarray
 
     __repr__ = dataclass_size_repr
     numpy = dataclass_numpy
 
-    def __post_init__(self, orig_segments):
-        self._orig_segments = orig_segments
-
-    def _check_orig_segments(self):
-        if self._orig_segments is None:
-            raise RuntimeError(f'orig_segments was not passed to __init__ call.')
+    @property
+    def batch_size(self):
+        return len(self.orig_segments)
 
     @cached_property
     def segments(self) -> np.ndarray:
-        self._check_orig_segments()
         ret = list()
         for bi in self.batch_indices.cpu().numpy():
-            ret.append(self._orig_segments[bi])
-        return np.asarray(ret)
+            ret.append(self.orig_segments[bi])
+        return get_array(ret)
 
     @cached_property
     def sampled_segments(self) -> np.ndarray:
-        self._check_orig_segments()
         pw = self.numpy()
         ret = list()
         for bi, si, wps, wl in zip(pw.batch_indices, pw.sample_indices, pw.word_positions, pw.word_lengths):
-            chars = [self._orig_segments[bi][wp] for i, wp in enumerate(wps) if i < wl]
+            chars = [self.orig_segments[bi][wp] for i, wp in enumerate(wps) if i < wl]
             ret.append('-'.join(chars))
-        return np.asarray(ret)
+        return get_array(ret)
 
     @cached_property
-    def sampled_segments_by_batch(self) -> np.ndarray:
-        self._check_orig_segments()
+    def sampled_segments_by_batch(self) -> List[List[Segmentation]]:
         pw = self.numpy()
-        all_words = defaultdict(lambda: defaultdict(list))
+        all_words = [defaultdict(list) for _ in range(self.batch_size)]
         for bi, si, wps, wl in zip(pw.batch_indices, pw.sample_indices, pw.word_positions, pw.word_lengths):
-            chars = [self._orig_segments[bi][wp] for i, wp in enumerate(wps) if i < wl]
-            all_words[bi][si].append('-'.join(chars))
+            chars = list()
+            start = float('inf')
+            end = -float('inf')
+            for i, wp in enumerate(wps):
+                if i < wl:
+                    start = min(wp, start)
+                    end = max(wp, end)
+            assert start != float('inf') and end != -float('inf')
+            chars = [self.orig_segments[bi][pos] for pos in range(start, end + 1)]
+            span = Span('-'.join(chars), start, end)
+            all_words[bi][si].append(span)
         ret = list()
-        for bi in all_words:
-            ret.append([all_words[bi][si] for si in range(self.num_samples)])
-        return np.asarray(ret)
+        for bi in range(self.batch_size):
+            segmentations = [Segmentation(all_words[bi][si]) for si in range(self.num_samples)]
+            ret.append(segmentations)
+        return ret
 
     def get_segment_nlls(self, nlls: FT) -> Tuple[str, float]:
         segments = self.sampled_segments
@@ -202,7 +207,7 @@ class DecipherModel(nn.Module):
 
         # Get the lm score.
         # TODO(j_luo) unique is still a bit buggy -- BIO is the same as IIO.
-        packed_words, is_unique = self._pack(samples, batch.lengths, batch.feat_matrix, batch.segments)
+        packed_words, is_unique = self.pack(samples, batch.lengths, batch.feat_matrix, batch.segments)
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
         lm_batch = self._prepare_batch(packed_words)  # TODO(j_luo)  This is actually continous batching.
         scores = self._get_lm_scores(lm_batch)
@@ -281,7 +286,7 @@ class DecipherModel(nn.Module):
             length_name='length'
         ).cuda()
 
-    def _pack(self, samples: LT, lengths: LT, feat_matrix: LT, segments: np.ndarray) -> Tuple[PackedWords, BT]:
+    def pack(self, samples: LT, lengths: LT, feat_matrix: LT, segments: np.ndarray) -> Tuple[PackedWords, BT]:
         with torch.no_grad():
             feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
             samples = samples.align_to('batch', 'sample', 'length').int()

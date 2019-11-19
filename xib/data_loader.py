@@ -1,4 +1,3 @@
-from .ipa.process import Segment
 import logging
 import random
 import re
@@ -24,7 +23,7 @@ from xib.families import get_all_distances, get_families
 from xib.ipa import (Category, Index, conditions, get_enum_by_cat,
                      should_include)
 
-B, I, O = 0, 1, 2
+from .ipa.process import Segment, SegmentWindow
 
 
 @batch_class
@@ -183,6 +182,14 @@ class DenseIpaBatch(IpaBatch):
 class IpaDataset(Dataset):
 
     def __init__(self, data_path: Path):
+        segments = self._get_segment_dict(data_path)
+        self.data = {
+            'segments': np.asarray(list(segments.keys())),
+            'matrices': [segment.feat_matrix for segment in segments.values()]
+        }
+        logging.info(f'Loaded {len(self)} segments in total.')
+
+    def _get_segment_dict(self, data_path: Path) -> Dict[str, Segment]:
         segments = dict()
         with data_path.open('r', encoding='utf8') as fin:
             for line in fin:
@@ -190,19 +197,13 @@ class IpaDataset(Dataset):
                 for token in tokens:
                     if token not in segments:
                         segments[token] = Segment(token)
-        self.data = {
-            'segments': np.asarray(list(segments.keys())),
-            'matrices': [segment.feat_matrix for segment in segments.values()]
-        }
-        logging.info(f'Loaded {len(self)} segments in total.')
+        return segments
 
     def __len__(self):
         return len(self.data['segments'])
 
     def __getitem__(self, idx):
         segment = self.data['segments'][idx]
-        segment = re.sub(r'\s+', ' ', segment).replace(' ', '- ')
-        segment = ''.join([s[0] for s in segment.split('-')])
         matrix = self.data['matrices'][idx]
         length = len(matrix)
         return {
@@ -218,9 +219,6 @@ class CollateReturn:
     lengths: torch.LongTensor
     matrices: torch.LongTensor
     gold_tag_seqs: Optional[torch.LongTensor] = None
-    c_segments: Optional[np.ndarray] = None
-    # c_lengths: Optional[torch.Tensor] = None
-    # c_matrices: Optional[torch.Tensor] = None
 
 
 def collate_fn(batch) -> CollateReturn:
@@ -241,13 +239,12 @@ def collate_fn(batch) -> CollateReturn:
     segments = collate_helper('segment', np.ndarray)
     matrices = collate_helper('matrix', torch.Tensor, pad=True)
     lengths = collate_helper('length', torch.Tensor)
-    c_segments = gold_tag_seqs = None
+    gold_tag_seqs = None
     if 'gold_tag_seq' in batch[0]:
-        c_segments = collate_helper('c_segment', np.ndarray)
         gold_tag_seqs = collate_helper('gold_tag_seq', torch.Tensor, pad=True)
         # c_matrices = collate_helper('c_matrix', torch.Tensor, pad=True)
         # c_lengths = collate_helper('c_length', torch.Tensor)
-    return CollateReturn(segments, lengths, matrices, c_segments=c_segments, gold_tag_seqs=gold_tag_seqs)
+    return CollateReturn(segments, lengths, matrices, gold_tag_seqs=gold_tag_seqs)
 
 
 @init_g_attr
@@ -322,15 +319,38 @@ class DenseIpaDataLoader(IpaDataLoader):
 
 class ContinuousTextIpaDataset(IpaDataset):
 
+    add_argument('max_segment_length', default=10, dtype=int,
+                 msg='Max length for segments. Longer ones will be broken down into moving windows.')
+
+    def __init__(self, data_path: Path):
+        segment_dict = self._get_segment_dict(data_path)
+        segment_windows = list()
+        with data_path.open('r', encoding='utf8') as fin:
+            for line in fin:
+                tokens = line.strip().split()
+                segments = [segment_dict[token] for token in tokens]
+                lengths = np.asarray([len(segment) for segment in segments])
+                cum_lengths = np.cumsum(lengths)
+                ex_cum_lengths = np.concatenate([np.zeros([1], dtype=np.int32), cum_lengths[:-1]])
+                last_end = -1
+                end = 0
+                for start in range(len(tokens)):
+                    while end < len(tokens) and cum_lengths[end] - ex_cum_lengths[start] <= g.max_segment_length:
+                        end += 1
+                    if end > last_end:
+                        segment_window = segments[start: end]
+                        segment_windows.append(segment_window)
+                    last_end = end
+        self.data = {
+            'segments': np.asarray(segment_windows),
+            'matrices': [torch.cat([segment.feat_matrix for segment in segment_window], dim=0) for segment_window in segment_windows]
+        }
+        logging.info(f'Loaded {len(self)} segments in total.')
+
     def __getitem__(self, idx):
         ret = super().__getitem__(idx)
-        words = ret['segment'].split()
-        ret['gold_tag_seq'] = torch.LongTensor(sum([[B] + [I] * (len(word) - 1) for word in words], list()))
-        ret['c_segment'] = ''.join(words)
-        # ret['c_length'] = len(ret['gold_tag_seq'])
-        assert len(ret['matrix']) == len(ret['c_segment'])
-        # is_whitespace = torch.BoolTensor([c.isspace() for c in ret['segment']])
-        # ret['c_matrix'] = ret['matrix'][~is_whitespace]
+        ret['segment'] = SegmentWindow(ret['segment'])
+        ret['gold_tag_seq'] = ret['segment'].gold_tag_seq
         return ret
 
 
@@ -355,11 +375,10 @@ class ContinuousTextDataLoader(IpaDataLoader):
         cls = type(self)
         batch_cls = cls.batch_cls
         return batch_cls(
-            collate_return.c_segments,
+            collate_return.segments,
             collate_return.lengths,
             collate_return.matrices,
             gold_tag_seqs=collate_return.gold_tag_seqs,
-            orig_segments=collate_return.segments
         )
         # orig_lengths=collate_return.lengths,
         # orig_feat_matrix=collate_return.matrices

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from itertools import zip_longest
 from typing import Callable, Iterator, List, Sequence, TextIO, Tuple, Union
@@ -14,7 +15,11 @@ from ipapy.ipachar import (DG_C_MANNER, DG_C_PLACE, DG_C_VOICING,
 from ipapy.ipastring import IPAString
 from tqdm import tqdm
 
+from dev_misc.devlib import BT, LT
+from dev_misc.utils import cached_property
 from xib.ipa import Category
+
+B, I, O = 0, 1, 2
 
 tqdm.pandas()
 
@@ -136,7 +141,32 @@ name2dg = {
 }
 
 
-class Segment:
+class BaseSegment(ABC):
+
+    @property
+    @abstractmethod
+    def gold_tag_seq(self) -> LT:
+        pass
+
+    @cached_property
+    @abstractmethod
+    def feat_matrix(self) -> LT:
+        pass
+
+    @abstractmethod
+    def __len__(self):
+        pass
+
+    @abstractmethod
+    def __str__(self):
+        pass
+
+    def __repr__(self):
+        cls = type(self)
+        return f'{cls.__name__}("{self}")'
+
+
+class Segment(BaseSegment):
 
     def __init__(self, token: str):
         self.ipa = get_string(token)
@@ -147,7 +177,16 @@ class Segment:
         self._apply_all()
         self._merge()
         self._indexify()
-        self.feat_matrix = self._get_feat_matrix()
+
+    def __len__(self):
+        return len(self.feat_matrix)
+
+    @property
+    def gold_tag_seq(self) -> LT:
+        return torch.LongTensor([B] + [I] * (len(self) - 1))
+
+    def __str__(self):
+        return '-'.join(''.join(map(str, unit)) for unit in self.merged_ipa)
 
     def _apply_all(self):
         for name, dg in name2dg.items():
@@ -184,8 +223,30 @@ class Segment:
             for feat, value in self.datum_cols.items()
         }
 
-    def _get_feat_matrix(self) -> torch.LongTensor:
+    @cached_property
+    def feat_matrix(self) -> LT:
         return get_feat_matrix(self)
+
+
+class SegmentWindow(BaseSegment):
+
+    def __init__(self, segments: List[Segment]):
+        self._segments = segments
+
+    def __len__(self):
+        return sum(len(segment) for segment in self._segments)
+
+    @property
+    def gold_tag_seq(self) -> LT:
+        return torch.cat([segment.gold_tag_seq for segment in self._segments], dim=0)
+
+    @cached_property
+    def feat_matrix(self) -> LT:
+        matrices = [segment.feat_matrix for segment in self._segments]
+        return torch.cat(matrices, dim=0)
+
+    def __str__(self):
+        return ' '.join(str(segment) for segment in self._segments)
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):

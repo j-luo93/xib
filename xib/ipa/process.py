@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from collections import defaultdict
+from itertools import zip_longest
 from typing import Callable, Iterator, List, Sequence, TextIO, Tuple, Union
 
 import numpy as np

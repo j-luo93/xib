@@ -1,3 +1,4 @@
+from .ipa.process import Segment
 import logging
 import random
 import re
@@ -15,21 +16,19 @@ from pycountry import languages
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from dev_misc.arglib import add_argument, g, init_g_attr
-from dev_misc.devlib import (PandasDataLoader, PandasDataset, dataclass_cuda,
-                             dataclass_size_repr, get_length_mask, get_range,
-                             get_tensor, get_zeros)
+from dev_misc.devlib import BaseBatch as BaseBatchDev
+from dev_misc.devlib import (PandasDataLoader, PandasDataset, batch_class,
+                             dataclass_cuda, dataclass_size_repr,
+                             get_length_mask, get_range, get_tensor, get_zeros)
 from xib.families import get_all_distances, get_families
 from xib.ipa import (Category, Index, conditions, get_enum_by_cat,
                      should_include)
-
-# NOTE(j_luo) Batch dataclasses will inherit the customized __repr__.
-batch_class = update_wrapper(partial(dataclass, repr=False), dataclass)
 
 B, I, O = 0, 1, 2
 
 
 @batch_class
-class BaseBatch:
+class BaseBatch(BaseBatchDev):
     segments: np.ndarray
     lengths: torch.LongTensor
     # TODO(j_luo) use the plurals
@@ -183,8 +182,18 @@ class DenseIpaBatch(IpaBatch):
 
 class IpaDataset(Dataset):
 
-    def __init__(self, data_path):
-        self.data = torch.load(data_path)
+    def __init__(self, data_path: Path):
+        segments = dict()
+        with data_path.open('r', encoding='utf8') as fin:
+            for line in fin:
+                tokens = line.strip().split()
+                for token in tokens:
+                    if token not in segments:
+                        segments[token] = Segment(token)
+        self.data = {
+            'segments': np.asarray(list(segments.keys())),
+            'matrices': [segment.feat_matrix for segment in segments.values()]
+        }
         logging.info(f'Loaded {len(self)} segments in total.')
 
     def __len__(self):
@@ -311,7 +320,7 @@ class DenseIpaDataLoader(IpaDataLoader):
     batch_cls = DenseIpaBatch
 
 
-class ContinuousIpaDataset(IpaDataset):
+class ContinuousTextIpaDataset(IpaDataset):
 
     def __getitem__(self, idx):
         ret = super().__getitem__(idx)
@@ -340,7 +349,7 @@ class ContinuousTextIpaBatch(BaseBatch):
 class ContinuousTextDataLoader(IpaDataLoader):
 
     batch_cls = ContinuousTextIpaBatch
-    dataset_cls = ContinuousIpaDataset
+    dataset_cls = ContinuousTextIpaDataset
 
     def _prepare_batch(self, collate_return: CollateReturn) -> IpaBatch:
         cls = type(self)
@@ -360,14 +369,12 @@ class ContinuousTextDataLoader(IpaDataLoader):
 # ------------------------------------------------------------- #
 
 
-@dataclass
-class MetricLearningBatch:
+@batch_class
+class MetricLearningBatch(BaseBatchDev):
     lang1: np.ndarray
     lang2: np.ndarray
     normalized_score: torch.FloatTensor
     dist: torch.FloatTensor
-
-    cuda = dataclass_cuda
 
     def __post_init__(self):
         self.normalized_score = get_tensor(self.normalized_score)  # .refine_names('batch', 'feat_group')

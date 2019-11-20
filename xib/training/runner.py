@@ -43,9 +43,7 @@ class BaseDecipherRunner:
         if g.mode == 'local-supervised':
             total_loss = Metric('total_loss', local_loss.total, weight)
         elif g.mode == 'global-supervised':
-            modified_seq_log_probs = ret['seq_scores'] + (~ret['is_unique']).float() * (-999.9)
-            seq_log_probs = modified_seq_log_probs.log_softmax(dim='sample')
-            global_target_log_probs = seq_log_probs.align_to('batch', 'sample', 'seq_feat')[:, 0]
+            global_target_log_probs = ret['seq_log_probs'].align_to('batch', 'sample', 'seq_feat')[:, 0]
             global_loss = Metric('global_loss', -global_target_log_probs.sum(), weight)
             metrics += global_loss
             total_loss = Metric('total_loss', local_loss.total + global_loss.total, weight)

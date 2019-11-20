@@ -204,7 +204,6 @@ class DecipherModel(nn.Module):
         pos_emb = self.positional_embedding(positions)
         out = out + pos_emb
         out = out.align_to('length', 'batch', 'char_emb_for_label')
-        # DEBUG(j_luo)
         for i, layer in enumerate(self.self_attn_layers):
             # out, _ = self_attend(layer, out, f'self_attn_repr')
             with NoName(out, batch.source_padding):
@@ -220,7 +219,7 @@ class DecipherModel(nn.Module):
         label_probs = label_probs.rename(None).masked_scatter(mask.rename(None), source.rename(None))
         label_probs = label_probs.refine_names('length', 'batch', 'label')
 
-        if self.supervised:
+        if self.supervised and self.training:
             gold_tag_seqs = batch.gold_tag_seqs
             if gold_tag_seqs is None:
                 raise RuntimeError(f'Gold tag seqsuence must be provided in supervised mode.')
@@ -267,6 +266,10 @@ class DecipherModel(nn.Module):
                                     ret['word_score']], new_name='seq_feat')
             seq_scores = self.seq_scorer(features).squeeze(dim='score')
             ret['seq_scores'] = seq_scores
+            modified_seq_log_probs = seq_scores + (~is_unique).float() * (-999.9)
+            seq_log_probs = modified_seq_log_probs.log_softmax(dim='sample')
+            ret['seq_log_probs'] = seq_log_probs
+            ret['packed_words'] = packed_words
         return ret
 
     def _get_word_score(self, packed_words: PackedWords, batch_size: int) -> FT:

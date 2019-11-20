@@ -164,9 +164,13 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
 
             self.check_metrics(accum_metrics)
             if self.tracker.step % g.save_interval == 0:
-                eval_metrics = self.save(name='f1')
+                if g.mode == 'local-supervised':
+                    name = 'prf_local_f1'
+                else:
+                    name = 'prf_global_f1'
+                eval_metrics = self.save(name=name)
                 self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
-                self.tracker.update('best_f1', value=eval_metrics.f1.total)
+                self.tracker.update('best_f1', value=getattr(eval_metrics, name).mean)
                 logging.info(eval_metrics.get_table(title='dev'))
 
     def train_loop(self) -> Metrics:

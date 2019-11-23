@@ -2,12 +2,15 @@ from unittest import TestCase
 
 import torch
 
-from .process import Segment, B, I, O, SegmentWindow
+from dev_misc import TestCase, test_with_arguments
+
+from .process import B, I, O, Segment, SegmentWindow
 
 
 class TestSegment(TestCase):
 
     def setUp(self):
+        super().setUp()
         self.seg = Segment('θɹiː')
 
     def test_basic(self):
@@ -32,10 +35,16 @@ class TestSegment(TestCase):
         self.assertEqual(span.start, 0)
         self.assertEqual(span.end, 2)
 
+    def test_noisy(self):
+        seg = Segment('#θɹiː')
+        self.assertTrue(seg.is_noise)
+        self.assertArrayEqual(seg.gold_tag_seq, [O, O, O])
+
 
 class TestSegmentWindow(TestCase):
 
     def setUp(self):
+        super().setUp()
         seg1 = Segment('θɹiː')
         seg2 = Segment('θɹiː')
         self.sw = SegmentWindow([seg1, seg2])
@@ -58,9 +67,6 @@ class TestSegmentWindow(TestCase):
     def test_getitem(self):
         self.assertEqual(self.sw[3], 'θ')
 
-    def test_getitem(self):
-        self.assertEqual(self.sw[3], 'θ')
-
     def test_to_segmentation(self):
         segmentation = self.sw.to_segmentation()
         span1, span2 = segmentation.spans
@@ -68,3 +74,9 @@ class TestSegmentWindow(TestCase):
         self.assertEqual(span1.end, 2)
         self.assertEqual(span2.start, 3)
         self.assertEqual(span2.end, 5)
+
+    def test_noisy(self):
+        seg1 = Segment('#θɹiː')
+        seg2 = Segment('θɹiː')
+        sw = SegmentWindow([seg1, seg2])
+        self.assertArrayEqual(sw.gold_tag_seq, [O, O, O, B, I, I])

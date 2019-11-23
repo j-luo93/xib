@@ -95,7 +95,9 @@ class DecipherManager:
         self.evaluator.mode = 'global'
         self.trainer.tracker.reset_all()
         self.trainer.load(g.log_dir / 'saved.best')
-        freeze(self.model.self_attn_layers)
-        freeze(self.model.emb_for_label)
+        # freeze(self.model.self_attn_layers)
+        # freeze(self.model.positional_embedding)
+        # freeze(self.model.label_predictor)
+        # freeze(self.model.emb_for_label)
         self.trainer.set_optimizer()
         self.trainer.train(self.dl_reg)

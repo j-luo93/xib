@@ -196,9 +196,11 @@ class BaseSegment(ABC):
 
 class Segment(BaseSegment):
 
-    def __init__(self, token: str):
-        self.ipa = get_string(token)
-        self.token = token
+    def __init__(self, raw_token: str):
+        self._raw_token = raw_token
+        self.is_noise = raw_token.startswith('#')
+        self.token = raw_token[1:] if self.is_noise else raw_token
+        self.ipa = get_string(self.token)
         self._merged = False
         if len(self.ipa) == 0:
             raise ValueError('Invalid IPA string.')
@@ -211,7 +213,10 @@ class Segment(BaseSegment):
 
     @property
     def gold_tag_seq(self) -> LT:
-        return torch.LongTensor([B] + [I] * (len(self) - 1))
+        if self.is_noise:
+            return torch.LongTensor([O] * len(self))
+        else:
+            return torch.LongTensor([B] + [I] * (len(self) - 1))
 
     @property
     def merged_ipa_str(self) -> List[str]:

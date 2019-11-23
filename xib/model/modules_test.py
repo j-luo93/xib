@@ -1,7 +1,6 @@
-from unittest import TestCase
-
 import torch
 
+from dev_misc import TestCase, test_with_arguments
 from dev_misc.arglib import reset_repo
 from dev_misc.devlib.named_tensor import (patch_named_tensors,
                                           unpatch_named_tensors)
@@ -13,14 +12,12 @@ from .modules import Predictor
 class TestPredictor(TestCase):
 
     def setUp(self):
-        reset_repo()
-        patch_named_tensors()
-
-    def tearDown(self):
-        unpatch_named_tensors()
+        super().setUp()
+        test_with_arguments(hidden_size=20, feat_groups='pcv', _force=True)
 
     def test_predictor_new_style(self):
-        pred = Predictor(20, 'pcv', True)
+        test_with_arguments(new_style=True, _force=True)
+        pred = Predictor()
         h = torch.randn(32, 20)
         ret = pred(h)
         enums = {
@@ -42,7 +39,8 @@ class TestPredictor(TestCase):
         self.assertTupleEqual(ret[names['VRoundnessX']].shape, (32, 3))
 
     def test_predictor_old_style(self):
-        pred = Predictor(20, 'pcv', False)
+        test_with_arguments(new_style=False, _force=True)
+        pred = Predictor()
         h = torch.randn(32, 20)
         ret = pred(h)
         enums = {

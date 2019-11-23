@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
@@ -5,13 +6,11 @@ import numpy as np
 import pandas as pd
 import torch
 
-from dev_misc.arglib import reset_repo, test_with_arguments
+from dev_misc.arglib import g, reset_repo, test_with_arguments
 from dev_misc.devlib.named_tensor import (patch_named_tensors,
                                           unpatch_named_tensors)
 
 from .data_loader import ContinuousTextDataLoader, IpaDataLoader
-
-from pathlib import Path
 
 
 class BaseDataLoaderTestCase(TestCase):
@@ -39,9 +38,9 @@ class BaseDataLoaderTestCase(TestCase):
         mock_sampler = MagicMock()
         mock_sampler.__iter__.return_value = iter([[0, 1]])
         mock_sampler_cls.return_value = mock_sampler
-        test_with_arguments(data_path=data_path, char_per_batch=100,
+        test_with_arguments(data_path=data_path, char_per_batch=100, use_cached_pth=False,
                             num_workers=0, feat_groups='pcv', _force=True)
-        dl = dl_cls()
+        dl = dl_cls(g.data_path)
         cnt = 0
         for batch in dl:
             cnt += 1

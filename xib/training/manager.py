@@ -7,6 +7,7 @@ import torch
 from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
 from dev_misc.trainlib import Metrics, has_gpus, set_random_seeds
+from dev_misc.trainlib.trainer import freeze
 from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
                              DenseIpaDataLoader, IpaDataLoader)
 from xib.model.decipher_model import DecipherModel
@@ -84,4 +85,17 @@ class DecipherManager:
                                        eval_interval=g.eval_interval)
 
     def run(self):
+        logging.info('Running on local mode.')
+        self.evaluator.mode = 'local'
+        self.trainer.mode = 'local'
+        self.trainer.train(self.dl_reg)
+
+        logging.info('Running on global mode.')
+        self.trainer.mode = 'global'
+        self.evaluator.mode = 'global'
+        self.trainer.tracker.reset_all()
+        self.trainer.load(g.log_dir / 'saved.best')
+        freeze(self.model.self_attn_layers)
+        freeze(self.model.emb_for_label)
+        self.trainer.set_optimizer()
         self.trainer.train(self.dl_reg)

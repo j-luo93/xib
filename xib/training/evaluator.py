@@ -87,7 +87,7 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
             self.model.eval()
             accum_metrics = Metrics()
             modes = ['local']
-            if g.mode == 'global-supervised':
+            if self.mode == 'global':  # pylint: disable=no-member
                 modes.append('global')
 
             for batch in self.data_loader:
@@ -108,7 +108,8 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
 
     def predict(self, batch: ContinuousTextIpaBatch, modes: List[str]) -> Metrics:
         self.model: DecipherModel
-        ret = self.model(batch)
+        mode = 'local' if 'global' not in modes else 'global'
+        ret = self.model(batch, mode)
         metrics = Metrics()
         for mode in modes:
             if mode == 'local':

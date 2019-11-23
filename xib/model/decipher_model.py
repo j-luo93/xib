@@ -186,8 +186,12 @@ class DecipherModel(nn.Module):
         else:
             raise NotImplementedError()
 
-    def forward(self, batch: ContinuousTextIpaBatch):
+    def forward(self, batch: ContinuousTextIpaBatch, mode: str):
         bs = batch.batch_size
+        ret = dict()
+
+        # ------------------------- Local mode ------------------------- #
+
         # Get the samples of label sequences first.
         out = self.emb_for_label(batch.feat_matrix, batch.source_padding)
         positions = get_named_range(batch.feat_matrix.size('length'), name='length')
@@ -202,6 +206,13 @@ class DecipherModel(nn.Module):
         logits = self.label_predictor(out)  # * 0.01  # HACK(j_luo) use 0.01 to make it smooth
         label_log_probs = logits.log_softmax(dim='label')
         label_probs = label_log_probs.exp()
+        ret['label_probs'] = label_probs
+        ret['label_log_probs'] = label_log_probs
+        if mode == 'local':
+            return ret
+
+        # ------------------------- Global mode ------------------------ #
+
         # NOTE(j_luo) O is equivalent to None.
         mask = expand_as(batch.source_padding, label_probs)
         source = expand_as(get_tensor([0.0, 0.0, 1.0]).refine_names('label').float(), label_probs)
@@ -242,14 +253,12 @@ class DecipherModel(nn.Module):
         # Compute word score that corresponds to the number of readable words.
         word_score = self._get_word_score(packed_words, bs)
 
-        ret = {
-            'word_score': word_score,
-            'lm_score': lm_score,
-            'sample_log_probs': sample_log_probs,
-            'is_unique': is_unique,
-            'label_probs': label_probs,
-            'label_log_probs': label_log_probs,
-        }
+        ret.update(
+            word_score=word_score,
+            lm_score=lm_score,
+            sample_log_probs=sample_log_probs,
+            is_unique=is_unique,
+        )
         if g.supervised:
             # features = torch.stack([ret['lm_score'], ret['word_score']], new_name='seq_feat')
             features = torch.stack([ret['sample_log_probs'].exp(), ret['lm_score'],

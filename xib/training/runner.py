@@ -32,7 +32,7 @@ class BaseLMRunner:
 class BaseDecipherRunner:
 
     def get_metrics(self, batch: ContinuousTextIpaBatch) -> Metrics:
-        ret = self.model(batch)  # pylint: disable=no-member
+        ret = self.model(batch, self.mode)  # pylint: disable=no-member
         metrics = Metrics()
         with NoName(batch.lengths):
             length_mask = get_length_mask(batch.lengths, batch.lengths.max()).refine_names('batch', 'length')
@@ -42,9 +42,9 @@ class BaseDecipherRunner:
             local_losses = (length_mask.float().align_as(local_target_log_probs) * local_target_log_probs)
             local_loss = Metric('local_loss', -local_losses.sum(), weight)
             metrics += local_loss
-        if g.mode == 'local-supervised':
+        if self.mode == 'local':  # pylint: disable=no-member
             total_loss = Metric('total_loss', local_loss.total, weight)
-        elif g.mode == 'global-supervised':
+        elif self.mode == 'global':  # pylint: disable=no-member
             global_target_log_probs = ret['seq_log_probs'].align_to('batch', 'sample', 'seq_feat')[:, 0]
             global_loss = Metric('global_loss', -global_target_log_probs.sum(), weight)
             metrics += global_loss

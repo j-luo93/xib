@@ -86,6 +86,7 @@ class DecipherEnTest(DecipherEn):
 class DecipherEsTest(DecipherEn):
     lang = 'es'
 
+    supervised: bool = True
     dev_data_path: str = 'data/Spanish.clean.100.dev.ipa'
 
     def __post_init__(self):

@@ -144,7 +144,7 @@ class LMTrainer(BaseTrainer, BaseLMRunner):
 #         pass
 
 
-class DecipherTrainer(LMTrainer, BaseDecipherRunner):
+class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
 
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
     add_argument('concentration', default=1e-2, dtype=float, msg='concentration hyperparameter')
@@ -162,10 +162,14 @@ class DecipherTrainer(LMTrainer, BaseDecipherRunner):
         self.tracker.add_min_trackable('best_loss')
         self.tracker.add_max_trackable('best_f1')
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, mode: str = 'local', **kwargs):
         super().__init__(*args, **kwargs)
-        self.set_optimizer(AdamInverseSqrtWithWarmup,
-                           lr=g.learning_rate, betas=(0.9, 0.98))
+        self.mode = mode
+        self.set_optimizer()
+
+    def set_optimizer(self):
+        super().set_optimizer(AdamInverseSqrtWithWarmup,
+                              lr=g.learning_rate, betas=(0.9, 0.98))
 
     # # DEBUG(j_luo)
     # def init_params(self):
@@ -225,8 +229,13 @@ class DecipherTrainer(LMTrainer, BaseDecipherRunner):
         metrics += Metric('grad_norm', grad_norm * weight, weight)
         return metrics
 
+    def load(self, path: Path):
+        saved = torch.load(path)
+        self.model.load_state_dict(saved['model'])
+        logging.imp(f'Loading model from {path}.')
+
     def save(self, eval_metrics: Metrics):
-        if g.mode == 'local-supervised':
+        if self.mode == 'local':
             name = 'prf_local_f1'
         else:
             name = 'prf_global_f1'

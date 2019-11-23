@@ -6,15 +6,36 @@ import torch
 
 from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
-from dev_misc.trainlib import Metrics, set_random_seeds
-from xib.data_loader import (ContinuousTextDataLoader, DenseIpaDataLoader,
-                             IpaDataLoader)
+from dev_misc.trainlib import Metrics, has_gpus, set_random_seeds
+from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
+                             DenseIpaDataLoader, IpaDataLoader)
 from xib.model.decipher_model import DecipherModel
 from xib.model.lm_model import LM, AdaptedLM
 from xib.training.evaluator import DecipherEvaluator, LMEvaluator
+from xib.training.task import LMTask
 from xib.training.trainer import AdaptLMTrainer, DecipherTrainer, LMTrainer
 
 add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'adapt'], msg='which task to run')
+
+
+class LMManager:
+
+    def __init__(self):
+        self.model = LM()
+        if has_gpus():
+            self.model.cuda()
+
+        task = LMTask()
+        self.dl_reg = DataLoaderRegistry()
+        self.dl_reg.register_data_loader(task, g.data_path)
+        self.evaluator = LMEvaluator(self.model, self.dl_reg[task])
+        self.trainer = LMTrainer(self.model, [task], [1.0], 'total_step',
+                                 evaluator=self.evaluator,
+                                 check_interval=g.check_interval,
+                                 eval_interval=g.eval_interval)
+
+    def run(self):
+        self.trainer.train(self.dl_reg)
 
 
 class Manager:

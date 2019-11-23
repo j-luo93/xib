@@ -23,6 +23,7 @@ class LMEn(SharedConfig):
     char_per_batch: int = 2000
     num_steps: int = 10000
     window_size: int = 5
+    use_cached_pth: bool = True
 
     def __post_init__(self):
         self.data_path = f'data/phones_{self.lang}_idx.pth'
@@ -95,7 +96,7 @@ class DecipherEsTest(DecipherEn):
 @reg
 class MetricPCV(SharedConfig):
     num_epochs: int = 500
-    save_interval: int = 10
+    eval_interval: int = 10
     check_interval: int = 10
     task: str = 'metric'
     family_file_path: str = 'data/families.txt'

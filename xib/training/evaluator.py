@@ -9,6 +9,7 @@ import torch
 
 from dev_misc.arglib import init_g_attr
 from dev_misc.trainlib import Metric, Metrics
+from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from xib.data_loader import ContinuousTextIpaBatch
 from xib.ipa.process import Segmentation, Span
 from xib.model.decipher_model import DecipherModel, Segmentation, Span
@@ -22,8 +23,7 @@ class BaseEvaluator(ABC):
         self.data_loader = data_loader
 
     @abstractmethod
-    def evaluate(self):
-        pass
+    def evaluate(self): ...
 
 
 class LMEvaluator(BaseEvaluator, BaseLMRunner):

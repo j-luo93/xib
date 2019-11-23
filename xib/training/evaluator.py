@@ -7,7 +7,7 @@ from typing import List, Sequence
 import pandas as pd
 import torch
 
-from dev_misc.arglib import init_g_attr
+from dev_misc.arglib import g
 from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from xib.data_loader import ContinuousTextIpaBatch
@@ -86,10 +86,14 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
         with torch.no_grad():
             self.model.eval()
             accum_metrics = Metrics()
+            modes = ['local']
+            if g.mode == 'global-supervised':
+                modes.append('global')
+
             for batch in self.data_loader:
-                accum_metrics += self.predict(batch, ['local', 'global'])
+                accum_metrics += self.predict(batch, modes)
                 accum_metrics += self.get_metrics(batch)
-            for mode in ['local', 'global']:
+            for mode in modes:
                 exact_matches = getattr(accum_metrics, f'prf_{mode}_exact_matches').total
                 total_pred = getattr(accum_metrics, f'prf_{mode}_total_pred').total
                 total_correct = getattr(accum_metrics, f'prf_{mode}_total_correct').total

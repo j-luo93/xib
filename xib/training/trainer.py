@@ -100,7 +100,7 @@ class LMTrainer(BaseTrainer, BaseLMRunner):
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
-        self.tracker.add_min_trackable('loss')
+        self.tracker.add_min_trackable('best_loss')
 
     def train_one_step(self, dl: IpaDataLoader) -> Metrics:
         self.model.train()
@@ -130,20 +130,21 @@ class LMTrainer(BaseTrainer, BaseLMRunner):
         # if self.track % g.save_interval == 0:
         # metrics = self.evaluator.evaluate()
         # logging.info(f'New evaluation metrics is {getattr(metrics, name).mean:.3f}.')
-        new_value = eval_metrics.loss.mean.item()
-        if self.tracker.update('loss', value=new_value):
+        new_value = eval_metrics.loss.mean
+        self._save(g.log_dir / 'saved.latest')
+        if self.tracker.update('best_loss', value=new_value):
             out_path = g.log_dir / 'saved.best'
-            logging.imp(f'Best model updated: new best is {self.tracker.loss:.3f}')
+            logging.imp(f'Best model updated: new best is {self.tracker.best_loss:.3f}')
             self._save(out_path)
 
 
-class AdaptLMTrainer(LMTrainer):
+# class AdaptLMTrainer(LMTrainer):
 
-    def init_params(self):
-        pass
+#     def init_params(self):
+#         pass
 
 
-class DecipherTrainer(BaseDecipherRunner, LMTrainer):
+class DecipherTrainer(LMTrainer, BaseDecipherRunner):
 
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
     add_argument('concentration', default=1e-2, dtype=float, msg='concentration hyperparameter')
@@ -151,42 +152,47 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
     add_argument('mode', default='local-supervised', dtype=str,
                  choices=['local-supervised', 'global-supervised'], msg='training mode')
 
-    def __init__(self, model: DecipherModel, train_data_loader: ContinuousTextDataLoader, evaluator: DecipherEvaluator):
-        super().__init__(model, train_data_loader, g.num_steps, g.learning_rate,
-                         g.check_interval, g.save_interval, g.log_dir, g.feat_groups)
-        self.evaluator = evaluator
+    # def __init__(self, model: DecipherModel, train_data_loader: ContinuousTextDataLoader, evaluator: DecipherEvaluator):
+    #     super().__init__(model, train_data_loader, g.num_steps, g.learning_rate,
+    #                      g.check_interval, g.save_interval, g.log_dir, g.feat_groups)
+    #     self.evaluator = evaluator
+
+    def add_trackables(self):
+        self.tracker.add_trackable('total_step', total=g.num_steps)
         self.tracker.add_min_trackable('best_loss')
         self.tracker.add_max_trackable('best_f1')
 
-        self.optimizer = AdamInverseSqrtWithWarmup(get_trainable_params(
-            self.model, named=False), g.learning_rate, betas=(0.9, 0.98))
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.set_optimizer(AdamInverseSqrtWithWarmup,
+                           lr=g.learning_rate, betas=(0.9, 0.98))
 
     # # DEBUG(j_luo)
     # def init_params(self):
     #     pass
 
-    def train(self, *args, **kwargs):
-        accum_metrics = Metrics()
-        while not self.tracker.is_finished('step'):
-            metrics = self.train_loop(*args, **kwargs)
-            accum_metrics += metrics
-            self.tracker.update('step')
+    # def train(self, *args, **kwargs):
+    #     accum_metrics = Metrics()
+    #     while not self.tracker.is_finished('step'):
+    #         metrics = self.train_loop(*args, **kwargs)
+    #         accum_metrics += metrics
+    #         self.tracker.update('step')
 
-            self.check_metrics(accum_metrics)
-            if self.tracker.step % g.save_interval == 0:
-                if g.mode == 'local-supervised':
-                    name = 'prf_local_f1'
-                else:
-                    name = 'prf_global_f1'
-                eval_metrics = self.save(name=name)
-                self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
-                self.tracker.update('best_f1', value=getattr(eval_metrics, name).mean)
-                logging.info(eval_metrics.get_table(title='dev'))
+    #         self.check_metrics(accum_metrics)
+    #         if self.tracker.step % g.save_interval == 0:
+    #             if g.mode == 'local-supervised':
+    #                 name = 'prf_local_f1'
+    #             else:
+    #                 name = 'prf_global_f1'
+    #             eval_metrics = self.save(name=name)
+    #             self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
+    #             self.tracker.update('best_f1', value=getattr(eval_metrics, name).mean)
+    #             logging.info(eval_metrics.get_table(title='dev'))
 
-    def train_loop(self) -> Metrics:
+    def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
-        batch = next(self.iterator)
+        batch = dl.get_next_batch()
         metrics = self.get_metrics(batch)
         # modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
         # sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
@@ -218,3 +224,15 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
         weight = (~batch.source_padding).sum()
         metrics += Metric('grad_norm', grad_norm * weight, weight)
         return metrics
+
+    def save(self, eval_metrics: Metrics):
+        if g.mode == 'local-supervised':
+            name = 'prf_local_f1'
+        else:
+            name = 'prf_global_f1'
+        self._save(g.log_dir / 'saved.latest')
+        self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
+        if self.tracker.update('best_f1', value=eval_metrics[name].mean):
+            out_path = g.log_dir / 'saved.best'
+            logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
+            self._save(out_path)

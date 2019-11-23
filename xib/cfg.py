@@ -7,7 +7,6 @@ reg = Registry('cfg')
 
 @dataclass
 class SharedConfig:
-    num_workers: int = 1
     hidden_size: int = 100
     num_feature_groups: int = 14
     feat_groups: str = 'pcv'
@@ -72,6 +71,7 @@ class DecipherEn(LMEn):
     task: str = 'decipher'
     mode: str = 'local-supervised'
     learning_rate: float = 5e-4
+    use_cached_pth: bool = False
 
 
 @reg

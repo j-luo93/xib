@@ -40,7 +40,7 @@ class BaseDataLoaderTestCase(TestCase):
         mock_sampler_cls.return_value = mock_sampler
         test_with_arguments(data_path=data_path, char_per_batch=100, use_cached_pth=False,
                             num_workers=0, feat_groups='pcv', _force=True)
-        dl = dl_cls(g.data_path)
+        dl = dl_cls(g.data_path, MagicMock())
         cnt = 0
         for batch in dl:
             cnt += 1
@@ -51,6 +51,7 @@ class BaseDataLoaderTestCase(TestCase):
 class TestIpaDataLoader(BaseDataLoaderTestCase):
 
     def test_basic(self):
+        # pylint: disable=no-value-for-parameter
         self._test_routinue(IpaDataLoader, ('ab:c', 'a:bd'))
 
 
@@ -58,10 +59,12 @@ class TestContinuousIpaDataLoader(BaseDataLoaderTestCase):
 
     def test_basic(self):
         test_with_arguments(max_segment_length=10, _force=True)
+        # pylint: disable=no-value-for-parameter
         self._test_routinue(ContinuousTextDataLoader, ('ab:c', 'a:bd'))
 
     def test_window(self):
         test_with_arguments(max_segment_length=3, _force=True)
+        # pylint: disable=no-value-for-parameter
         dl = self._test_routinue(ContinuousTextDataLoader, ('ab:c ab b ac bcd b', 'a:bd'))
 
         def aeq(idx, ans):

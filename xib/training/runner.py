@@ -1,5 +1,6 @@
 from dev_misc import g
 from dev_misc.devlib import IT, get_length_mask
+from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metric, Metrics
 from xib.data_loader import ContinuousTextIpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
@@ -33,7 +34,8 @@ class BaseDecipherRunner:
     def get_metrics(self, batch: ContinuousTextIpaBatch) -> Metrics:
         ret = self.model(batch)  # pylint: disable=no-member
         metrics = Metrics()
-        length_mask = get_length_mask(batch.lengths, batch.lengths.max()).refine_names('batch', 'length')
+        with NoName(batch.lengths):
+            length_mask = get_length_mask(batch.lengths, batch.lengths.max()).refine_names('batch', 'length')
         weight = length_mask.sum()
         if 'supervised' in g.mode:
             local_target_log_probs = ret['label_log_probs'].gather('label', batch.gold_tag_seqs)

@@ -126,7 +126,7 @@ class BatchSampler(Sampler):
 class BaseIpaDataLoader(BaseDataLoader, metaclass=ABCMeta):
 
     add_argument('data_path', dtype='path', msg='path to the feat data in tsv format.')
-    add_argument('num_workers', default=5, dtype=int, msg='number of workers for the data loader')
+    add_argument('num_workers', default=0, dtype=int, msg='number of workers for the data loader')
     add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
     add_argument('new_style', default=False, dtype=bool, msg='flag to use new style ipa annotations')
 
@@ -231,6 +231,8 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
     def get_data_loader(self, task: Task, data_path: Path):
         if task.name == 'lm':
             dl = IpaDataLoader(data_path, task)
+        elif task.name == 'decipher':
+            dl = ContinuousTextDataLoader(data_path, task)
         else:
             raise NotImplementedError()
         return dl

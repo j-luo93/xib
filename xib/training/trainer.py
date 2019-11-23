@@ -1,8 +1,7 @@
-from .optim import AdamInverseSqrtWithWarmup
 import logging
 from abc import ABCMeta, abstractmethod
 from pathlib import Path
-from typing import List
+from typing import List, Union
 
 import torch
 import torch.nn as nn
@@ -12,15 +11,17 @@ from dev_misc.arglib import add_argument, g, init_g_attr
 from dev_misc.devlib import get_length_mask
 from dev_misc.trainlib import (Metric, Metrics, Tracker, Trainer,
                                get_grad_norm, get_trainable_params, log_this)
-from xib.data_loader import ContinuousTextIpaBatch, MetricLearningDataLoader
+from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
+                             IpaDataLoader)
 from xib.ipa import should_include
+from xib.model.decipher_model import DecipherModel
+from xib.model.lm_model import LM
 from xib.training import evaluator
+from xib.training.evaluator import DecipherEvaluator, LMEvaluator
+from xib.training.optim import AdamInverseSqrtWithWarmup
+from xib.training.runner import BaseDecipherRunner, BaseLMRunner
 
-from .evaluator import DecipherEvaluator
-from .runner import BaseDecipherRunner, BaseLMRunner
 
-
-@init_g_attr(default='property')
 class BaseTrainer(Trainer):
 
     add_argument('num_steps', default=10, dtype=int, msg='number of steps to train')
@@ -28,11 +29,13 @@ class BaseTrainer(Trainer):
     add_argument('check_interval', default=2, dtype=int, msg='check metrics after this many steps')
     add_argument('save_interval', default=500, dtype=int, msg='save models after this many steps')
 
-    def __init__(self, model: 'a', train_data_loader: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups):
+    def __init__(self, model: Union[LM, DecipherModel], train_data_loader: Union[ContinuousTextDataLoader, IpaDataLoader]):
         super().__init__()
-        self.tracker.add_trackable('step', total=num_steps)
+        self.model = model
+        self.train_data_loader = train_data_loader
+        self.tracker.add_trackable('step', total=g.num_steps)
         self.tracker.ready()
-        self.optimizer = optim.Adam(get_trainable_params(self.model, named=False), learning_rate)
+        self.optimizer = optim.Adam(get_trainable_params(self.model, named=False), g.learning_rate)
 
         self.init_params()
 
@@ -62,13 +65,13 @@ class BaseTrainer(Trainer):
         pass
 
     def check_metrics(self, accum_metrics: Metrics):
-        if self.track % self.check_interval == 0:
+        if self.track % g.check_interval == 0:
             logging.info(accum_metrics.get_table(f'Step: {self.track}'))
             accum_metrics.clear()
 
     def save(self):
-        if self.track % self.save_interval == 0:
-            out_path = self.log_dir / 'saved.latest'
+        if self.track % g.save_interval == 0:
+            out_path = g.log_dir / 'saved.latest'
             self._save(out_path)
 
     def _save(self, path: Path):
@@ -80,15 +83,15 @@ class BaseTrainer(Trainer):
         logging.imp(f'Model saved to {path}.')
 
 
-@init_g_attr
 class LMTrainer(BaseLMRunner, BaseTrainer):
 
     add_argument('feat_groups', default='pcvdst', dtype=str,
                  msg='what to include during training: p(type), c(onstonant), v(vowel), d(iacritics), s(tress) and t(one).')
 
-    def __init__(self, model: 'a', train_data_loader: 'a', evaluator: 'a', num_steps, learning_rate, check_interval, save_interval, log_dir, feat_groups):
+    def __init__(self, model: LM, train_data_loader: IpaDataLoader, evaluator: LMEvaluator):
         BaseTrainer.__init__(self, model, train_data_loader)
         self.best_metrics: Metrics = None
+        self.evaluator = evaluator
 
     def train_loop(self) -> Metrics:
         self.model.train()
@@ -115,18 +118,17 @@ class LMTrainer(BaseLMRunner, BaseTrainer):
 
     def save(self, name='loss') -> Metrics:
         super().save()
-        if self.track % self.save_interval == 0:
+        if self.track % g.save_interval == 0:
             metrics = self.evaluator.evaluate()
             logging.info(f'New evaluation metrics is {getattr(metrics, name).mean:.3f}.')
             if self.best_metrics is None or getattr(metrics, name).mean < getattr(self.best_metrics, name).mean:
                 self.best_metrics = metrics
-                out_path = self.log_dir / 'saved.best'
+                out_path = g.log_dir / 'saved.best'
                 logging.imp(f'Best model updated: new best is {getattr(self.best_metrics, name).mean:.3f}.')
                 self._save(out_path)
             return metrics
 
 
-@init_g_attr
 class AdaptLMTrainer(LMTrainer):
 
     def init_params(self):
@@ -141,7 +143,7 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
     add_argument('mode', default='local-supervised', dtype=str,
                  choices=['local-supervised', 'global-supervised'], msg='training mode')
 
-    def __init__(self, model, train_data_loader, evaluator):
+    def __init__(self, model: DecipherModel, train_data_loader: ContinuousTextDataLoader, evaluator: DecipherEvaluator):
         super().__init__(model, train_data_loader, g.num_steps, g.learning_rate,
                          g.check_interval, g.save_interval, g.log_dir, g.feat_groups)
         self.evaluator = evaluator
@@ -208,80 +210,3 @@ class DecipherTrainer(BaseDecipherRunner, LMTrainer):
         weight = (~batch.source_padding).sum()
         metrics += Metric('grad_norm', grad_norm * weight, weight)
         return metrics
-
-# ------------------------------------------------------------- #
-#                         Metric learner                        #
-# ------------------------------------------------------------- #
-
-
-@init_g_attr(default='property')
-class MetricLearningTrainer(BaseTrainer):
-
-    add_argument('num_epochs', default=5, dtype=int, msg='number of epochs')
-
-    def __init__(self, model: 'a', data_loader: 'a', num_epochs, learning_rate, check_interval, save_interval, log_dir):
-        Trainer.__init__(self)
-        self.tracker.add_track('epoch', total=num_epochs)
-
-    def train(self,
-              evaluator: evaluator.Evaluator,
-              train_langs: List[str],
-              dev_langs: List[str],
-              fold_idx: int) -> Metrics:
-        # Reset parameters.
-        self._init_params(init_matrix=True, init_vector=True, init_higher_tensor=True)
-        self.optimizer = optim.Adam(self.model.parameters(), self.learning_rate)
-        # Main boy.
-        accum_metrics = Metrics()
-        best_mse = None
-        while not self.tracker.is_finished('epoch'):
-            # Get data first.
-            metrics = self.train_loop(train_langs)
-            accum_metrics += metrics
-            self.tracker.update()
-
-            self.check_metrics(accum_metrics)
-
-            if self.track % self.save_interval == 0:
-                self.save(dev_langs, f'{fold_idx}.latest')
-                dev_metrics = evaluator.evaluate(dev_langs)
-                logging.info(dev_metrics.get_table(title='dev'))
-                if best_mse is None or dev_metrics.mse.mean < best_mse:
-                    best_mse = dev_metrics.mse.mean
-                    logging.imp(f'Updated best mse score: {best_mse:.3f}')
-                    self.save(dev_langs, f'{fold_idx}.best')
-        return Metric('best_mse', best_mse, 1)
-
-    def save(self, dev_langs: List[str], suffix: str):
-        out_path = self.log_dir / f'saved.{suffix}'
-        to_save = {
-            'model': self.model.state_dict(),
-            'g': g.state_dict(),
-            'dev_langs': dev_langs,
-        }
-        torch.save(to_save, out_path)
-        logging.imp(f'Model saved to {out_path}.')
-
-    def reset(self):
-        # HACK(j_luo) Need to improve trakcer api.
-        self.tracker._attrs['epoch'] = 0
-
-    def train_loop(self, train_langs: List[str]) -> Metrics:
-        fold_data_loader = self.data_loader.select(train_langs, train_langs)
-        metrics = Metrics()
-        for batch_i, batch in enumerate(fold_data_loader):
-            self.model.train()
-            self.optimizer.zero_grad()
-
-            output = self.model(batch)
-            mse = (output - batch.dist) ** 2
-            mse = Metric('mse', mse.sum(), len(batch))
-            metrics += mse
-
-            mse.mean.backward()
-            self.optimizer.step()
-        return metrics
-
-    @property
-    def track(self):
-        return self.tracker.epoch

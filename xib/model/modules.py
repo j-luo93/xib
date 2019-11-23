@@ -4,8 +4,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dev_misc.arglib import (add_argument, init_g_attr,
-                             not_supported_argument_value)
+from dev_misc import g
+from dev_misc.arglib import add_argument, not_supported_argument_value
 from dev_misc.devlib import get_range, get_tensor
 from dev_misc.devlib.named_tensor import adv_index, embed
 from dev_misc.utils import check_explicit_arg
@@ -17,34 +17,33 @@ from xib.ipa.ipax import conversions
 from . import BT, FT, LT
 
 
-def get_effective_c_idx(feat_groups):
-    if len(set(feat_groups)) != len(feat_groups):
-        raise ValueError(f'Duplicate values in feat_groups {feat_groups}.')
+def get_effective_c_idx():
+    if len(set(g.feat_groups)) != len(g.feat_groups):
+        raise ValueError(f'Duplicate values in feat_groups {g.feat_groups}.')
     c_idx = list()
-    feat_groups = set(feat_groups)
+    feat_groups = set(g.feat_groups)
     for cat in Category:
         if cat.name[0].lower() in feat_groups:
             c_idx.append(cat.value)
     return c_idx
 
 
-# TODO(j_luo) should not have init_g_attr here.
-@init_g_attr(default='property')
 class FeatEmbedding(nn.Module):
 
-    # FIXME(j_luo)  do we need it
-    # add_argument('new_style_num_features', default=0, dtype=int, msg='number features for new style ipa')
-
-    def __init__(self, feat_emb_name, group_name, char_emb_name, num_features, dim, feat_groups, num_feature_groups, new_style):
+    def __init__(self, feat_emb_name, group_name, char_emb_name):
         super().__init__()
+        self.feat_emb_name = feat_emb_name
+        self.group_name = group_name
+        self.char_emb_name = char_emb_name
+
         self.embed_layer = self._get_embeddings()
-        self.register_buffer('c_idx', get_tensor(get_effective_c_idx(feat_groups)).refine_names('chosen_feat_group'))
-        cat_enum_pairs = get_needed_categories(feat_groups, new_style=new_style, breakdown=new_style)
-        if new_style:
+        self.register_buffer('c_idx', get_tensor(get_effective_c_idx()).refine_names('chosen_feat_group'))
+        cat_enum_pairs = get_needed_categories(g.feat_groups, new_style=g.new_style, breakdown=g.new_style)
+        if g.new_style:
             self.effective_num_feature_groups = sum([e.num_groups() for e in cat_enum_pairs])
-            simple_conversions = np.zeros([num_features], dtype='int64')
+            simple_conversions = np.zeros([g.num_features], dtype='int64')
             max_len = max(len(new_feat.value) for new_feat in conversions.values() if new_feat.value.is_complex())
-            complex_conversions = np.zeros([num_features, max_len], dtype='int64')
+            complex_conversions = np.zeros([g.num_features, max_len], dtype='int64')
             for old_feat, new_feat in conversions.items():
                 if new_feat.value.is_complex():
                     l = len(new_feat.value)
@@ -57,12 +56,12 @@ class FeatEmbedding(nn.Module):
             self.effective_num_feature_groups = len(cat_enum_pairs)
 
     def _get_embeddings(self):
-        return nn.Embedding(self.num_features, self.dim)
+        return nn.Embedding(g.num_features, g.dim)
 
     def forward(self, feat_matrix: LT, padding: BT) -> FT:
         feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
         # Convert old style to new style ipa features.
-        if self.new_style:
+        if g.new_style:
             new_feat_matrix = list()
             for c_idx, one_feat_group in zip(self.c_idx.unbind(dim=self.group_name), feat_matrix.unbind(dim=self.group_name)):
                 one_feat_group = one_feat_group.rename(None)
@@ -76,24 +75,22 @@ class FeatEmbedding(nn.Module):
             feat_matrix = new_feat_matrix
         feat_emb = embed(self.embed_layer, feat_matrix, self.feat_emb_name)
         feat_emb = feat_emb.flatten([self.group_name, self.feat_emb_name], self.char_emb_name)
-        # TODO(j_luo) ugly
         feat_emb = feat_emb.align_to('batch', 'length', self.char_emb_name)
         padding = padding.align_to('batch', 'length')
         feat_emb.rename(None)[padding.rename(None)] = 0.0
         return feat_emb
 
 
-@init_g_attr(default='property')
 class DenseFeatEmbedding(FeatEmbedding):
 
     @not_supported_argument_value('new_style', True)
     def _get_embeddings(self):
         emb_dict = dict()
         for cat in Category:
-            if should_include(self.feat_groups, cat):
+            if should_include(g.feat_groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
-                emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, self.dim))
+                emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, g.dim))
         return nn.ParameterDict(emb_dict)
 
     def forward(self, dense_feat_matrices: Dict[Category, FT], padding: BT) -> FT:
@@ -109,25 +106,24 @@ class DenseFeatEmbedding(FeatEmbedding):
         return feat_emb
 
 
-@init_g_attr(default='property')
 class Encoder(nn.Module):
 
     add_argument('window_size', default=3, dtype=int, msg='window size for the cnn kernel')
     add_argument('dense_input', default=False, dtype=bool, msg='flag to dense input feature matrices')
 
-    def __init__(self, num_features, dim, window_size, hidden_size, feat_groups, dense_input):
+    def __init__(self):
         super().__init__()
 
-        emb_cls = DenseFeatEmbedding if dense_input else FeatEmbedding
+        emb_cls = DenseFeatEmbedding if g.dense_input else FeatEmbedding
         self.feat_embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb')
-        self.cat_dim = dim * self.feat_embedding.effective_num_feature_groups
+        self.cat_dim = g.dim * self.feat_embedding.effective_num_feature_groups
         # IDEA(j_luo) should I define a Rename layer?
         self.conv_layers = nn.Sequential(
-            nn.Conv1d(self.cat_dim, self.cat_dim, self.window_size, padding=self.window_size // 2)
+            nn.Conv1d(self.cat_dim, self.cat_dim, g.window_size, padding=g.window_size // 2)
         )
-        self.linear = nn.Linear(self.cat_dim, self.hidden_size)
+        self.linear = nn.Linear(self.cat_dim, g.hidden_size)
 
-    def forward(self, feat_matrix, pos_to_predict, source_padding):
+    def forward(self, feat_matrix: LT, pos_to_predict: LT, source_padding: BT) -> FT:
         bs = source_padding.size('batch')
         l = source_padding.size('length')
         feat_emb = self.feat_embedding(feat_matrix, source_padding)
@@ -148,20 +144,19 @@ class Encoder(nn.Module):
         return h
 
 
-@init_g_attr(default='property')
 class Predictor(nn.Module):
 
-    def __init__(self, hidden_size, feat_groups, new_style):
+    def __init__(self):
         super().__init__()
-        self.linear = nn.Linear(hidden_size, hidden_size)
+        self.linear = nn.Linear(g.hidden_size, g.hidden_size)
         self.feat_predictors = nn.ModuleDict()
-        for e in get_needed_categories(feat_groups, new_style=new_style, breakdown=new_style):
+        for e in get_needed_categories(g.feat_groups, new_style=g.new_style, breakdown=g.new_style):
             # NOTE(j_luo) ModuleDict can only handle str as keys.
-            self.feat_predictors[e.__name__] = nn.Linear(hidden_size, len(e))
+            self.feat_predictors[e.__name__] = nn.Linear(g.hidden_size, len(e))
         # If new_style, we need to get the necessary indices to convert the breakdown groups into the original feature groups.
-        if new_style:
+        if g.new_style:
             self.conversion_idx = dict()
-            for e in get_needed_categories(self.feat_groups, new_style=True, breakdown=False):
+            for e in get_needed_categories(g.feat_groups, new_style=True, breakdown=False):
                 if e.num_groups() > 1:
                     cat_idx = list()
                     for feat in e:
@@ -179,14 +174,14 @@ class Predictor(nn.Module):
         ret = dict()
         for name, layer in self.feat_predictors.items():
             out = layer(shared_h).refine_names(..., name)
-            if not should_predict_none(name, new_style=self.new_style):
+            if not should_predict_none(name, new_style=g.new_style):
                 f_idx = get_none_index(name)
                 out[:, f_idx] = -999.9
             ret[Name(name, 'camel')] = out
 
         # Compose probs for complex feature groups if possible.
-        if self.new_style:
-            for e in get_needed_categories(self.feat_groups, new_style=True, breakdown=False):
+        if g.new_style:
+            for e in get_needed_categories(g.feat_groups, new_style=True, breakdown=False):
                 if e.num_groups() > 1:
                     assert e not in ret
                     part_tensors = [ret[part_enum.get_name()] for part_enum in e.parts()]
@@ -206,12 +201,12 @@ class Predictor(nn.Module):
 
         # Deal with conditions for some categories
         for cat, index in conditions.items():
-            if should_include(self.feat_groups, cat):
+            if should_include(g.feat_groups, cat):
                 # Find out the exact value to be conditioned on.
                 # TODO(j_luo) ugly Category call.
                 condition_e = get_enum_by_cat(Category(index.c_idx))
-                condition_name = condition_e.__name__ + ('X' if self.new_style else '')
-                cat_name = get_enum_by_cat(cat).__name__ + ('X' if self.new_style else '')
+                condition_name = condition_e.__name__ + ('X' if g.new_style else '')
+                cat_name = get_enum_by_cat(cat).__name__ + ('X' if g.new_style else '')
 
                 condition_name = Name(condition_name, 'camel')
                 cat_name = Name(cat_name, 'camel')
@@ -224,11 +219,11 @@ class Predictor(nn.Module):
 class AdaptLayer(nn.Module):
 
     @not_supported_argument_value('new_style', True)
-    def __init__(self, feat_groups: str):
+    def __init__(self):
         super().__init__()
         param_dict = dict()
         for cat in Category:
-            if should_include(feat_groups, cat):
+            if should_include(g.feat_groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
                 param = nn.Parameter(torch.zeros(nf, nf))

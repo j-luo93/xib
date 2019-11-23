@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.nn.modules import MultiheadAttention
 
-from dev_misc.arglib import (add_argument, g, init_g_attr,
+from dev_misc.arglib import (add_argument, g,
                              not_supported_argument_value)
 from dev_misc.devlib import (dataclass_numpy, dataclass_size_repr, get_array,
                              get_tensor, get_zeros)
@@ -119,11 +119,10 @@ class SelfAttention(MultiheadAttention):
         pass
 
 
-class TestTransformerEncoderLayer(TransformerEncoderLayer):
-    # DEBUG(j_luo) change name pls
+class TransformerLayer(TransformerEncoderLayer):
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
-        super(TransformerEncoderLayer, self).__init__()
+        super().__init__(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout)
         self.self_attn = SelfAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -138,7 +137,6 @@ class TestTransformerEncoderLayer(TransformerEncoderLayer):
         self.activation = torch.nn.functional.gelu
 
 
-@init_g_attr(default='property')
 class DecipherModel(nn.Module):
 
     add_argument('adapt_mode', default='none', choices=['none'], dtype=str,
@@ -149,29 +147,21 @@ class DecipherModel(nn.Module):
     add_argument('dropout', default=0.2, dtype=float, msg='dropout rate')
 
     @not_supported_argument_value('new_style', True)
-    def __init__(self,
-                 lm_model_path,
-                 num_features,
-                 dim,
-                 adapt_mode,
-                 num_self_attn_layers,
-                 feat_groups,
-                 num_samples,
-                 supervised):
+    def __init__(self):
 
         super().__init__()
         self.lm_model = LM()
-        saved_dict = torch.load(lm_model_path)
+        saved_dict = torch.load(g.lm_model_path)
         self.lm_model.load_state_dict(saved_dict['model'])
         freeze(self.lm_model)
 
         # NOTE(j_luo) I'm keeping a separate embedding for label prediction.
         self.emb_for_label = FeatEmbedding('feat_emb_for_label', 'chosen_feat_group', 'char_emb_for_label')
 
-        cat_dim = dim * self.emb_for_label.effective_num_feature_groups
+        cat_dim = g.dim * self.emb_for_label.effective_num_feature_groups
         self.self_attn_layers = nn.ModuleList()
-        for _ in range(num_self_attn_layers):
-            self.self_attn_layers.append(TestTransformerEncoderLayer(cat_dim, 4, cat_dim, dropout=g.dropout))
+        for _ in range(g.num_self_attn_layers):
+            self.self_attn_layers.append(TransformerLayer(cat_dim, 4, cat_dim, dropout=g.dropout))
         self.positional_embedding = PositionalEmbedding(512, cat_dim)
 
         self.label_predictor = nn.Sequential(
@@ -184,14 +174,14 @@ class DecipherModel(nn.Module):
         self.label_predictor[2].refine_names('weight', ['label', 'hid_repr'])
 
         # For supervised mode, you want to use a global predictor to predict the probs for sequences.
-        if supervised:
+        if g.supervised:
             self.seq_scorer = nn.Sequential(
                 nn.Linear(3, 1),
             )
             self.seq_scorer[0].refine_names('weight', ['score', 'seq_feat'])
 
     def _adapt(self, packed_feat_matrix: LT) -> LT:
-        if self.adapt_mode == 'none':
+        if g.adapt_mode == 'none':
             return packed_feat_matrix
         else:
             raise NotImplementedError()
@@ -219,7 +209,7 @@ class DecipherModel(nn.Module):
         label_probs = label_probs.rename(None).masked_scatter(mask.rename(None), source.rename(None))
         label_probs = label_probs.refine_names('length', 'batch', 'label')
 
-        if self.supervised and self.training:
+        if g.supervised and self.training:
             gold_tag_seqs = batch.gold_tag_seqs
             if gold_tag_seqs is None:
                 raise RuntimeError(f'Gold tag seqsuence must be provided in supervised mode.')
@@ -235,7 +225,7 @@ class DecipherModel(nn.Module):
         scores = self._get_lm_scores(lm_batch)
         nlls = list()
         for cat, (nll, weight) in scores.items():
-            if should_include(self.feat_groups, cat):
+            if should_include(g.feat_groups, cat):
                 nlls.append(nll * weight)
         nlls = sum(nlls) / lm_batch.lengths  # NOTE(j_luo) Average NLL by word length
         bw = packed_words.word_lengths.size('batch_word')
@@ -260,7 +250,7 @@ class DecipherModel(nn.Module):
             'label_probs': label_probs,
             'label_log_probs': label_log_probs,
         }
-        if self.supervised:
+        if g.supervised:
             # features = torch.stack([ret['lm_score'], ret['word_score']], new_name='seq_feat')
             features = torch.stack([ret['sample_log_probs'].exp(), ret['lm_score'],
                                     ret['word_score']], new_name='seq_feat')
@@ -357,7 +347,7 @@ class DecipherModel(nn.Module):
 
         # Get packed batches.
         label_distr = Categorical(probs=label_probs.rename(None))
-        label_samples = label_distr.sample([self.num_samples]).refine_names('sample', 'batch', 'length')
+        label_samples = label_distr.sample([g.num_samples]).refine_names('sample', 'batch', 'length')
         label_samples = label_samples.align_to('batch', 'sample', 'length')
         # Add the ground truth if needed.
         if gold_tag_seqs is not None:

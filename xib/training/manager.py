@@ -8,17 +8,13 @@ from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
 from dev_misc.trainlib import Metrics, set_random_seeds
 from xib.data_loader import (ContinuousTextDataLoader, DenseIpaDataLoader,
-                             IpaDataLoader, MetricLearningDataLoader)
+                             IpaDataLoader)
 from xib.model.decipher_model import DecipherModel
 from xib.model.lm_model import LM, AdaptedLM
-from xib.model.metric_learning_model import MetricLearningBatch
-from xib.training.evaluator import Evaluator, LMEvaluator
-from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer, LMTrainer,
-                                  MetricLearningTrainer)
+from xib.training.evaluator import DecipherEvaluator, LMEvaluator
+from xib.training.trainer import AdaptLMTrainer, DecipherTrainer, LMTrainer
 
-from .evaluator import DecipherEvaluator
-
-add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'metric', 'adapt'], msg='which task to run')
+add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'adapt'], msg='which task to run')
 
 
 class Manager:
@@ -30,7 +26,7 @@ class Manager:
         self.model = self._get_model()
         if os.environ.get('CUDA_VISIBLE_DEVICES', False):
             self.model.cuda()
-        self.train_data_loader = self.data_loader_cls()
+        self.train_data_loader = self.data_loader_cls(g.data_path)
         self.evaluator = LMEvaluator(self.model, self.train_data_loader)
         self.trainer = self.trainer_cls(self.model, self.train_data_loader, self.evaluator)
 
@@ -50,7 +46,7 @@ class AdaptManager(Manager):
         return AdaptedLM()
 
 
-class DecipherManager(Manager):
+class DecipherManager:
 
     add_argument('dev_data_path', dtype='path', msg='Path to dev data.')
     add_argument('saved_path', dtype='path')
@@ -67,57 +63,7 @@ class DecipherManager(Manager):
             self.model.cuda()
         if g.saved_path:
             self.model.load_state_dict(torch.load(g.saved_path)['model'])
-        self.train_data_loader = self.data_loader_cls()
-        dev_data_loader = ContinuousTextDataLoader(data_path=g.dev_data_path)
+        self.train_data_loader = ContinuousTextDataLoader(g.data_path)
+        dev_data_loader = ContinuousTextDataLoader(g.dev_data_path)
         self.evaluator = DecipherEvaluator(self.model, dev_data_loader)
         self.trainer = self.trainer_cls(self.model, self.train_data_loader, self.evaluator)
-
-
-# ------------------------------------------------------------- #
-#                         Metric learner                        #
-# ------------------------------------------------------------- #
-
-
-@init_g_attr(default='property')
-class MetricLearningManager(Manager):
-
-    add_argument('k_fold', default=10, dtype=int, msg='number of folds for cross validation')
-
-    def __init__(self, k_fold, random_seed, data_path, feat_groups, family_file_path):
-        self.model = MetricLearningModel()
-        self.data_loader = MetricLearningDataLoader()
-        if os.environ.get('CUDA_VISIBLE_DEVICES', False):
-            self.model.cuda()
-        self.trainer = MetricLearningTrainer(self.model, self.data_loader)
-        self.evaluator = Evaluator(self.model, self.data_loader)
-
-    def train(self):
-        set_random_seeds(self.random_seed)
-        all_langs = self.data_loader.all_langs
-        num_langs = len(all_langs)
-        idx = list(range(num_langs))
-        random.shuffle(idx)
-
-        num_langs_per_fold = (num_langs + self.k_fold - 1) // self.k_fold
-
-        accum_metrics = Metrics()
-        for fold in range(self.k_fold):
-            # Get train-dev split.
-            start_idx = fold * num_langs_per_fold
-            end_idx = start_idx + num_langs_per_fold if fold < self.k_fold - 1 else num_langs
-            dev_langs = [all_langs[idx[i]] for i in range(start_idx, end_idx)]
-            logging.imp(f'dev_langs: {sorted(dev_langs)}')
-            train_langs = [all_langs[idx[i]] for i in range(num_langs) if i < start_idx or i >= end_idx]
-            assert len(set(dev_langs + train_langs)) == num_langs
-
-            self.trainer.reset()
-            best_mse = self.trainer.train(
-                self.evaluator,
-                train_langs,
-                dev_langs,
-                fold)
-
-            # Aggregate every fold.
-            accum_metrics += best_mse
-
-        logging.info(accum_metrics.get_table())

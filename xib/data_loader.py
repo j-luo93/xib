@@ -1,28 +1,20 @@
 import logging
 import random
-import re
 from abc import ABCMeta, abstractmethod
-from copy import deepcopy
 from dataclasses import dataclass, field
-from functools import partial, update_wrapper
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
 
 import numpy as np
-import pandas as pd
 import torch
-from pycountry import languages
 from torch.utils.data import DataLoader, Dataset, Sampler
 
+from dev_misc import g
 from dev_misc.arglib import add_argument, g, init_g_attr
 from dev_misc.devlib import BaseBatch as BaseBatchDev
-from dev_misc.devlib import (PandasDataLoader, PandasDataset, batch_class,
-                             dataclass_cuda, dataclass_size_repr, get_array,
-                             get_length_mask, get_range, get_tensor, get_zeros)
-from xib.families import get_all_distances, get_families
-from xib.ipa import (Category, Index, conditions, get_enum_by_cat,
-                     should_include)
-
+from dev_misc.devlib import (batch_class, dataclass_cuda, dataclass_size_repr,
+                             get_array, get_length_mask, get_range, get_zeros)
+from xib.ipa import Category, Index, conditions, get_enum_by_cat
 from xib.ipa.process import Segment, SegmentWindow
 
 
@@ -30,7 +22,6 @@ from xib.ipa.process import Segment, SegmentWindow
 class BaseBatch(BaseBatchDev):
     segments: np.ndarray
     lengths: torch.LongTensor
-    # TODO(j_luo) use the plurals
     feat_matrix: torch.LongTensor
     source_padding: torch.BoolTensor = field(init=False)
     # TODO(j_luo) This is a hack. If we have a way of inheriting names, then this is not necessary.
@@ -73,6 +64,7 @@ class BaseBatch(BaseBatchDev):
         num_splits = (self.batch_size + size - 1) // size
         inherited_init_kwargs: Dict[str, Tuple[Any, bool]] = dict()
         split_init_kwargs: Dict[str, Tuple[Any, bool]] = dict()
+        # IDEA(j_luo) Use fields function instead.
         for attr, field in self.__dataclass_fields__.items():
             anno = field.type
             value = getattr(self, attr)
@@ -181,12 +173,18 @@ class DenseIpaBatch(IpaBatch):
 
 class IpaDataset(Dataset):
 
+    add_argument('use_cached_pth', default=False, dtype=bool,
+                 msg='Flag to use precomputed pth file instead of processing the data on the file.')
+
     def __init__(self, data_path: Path):
-        segments = self._get_segment_dict(data_path)
-        self.data = {
-            'segments': get_array(list(segments.keys())),
-            'matrices': [segment.feat_matrix for segment in segments.values()]
-        }
+        if g.use_cached_pth:
+            self.data = torch.load(data_path)
+        else:
+            segments = self._get_segment_dict(data_path)
+            self.data = {
+                'segments': get_array(list(segments.keys())),
+                'matrices': [segment.feat_matrix for segment in segments.values()]
+            }
         logging.info(f'Loaded {len(self)} segments in total.')
 
     def _get_segment_dict(self, data_path: Path) -> Dict[str, Segment]:
@@ -247,11 +245,11 @@ def collate_fn(batch) -> CollateReturn:
     return CollateReturn(segments, lengths, matrices, gold_tag_seqs=gold_tag_seqs)
 
 
-@init_g_attr
 class BatchSampler(Sampler):
 
-    def __init__(self, dataset: 'a', char_per_batch: 'p', shuffle: 'p' = True):
+    def __init__(self, dataset: Dataset, shuffle: bool = True):
         self.dataset = dataset
+        self.shuffle = shuffle
         # Partition the entire dataset beforehand into batches by length.
         lengths = np.asarray(list(map(len, self.dataset.data['matrices'])))
         indices = lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
@@ -260,7 +258,7 @@ class BatchSampler(Sampler):
         i = 0
         while i < len(indices):
             max_len = lengths[indices[i]]
-            bs = char_per_batch // max_len
+            bs = g.char_per_batch // max_len
             if bs == 0:
                 raise RuntimeError(f'Batch too small!')
             self.idx_batches.append(indices[i: i + bs])
@@ -275,7 +273,6 @@ class BatchSampler(Sampler):
         yield from self.idx_batches
 
 
-@init_g_attr
 class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
 
     add_argument('data_path', dtype='path', msg='path to the feat data in tsv format.')
@@ -283,17 +280,17 @@ class BaseIpaDataLoader(DataLoader, metaclass=ABCMeta):
     add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
     add_argument('new_style', default=False, dtype=bool, msg='flag to use new style ipa annotations')
 
-    dataset_cls = None
+    dataset_cls: Type[Dataset]
 
-    def __init__(self, data_path: 'p', char_per_batch: 'p', num_workers, feat_groups: 'p'):
+    def __init__(self, data_path: Path):
         dataset = type(self).dataset_cls(data_path)
-        batch_sampler = BatchSampler(dataset, char_per_batch, shuffle=True)
+        batch_sampler = BatchSampler(dataset, shuffle=True)
         cls = type(self)
-        super().__init__(dataset, batch_sampler=batch_sampler,
-                         num_workers=num_workers, collate_fn=collate_fn)
+        super().__init__(dataset, batch_sampler=batch_sampler, pin_memory=True,
+                         num_workers=g.num_workers, collate_fn=collate_fn)
 
     @abstractmethod
-    def _prepare_batch(self):
+    def _prepare_batch(self, collate_return: CollateReturn) -> BaseBatch:
         pass
 
     def __iter__(self):
@@ -381,85 +378,3 @@ class ContinuousTextDataLoader(IpaDataLoader):
         )
         # orig_lengths=collate_return.lengths,
         # orig_feat_matrix=collate_return.matrices
-
-# ------------------------------------------------------------- #
-#                         Metric learner                        #
-# ------------------------------------------------------------- #
-
-
-@batch_class
-class MetricLearningBatch(BaseBatchDev):
-    lang1: np.ndarray
-    lang2: np.ndarray
-    normalized_score: torch.FloatTensor
-    dist: torch.FloatTensor
-
-    def __post_init__(self):
-        self.normalized_score = get_tensor(self.normalized_score)  # .refine_names('batch', 'feat_group')
-        self.dist = get_tensor(self.dist)  # .refine_names('batch')
-
-    def __len__(self):
-        return self.dist.size(0)
-
-
-def _get_metric_data(data_path: Path, feat_groups: str, family_file_path: Path) -> pd.DataFrame:
-    data = pd.read_csv(data_path, sep='\t')
-    data = pd.pivot_table(data, index=['lang1', 'lang2'], columns='category', values='normalized_score').reset_index()
-    cats = [cat.name for cat in Category if should_include(feat_groups, cat)] + ['avg']
-    cols = ['lang1', 'lang2'] + cats
-    data = data[cols]
-
-    # Get ground truth distances.
-    get_families(family_file_path)
-    dists = get_all_distances()
-
-    def _get_lang(lang: str):
-        if len(lang) == 2:
-            return languages.get(alpha_2=lang)
-        elif len(lang) == 3:
-            return languages.get(alpha_3=lang)
-        else:
-            return None
-
-    def _get_dist(lang1: str, lang2: str):
-        lang_struct1 = _get_lang(lang1)
-        lang_struct2 = _get_lang(lang2)
-        if lang_struct1 is None or lang_struct2 is None:
-            return None
-        return dists.get((lang_struct1.name, lang_struct2.name), None)
-
-    dists = [_get_dist(lang1, lang2) for lang1, lang2, *_ in data.values]
-    data['dist'] = dists
-    cols.append('dist')
-    data = data[~data['dist'].isnull()].reset_index(drop=True)
-    return data
-
-
-@init_g_attr
-class MetricLearningDataLoader(PandasDataLoader):
-
-    add_argument('family_file_path', dtype='path', msg='path to the family file')
-    add_argument('num_lang_pairs', dtype=int, default=10, msg='number of languages')
-
-    def __init__(self, data_path, num_workers, feat_groups: 'p', family_file_path: 'p', num_lang_pairs: 'p', data=None):
-        if data is None:
-            data = _get_metric_data(data_path, feat_groups, family_file_path)
-        self.all_langs = sorted(set(data['lang1']))
-        self.cats = [cat.name for cat in Category if should_include(feat_groups, cat)] + ['avg']
-        super().__init__(data, batch_size=num_lang_pairs, num_workers=num_workers)
-
-    def __iter__(self) -> MetricLearningBatch:
-        for df in super().__iter__():
-            lang1 = df['lang1'].values
-            lang2 = df['lang2'].values
-            normalized_score = get_tensor(df[self.cats].values.astype('float32'))
-            dist = get_tensor(df['dist'].values.astype('float32'))
-            return MetricLearningBatch(lang1, lang2, normalized_score, dist).cuda()
-
-    def select(self, langs1: Sequence[str], langs2: Sequence[str]) -> 'MetricLearningDataLoader':
-        all_langs1 = set(langs1)
-        all_langs2 = set(langs2)
-        data = self.dataset.data
-        mask = (data['lang1'].isin(all_langs1)) & (data['lang2'].isin(all_langs2))
-        data = data[mask].reset_index(drop=True)
-        return MetricLearningDataLoader(data=data)

@@ -13,7 +13,7 @@ class BaseLMRunner:
         total_loss = 0.0
         total_weight = 0.0
         for name, (losses, weights) in scores.items():
-            if should_include(self.feat_groups, name):
+            if should_include(g.feat_groups, name):
                 loss = (losses * weights).sum()
                 weight = weights.sum()
                 total_loss += loss
@@ -25,13 +25,13 @@ class BaseLMRunner:
 
     @property
     def track(self):
-        return self.tracker.step
+        return self.tracker.step  # pylint: disable=no-member
 
 
 class BaseDecipherRunner:
 
     def get_metrics(self, batch: ContinuousTextIpaBatch) -> Metrics:
-        ret = self.model(batch)
+        ret = self.model(batch)  # pylint: disable=no-member
         metrics = Metrics()
         length_mask = get_length_mask(batch.lengths, batch.lengths.max()).refine_names('batch', 'length')
         weight = length_mask.sum()

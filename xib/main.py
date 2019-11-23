@@ -1,9 +1,8 @@
-from cfg import reg
 from dev_misc.arglib import g, parse_args, show_args
 from dev_misc.devlib import initiate
 from dev_misc.devlib.named_tensor import patch_named_tensors
-from xib.training.manager import (AdaptManager, DecipherManager, Manager,
-                                  MetricLearningManager)
+from xib.cfg import reg
+from xib.training.manager import AdaptManager, DecipherManager, Manager
 
 
 def train():
@@ -11,8 +10,6 @@ def train():
         manager = Manager()
     elif g.task == 'adapt':
         manager = AdaptManager()
-    elif g.task == 'metric':
-        manager = MetricLearningManager()
     else:
         manager = DecipherManager()
     manager.train()

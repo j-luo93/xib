@@ -20,13 +20,12 @@ from .modules import AdaptLayer, Encoder, Predictor
 Cat = Union[Category, CategoryX]
 
 
-@init_g_attr
 class LM(nn.Module):
 
     add_argument('weighted_loss', default='', dtype=str,
                  choices=['', 'mr', 'ot'], msg='what type of weighted loss to use')
 
-    def __init__(self, new_style: 'p', weighted_loss: 'p'):
+    def __init__(self):
         super().__init__()
         self.encoder = Encoder()
         self.predictor = Predictor()
@@ -45,11 +44,11 @@ class LM(nn.Module):
         distr = self(batch)
         scores = dict()
         for name, output in distr.items():
-            i = get_index(name, new_style=self.new_style)
+            i = get_index(name, new_style=g.new_style)
             target = batch.target_feat[:, i]
             weight = batch.target_weight[:, i]
 
-            if self.weighted_loss == '':
+            if g.weighted_loss == '':
                 # log_probs = gather(output, target)
                 log_probs = output.gather(name.value, target)
                 score = -log_probs
@@ -57,7 +56,7 @@ class LM(nn.Module):
                 e = get_new_style_enum(i)
                 mat = get_tensor(e.get_distance_matrix())
                 mat = mat[target.rename(None)]
-                if self.weighted_loss == 'mr':
+                if g.weighted_loss == 'mr':
                     mat_exp = torch.where(mat > 0, (mat + 1e-8).log(), get_zeros(mat.shape).fill_(-99.9))
                     logits = mat_exp + output
                     # NOTE(j_luo) For the categories except Ptype, the sums of probs are not 1.0 (they are conditioned on certain values of Ptyle).
@@ -67,7 +66,7 @@ class LM(nn.Module):
                     none_penalty = (1e-8 + none_probs).log().align_as(output)
                     logits = torch.cat([logits, none_penalty], dim=-1)
                     score = torch.logsumexp(logits, dim=-1).exp()
-                elif self.weighted_loss == 'ot':
+                elif g.weighted_loss == 'ot':
                     if not self.training:
                         raise RuntimeError('Cannot use OT for training.')
 
@@ -101,13 +100,12 @@ class LM(nn.Module):
         return ret
 
 
-@init_g_attr(default='property')
 class AdaptedLM(LM):
 
     @not_supported_argument_value('new_style', True)
-    def __init__(self, feat_groups, lm_model_path):
+    def __init__(self):
         super().__init__()
-        saved_dict = torch.load(lm_model_path)
+        saved_dict = torch.load(g.lm_model_path)
         try:
             self.load_state_dict(saved_dict['model'])
         except RuntimeError as e:
@@ -127,7 +125,7 @@ class AdaptedLM(LM):
         freeze(self.encoder)
         freeze(self.predictor)
 
-        self.adapter = AdaptLayer(feat_groups)
+        self.adapter = AdaptLayer()
 
     def forward(self, batch: DenseIpaBatch) -> Dict[Category, FT]:
         sfm_adapted = self.adapter(batch.dense_feat_matrix)

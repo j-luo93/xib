@@ -218,7 +218,7 @@ class ContinuousTextDataLoader(IpaDataLoader):
     batch_cls = ContinuousTextIpaBatch
     dataset_cls = ContinuousTextIpaDataset
 
-    def _prepare_batch(self, collate_return: CollateReturn) -> IpaBatch:
+    def _prepare_batch(self, collate_return: CollateReturn) -> ContinuousTextIpaBatch:
         cls = type(self)
         batch_cls = cls.batch_cls
         return batch_cls(

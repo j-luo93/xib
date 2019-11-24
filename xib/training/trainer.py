@@ -239,9 +239,9 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
             name = 'dev_prf_local_f1'
         else:
             name = 'dev_prf_global_f1'
-        self._save(g.log_dir / 'saved.latest')
+        self._save(g.log_dir / f'saved.{self.mode}.latest')
         self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
         if self.tracker.update('best_f1', value=eval_metrics[name].value):
-            out_path = g.log_dir / 'saved.best'
+            out_path = g.log_dir / f'saved.{self.mode}.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
             self._save(out_path)

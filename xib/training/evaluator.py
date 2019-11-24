@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from dev_misc import add_argument, g
 from typing import Tuple
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -88,6 +90,8 @@ def get_prf_scores(predictions: List[Segmentation], ground_truths: List[Segmenta
 
 class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
 
+    add_argument('eval_max_num_samples', default=0, dtype=int, msg='Max number of samples to evaluate on.')
+
     def __init__(self, model: DecipherModel, dl_reg: DataLoaderRegistry, tasks: Sequence[DecipherTask]):
         self.model = model
         self.dl_reg = dl_reg
@@ -112,12 +116,17 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
             modes.append('global')
 
         dfs = {mode: list() for mode in modes}
+        total_num_samples = 0
         for batch in dl:
+            if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
+                logging.imp(f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
+                break
             batch_metrics, batch_dfs = self.predict(batch, modes, task)
             accum_metrics += batch_metrics
             accum_metrics += self.get_metrics(batch)
             for mode in modes:
                 dfs[mode].append(batch_dfs[mode])
+            total_num_samples += batch.batch_size
         dfs = {mode: pd.concat(dfs[mode], axis=0) for mode in modes}
         for mode, df in dfs.items():
             out_path = g.log_dir / 'predictions' / f'{task}.{mode}.{tracker.total_step}.tsv'

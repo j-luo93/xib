@@ -204,7 +204,7 @@ class DecipherModel(nn.Module):
             with NoName(out, batch.source_padding):
                 out = layer(out, src_key_padding_mask=batch.source_padding)
         out = out.refine_names('length', 'batch', None)
-        logits = self.label_predictor(out)  # * 0.01  # HACK(j_luo) use 0.01 to make it smooth
+        logits = self.label_predictor(out)
         label_log_probs = logits.log_softmax(dim='label')
         label_probs = label_log_probs.exp()
         ret['label_probs'] = label_probs
@@ -227,7 +227,11 @@ class DecipherModel(nn.Module):
                 raise RuntimeError(f'Gold tag seqsuence must be provided in supervised mode.')
         else:
             gold_tag_seqs = None
-        samples, sample_log_probs = self._sample(label_probs, batch.source_padding, gold_tag_seqs=gold_tag_seqs)
+
+        temperature = 1.0  # HACK(j_luo)
+        sampling_probs = (logits / temperature).log_softmax(dim='label').exp()
+        samples, sample_log_probs = self._sample(
+            label_probs, sampling_probs, batch.source_padding, gold_tag_seqs=gold_tag_seqs)
 
         # Get the lm score.
         # TODO(j_luo) unique is still a bit buggy -- BIO is the same as IIO.
@@ -349,14 +353,15 @@ class DecipherModel(nn.Module):
             ret = ret.view(batch_size, packed_words.num_samples).refine_names('batch', 'sample')
         return -ret  # NOTE(j_luo) NLL are losses, not scores.
 
-    def _sample(self, label_probs: FT, source_padding: FT, gold_tag_seqs: Optional[FT] = None) -> Tuple[LT, FT]:
+    def _sample(self, label_probs: FT, sampling_probs: FT, source_padding: FT, gold_tag_seqs: Optional[FT] = None) -> Tuple[LT, FT]:
         """Return samples based on `label_probs`."""
         # Ignore padded indices.
         label_probs = label_probs.align_to('batch', 'length', 'label')
+        sampling_probs = sampling_probs.align_to('batch', 'length', 'label')
         source_padding = source_padding.align_to('batch', 'length')
 
         # Get packed batches.
-        label_distr = Categorical(probs=label_probs.rename(None))
+        label_distr = Categorical(probs=sampling_probs.rename(None))
         label_samples = label_distr.sample([g.num_samples]).refine_names('sample', 'batch', 'length')
         label_samples = label_samples.align_to('batch', 'sample', 'length')
         # Add the ground truth if needed.

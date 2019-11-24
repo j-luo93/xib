@@ -248,3 +248,10 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
             out_path = g.log_dir / f'saved.{self.mode}.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
             self._save(out_path)
+
+    # DEBUG(j_luo)
+    def evaluate(self):
+        ret = super().evaluate()
+        self.model: DecipherModel
+        print(self.model.seq_scorer[0].weight)
+        return ret

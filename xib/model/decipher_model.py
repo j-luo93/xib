@@ -387,7 +387,7 @@ class DecipherModel(nn.Module):
 
             in_vocab_score = get_zeros(batch_size * packed_words.num_samples)
             if self.vocab is not None:
-                in_vocab_score.scatter_add(0, idx, packed_words.in_vocab.float().rename(None))
+                in_vocab_score.scatter_add_(0, idx, packed_words.in_vocab.float().rename(None))
                 in_vocab_score = in_vocab_score.view(
                     batch_size, packed_words.num_samples).refine_names('batch', 'sample')
 

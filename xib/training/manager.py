@@ -96,6 +96,7 @@ class DecipherManager:
             self.trainer.train(self.dl_reg)
 
         logging.info('Running on global mode.')
+        # HACK(j_luo)
         self.trainer.mode = 'global'
         self.evaluator.mode = 'global'
         self.trainer.tracker.reset_all()

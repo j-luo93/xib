@@ -157,7 +157,11 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
                 _, tag_seqs = label_log_probs.max(dim='label')
                 tag_seqs = tag_seqs.align_to('batch', 'sample', 'length').int()
                 lengths = batch.lengths.align_to('batch', 'sample').int()
-                packed_words, is_unique = self.model.pack(tag_seqs, lengths, batch.feat_matrix, batch.segments)
+                segment_list = None
+                if self.model.vocab is not None:
+                    segment_list = [segment.segment_list for segment in batch.segments]
+                packed_words, is_unique = self.model.pack(
+                    tag_seqs, lengths, batch.feat_matrix, batch.segments, segment_list=segment_list)
                 segments_by_batch = packed_words.sampled_segments_by_batch
                 # Only take the first (and only) sample.
                 predictions = [segments[0] for segments in segments_by_batch]

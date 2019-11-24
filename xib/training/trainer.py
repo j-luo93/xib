@@ -77,7 +77,8 @@ class BaseTrainer(BaseTrainerDev):
     def _save(self, path: Path):
         to_save = {
             'model': self.model.state_dict(),
-            'g': g.state_dict()
+            'g': g.state_dict(),
+            'optimizer': self.optimizer.state_dict()
         }
         torch.save(to_save, path)
         logging.imp(f'Model saved to {path}.')
@@ -229,9 +230,11 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
         metrics += Metric('grad_norm', grad_norm * weight, weight)
         return metrics
 
-    def load(self, path: Path):
+    def load(self, path: Path, load_optimizer_state: bool = False):
         saved = torch.load(path)
         self.model.load_state_dict(saved['model'])
+        if load_optimizer_state:
+            self.optimizer.load_state_dict(saved['optimizer'])
         logging.imp(f'Loading model from {path}.')
 
     def save(self, eval_metrics: Metrics):

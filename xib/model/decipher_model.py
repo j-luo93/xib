@@ -143,6 +143,7 @@ class DecipherModel(nn.Module):
                  msg='how to adapt the features from one language to another')
     add_argument('num_self_attn_layers', default=2, dtype=int, msg='number of self attention layers')
     add_argument('num_samples', default=100, dtype=int, msg='number of samples per sequence')
+    add_argument('num_heads', default=4, dtype=int, msg='Number for heads for self attention.')
     add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
     add_argument('dropout', default=0.2, dtype=float, msg='dropout rate')
 
@@ -161,7 +162,7 @@ class DecipherModel(nn.Module):
         cat_dim = g.dim * self.emb_for_label.effective_num_feature_groups
         self.self_attn_layers = nn.ModuleList()
         for _ in range(g.num_self_attn_layers):
-            self.self_attn_layers.append(TransformerLayer(cat_dim, 4, cat_dim, dropout=g.dropout))
+            self.self_attn_layers.append(TransformerLayer(cat_dim, g.num_heads, cat_dim, dropout=g.dropout))
         self.positional_embedding = PositionalEmbedding(512, cat_dim)
 
         self.label_predictor = nn.Sequential(

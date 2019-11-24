@@ -38,7 +38,7 @@ class LMEvaluator(BaseEvaluator, BaseLMRunner):
     def __init__(self, model, data_loader):
         super().__init__(model, data_loader)
 
-    def evaluate(self) -> Metrics:
+    def evaluate(self, *args) -> Metrics:  # HACK(j_luo) *args is used just comply with BaseTrainer function signature.
         with torch.no_grad():
             self.model.eval()
             all_metrics = Metrics()

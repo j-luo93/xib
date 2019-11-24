@@ -230,11 +230,15 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
         metrics += Metric('grad_norm', grad_norm * weight, weight)
         return metrics
 
-    def load(self, path: Path, load_optimizer_state: bool = False):
+    def load(self, path: Path, load_lm_model: bool = False, load_optimizer_state: bool = False, load_seq_scorer: bool = False):
         saved = torch.load(path)
         # NOTE(j_luo) Ignore lm_model.
-        saved_model_state_dict = {k: v for k, v in saved['model'].items() if not k.startswith('lm_model')}
-        self.model.load_state_dict(saved_model_state_dict, strict=False)
+        smsd = saved['model']
+        if not load_lm_model:
+            smsd = {k: v for k, v in smsd.items() if not k.startswith('lm_model')}
+        if not load_seq_scorer:
+            smsd = {k: v for k, v in smsd.items() if not k.startswith('seq_scorer')}
+        self.model.load_state_dict(smsd, strict=False)
         if load_optimizer_state:
             self.optimizer.load_state_dict(saved['optimizer'])
         logging.imp(f'Loading model from {path}.')

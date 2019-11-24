@@ -336,6 +336,13 @@ class SegmentWindow(BaseSegment):
                 spans.append(span)
         return Segmentation(spans)
 
+    @property
+    def segment_list(self) -> List[str]:
+        ret = list()
+        for segment in self._segments:
+            ret.extend(segment.merged_ipa_str)
+        return ret
+
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):
     progress_func = series.progress_apply if progress else series.apply

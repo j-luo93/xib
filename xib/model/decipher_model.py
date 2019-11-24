@@ -1,4 +1,4 @@
-from torch.nn.modules.transformer import TransformerEncoderLayer
+from typing import List
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
 from typing import Dict, List, Optional, Tuple
@@ -8,15 +8,17 @@ import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.nn.modules import MultiheadAttention
+from torch.nn.modules.transformer import TransformerEncoderLayer
 
-from dev_misc.arglib import (add_argument, g,
-                             not_supported_argument_value)
+from dev_misc.arglib import add_argument, g, not_supported_argument_value
 from dev_misc.devlib import (dataclass_numpy, dataclass_size_repr, get_array,
                              get_tensor, get_zeros)
 from dev_misc.devlib.named_tensor import (NoName, expand_as, get_named_range,
                                           self_attend)
 from dev_misc.trainlib import freeze
 from dev_misc.utils import cached_property
+from xib.check_in_vocab_impl import \
+    check_in_vocab  # pylint: disable=no-name-in-module
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
 from xib.ipa import Category, should_include
@@ -36,6 +38,7 @@ class PackedWords:
     word_positions: LT
     num_samples: int
     orig_segments: np.ndarray
+    in_vocab: Optional[BT]
 
     __repr__ = dataclass_size_repr
     numpy = dataclass_numpy
@@ -147,6 +150,8 @@ class DecipherModel(nn.Module):
     add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
     add_argument('dropout', default=0.2, dtype=float, msg='dropout rate')
     add_argument('sampling_temperature', default=1.0, dtype=float, msg='Sampling temperature')
+    add_argument('vocab_path', dtype='path',
+                 msg='Path to a vocabulary file which would provide word-level features to the  model.')
 
     @not_supported_argument_value('new_style', True)
     def __init__(self):
@@ -175,10 +180,16 @@ class DecipherModel(nn.Module):
         self.label_predictor[0].refine_names('weight', ['hid_repr', 'self_attn_repr'])
         self.label_predictor[2].refine_names('weight', ['label', 'hid_repr'])
 
+        # Use vocab feature if provided.
+        self.vocab = None
+        if g.vocab_path:
+            with open(g.vocab_path, 'r', encoding='utf8') as fin:
+                self.vocab = set(line.strip() for line in fin)
+
         # For supervised mode, you want to use a global predictor to predict the probs for sequences.
         if g.supervised:
             self.seq_scorer = nn.Sequential(
-                nn.Linear(3, 1),
+                nn.Linear(3 + (self.vocab is not None), 1),
             )
             self.seq_scorer[0].refine_names('weight', ['score', 'seq_feat'])
 
@@ -237,7 +248,11 @@ class DecipherModel(nn.Module):
 
         # Get the lm score.
         # TODO(j_luo) unique is still a bit buggy -- BIO is the same as IIO.
-        packed_words, is_unique = self.pack(samples, batch.lengths, batch.feat_matrix, batch.segments)
+        segment_list = None
+        if self.vocab is not None:
+            segment_list = [segment.segment_list for segment in batch.segments]
+        packed_words, is_unique = self.pack(samples, batch.lengths, batch.feat_matrix,
+                                            batch.segments, segment_list=segment_list)
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
         lm_batch = self._prepare_batch(packed_words)  # TODO(j_luo)  This is actually continous batching.
         scores = self._get_lm_scores(lm_batch)
@@ -250,7 +265,7 @@ class DecipherModel(nn.Module):
         p = packed_words.word_positions.size('position')
         nlls = nlls.unflatten('batch', [('batch_word', bw), ('position', p)])
         nlls = nlls.sum(dim='position')
-        lm_score = self._unpack(nlls, packed_words, bs)
+        lm_score, in_vocab_score = self._unpack(nlls, packed_words, bs)
 
         # DEBUG(j_luo)
         # print(packed_words.sampled_segments)
@@ -266,10 +281,18 @@ class DecipherModel(nn.Module):
             sample_log_probs=sample_log_probs,
             is_unique=is_unique,
         )
+
+        if self.vocab is not None:
+            ret['in_vocab_score'] = in_vocab_score
+
         if g.supervised:
             # features = torch.stack([ret['lm_score'], ret['word_score']], new_name='seq_feat')
-            features = torch.stack([ret['sample_log_probs'].exp(), ret['lm_score'],
-                                    ret['word_score']], new_name='seq_feat')
+            word_level_features = [sample_log_probs.exp(), lm_score, word_score]
+            if self.vocab is not None:
+                word_level_features.append(in_vocab_score)
+            features = torch.stack(word_level_features, new_name='seq_feat')
+            # features = torch.stack([ret['sample_log_probs'].exp(), ret['lm_score'],
+            #                         ret['word_score']], new_name='seq_feat')
             seq_scores = self.seq_scorer(features).squeeze(dim='score')
             ret['seq_scores'] = seq_scores
             modified_seq_log_probs = seq_scores + (~is_unique).float() * (-999.9)
@@ -318,7 +341,7 @@ class DecipherModel(nn.Module):
             length_name='length'
         ).cuda()
 
-    def pack(self, samples: LT, lengths: LT, feat_matrix: LT, segments: np.ndarray) -> Tuple[PackedWords, BT]:
+    def pack(self, samples: LT, lengths: LT, feat_matrix: LT, segments: np.ndarray, segment_list: Optional[List[List[str]]] = None) -> Tuple[PackedWords, BT]:
         with torch.no_grad():
             feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
             samples = samples.align_to('batch', 'sample', 'length').int()
@@ -326,6 +349,13 @@ class DecipherModel(nn.Module):
             lengths = lengths.align_to('batch', 'sample').expand(-1, ns).int()
             batch_indices, sample_indices, word_positions, word_lengths, is_unique = extract_words(
                 samples.cpu().numpy(), lengths.cpu().numpy(), num_threads=4)
+
+            in_vocab = np.zeros_like(batch_indices, dtype=np.bool)
+            if self.vocab is not None:
+                in_vocab = check_in_vocab(batch_indices, word_positions, word_lengths,
+                                          segment_list, self.vocab, num_threads=4)
+                in_vocab = get_tensor(in_vocab).refine_names('batch_word').bool()
+
             batch_indices = get_tensor(batch_indices).refine_names('batch_word').long()
             sample_indices = get_tensor(sample_indices).refine_names('batch_word').long()
             word_positions = get_tensor(word_positions).refine_names('batch_word', 'position').long()
@@ -341,19 +371,27 @@ class DecipherModel(nn.Module):
             word_feat_matrices = word_feat_matrices.refine_names('batch_word', 'position', 'feat_group')
             packed_words = PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions,
                                        ns,
-                                       segments)
+                                       segments,
+                                       in_vocab=in_vocab)
             return packed_words, is_unique
 
-    def _unpack(self, nlls: FT, packed_words: PackedWords, batch_size: int) -> FT:
+    def _unpack(self, nlls: FT, packed_words: PackedWords, batch_size: int) -> Tuple[FT, FT]:
         with torch.no_grad():
-            ret = get_zeros(batch_size * packed_words.num_samples)
+            lm_loss = get_zeros(batch_size * packed_words.num_samples)
             bi = packed_words.batch_indices
             si = packed_words.sample_indices
             idx = (bi * packed_words.num_samples + si).rename(None)
             # TODO(j_luo) ugly
-            ret.scatter_add_(0, idx, nlls.rename(None))
-            ret = ret.view(batch_size, packed_words.num_samples).refine_names('batch', 'sample')
-        return -ret  # NOTE(j_luo) NLL are losses, not scores.
+            lm_loss.scatter_add_(0, idx, nlls.rename(None))
+            lm_loss = lm_loss.view(batch_size, packed_words.num_samples).refine_names('batch', 'sample')
+
+            in_vocab_score = get_zeros(batch_size * packed_words.num_samples)
+            if self.vocab is not None:
+                in_vocab_score.scatter_add(0, idx, packed_words.in_vocab.float().rename(None))
+                in_vocab_score = in_vocab_score.view(
+                    batch_size, packed_words.num_samples).refine_names('batch', 'sample')
+
+        return -lm_loss, in_vocab_score  # NOTE(j_luo) NLL are losses, not scores.
 
     def _sample(self, label_probs: FT, sampling_probs: FT, source_padding: FT, gold_tag_seqs: Optional[FT] = None) -> Tuple[LT, FT]:
         """Return samples based on `label_probs`."""

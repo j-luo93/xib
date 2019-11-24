@@ -11,7 +11,13 @@ ext_modules = [
         ['xib/extract_words_impl.pyx'],
         extra_compile_args=['-fopenmp'],
         extra_link_args=['-fopenmp'],
-    )
+    ),
+    Extension(
+        'xib.check_in_vocab_impl',
+        ['xib/check_in_vocab_impl.pyx'],
+        extra_compile_args=['-fopenmp'],
+        extra_link_args=['-fopenmp'],
+    ),
 ]
 setup(
     name='xib',

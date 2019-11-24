@@ -87,7 +87,8 @@ class DecipherManager:
 
     def run(self):
         if g.local_model_path:
-            self.trainer.load(g.local_model_path)
+            self.trainer.load(g.local_model_path, load_lm_model=False,
+                              load_seq_scorer=False, load_optimizer_state=False)
         else:
             logging.info('Running on local mode.')
             self.evaluator.mode = 'local'
@@ -105,7 +106,7 @@ class DecipherManager:
         freeze(self.model.label_predictor)
         freeze(self.model.emb_for_label)
         # DEBUG(j_luo)
-        self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1, 0, 0]]))
+        # self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1, 0, 0]]))
 
         self.trainer.set_optimizer()
         self.trainer.train(self.dl_reg)

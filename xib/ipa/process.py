@@ -278,9 +278,10 @@ class Segment(BaseSegment):
             raise RuntimeError(f'Feature matrix has a different length from merged_ipa.')
         return ret
 
-    def to_span(self) -> Span:
-        span = Span(str(self), 0, len(self) - 1)
-        return span
+    def to_span(self) -> Optional[Span]:
+        if not self.is_noise:
+            span = Span(str(self), 0, len(self) - 1)
+            return span
 
 
 class SegmentWindow(BaseSegment):
@@ -322,10 +323,11 @@ class SegmentWindow(BaseSegment):
         offset = 0
         for segment in self._segments:
             span = segment.to_span()
-            span.start += offset
-            span.end += offset
-            offset = span.end + 1
-            spans.append(span)
+            if span is not None:
+                span.start += offset
+                span.end += offset
+                offset = span.end + 1
+                spans.append(span)
         return Segmentation(spans)
 
 

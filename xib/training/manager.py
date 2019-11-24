@@ -52,6 +52,7 @@ class DecipherManager:
 
     add_argument('dev_data_path', dtype='path', msg='Path to dev data.')
     add_argument('saved_path', dtype='path')
+    add_argument('local_model_path', dtype='path', msg='Path to a saved local model, skipping the local training phase.')
 
     # def _get_model(self):
     #     return DecipherModel()
@@ -85,16 +86,19 @@ class DecipherManager:
                                        eval_interval=g.eval_interval)
 
     def run(self):
-        logging.info('Running on local mode.')
-        self.evaluator.mode = 'local'
-        self.trainer.mode = 'local'
-        self.trainer.train(self.dl_reg)
+        if g.local_model_path:
+            self.trainer.load(g.local_model_path)
+        else:
+            logging.info('Running on local mode.')
+            self.evaluator.mode = 'local'
+            self.trainer.mode = 'local'
+            self.trainer.train(self.dl_reg)
 
         logging.info('Running on global mode.')
         self.trainer.mode = 'global'
         self.evaluator.mode = 'global'
         self.trainer.tracker.reset_all()
-        self.trainer.load(g.log_dir / 'saved.best')
+        self.trainer.load(g.log_dir / 'saved.local.best')
         # freeze(self.model.self_attn_layers)
         # freeze(self.model.positional_embedding)
         # freeze(self.model.label_predictor)

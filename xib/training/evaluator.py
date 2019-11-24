@@ -10,10 +10,12 @@ import torch
 from dev_misc.arglib import g
 from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
-from xib.data_loader import ContinuousTextIpaBatch
+from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
+                             DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
 from xib.model.decipher_model import DecipherModel, Segmentation, Span
 from xib.training.runner import BaseDecipherRunner, BaseLMRunner
+from xib.training.task import DecipherTask
 
 
 class BaseEvaluator(ABC):
@@ -65,7 +67,7 @@ class PrfScores:
         return PrfScores(self.exact_matches + other.exact_matches, self.total_correct + other.total_correct, self.total_pred + other.total_pred)
 
 
-def get_prf_scores(predictions: List[Segmentation], ground_truths: List[Segmentation], mode: str) -> Metrics:
+def get_prf_scores(predictions: List[Segmentation], ground_truths: List[Segmentation], mode: str, task: DecipherTask) -> Metrics:
     exact_matches = 0
     for pred, gt in zip(predictions, ground_truths):
         for p in pred:
@@ -74,39 +76,53 @@ def get_prf_scores(predictions: List[Segmentation], ground_truths: List[Segmenta
                     exact_matches += 1
     total_correct = sum(map(len, ground_truths))
     total_pred = sum(map(len, predictions))
-    exact_matches = Metric(f'prf_{mode}_exact_matches', exact_matches, 1.0, report_mean=False)
-    total_correct = Metric(f'prf_{mode}_total_correct', total_correct, 1.0, report_mean=False)
-    total_pred = Metric(f'prf_{mode}_total_pred', total_pred, 1.0, report_mean=False)
+    exact_matches = Metric(f'{task}_prf_{mode}_exact_matches', exact_matches, 1.0, report_mean=False)
+    total_correct = Metric(f'{task}_prf_{mode}_total_correct', total_correct, 1.0, report_mean=False)
+    total_pred = Metric(f'{task}_prf_{mode}_total_pred', total_pred, 1.0, report_mean=False)
     return Metrics(exact_matches, total_correct, total_pred)
 
 
 class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
 
+    def __init__(self, model: DecipherModel, dl_reg: DataLoaderRegistry, tasks: Sequence[DecipherTask]):
+        self.model = model
+        self.dl_reg = dl_reg
+        self.tasks = tasks
+        self.mode: str = None
+
     def evaluate(self) -> Metrics:
+        metrics = Metrics()
         with torch.no_grad():
             self.model.eval()
-            accum_metrics = Metrics()
-            modes = ['local']
-            if self.mode == 'global':  # pylint: disable=no-member
-                modes.append('global')
+            for task in self.tasks:
+                dl = self.dl_reg[task]
+                task_metrics = self._evaluate_one_data_loader(dl)
+                metrics += task_metrics
+        return metrics
 
-            for batch in self.data_loader:
-                accum_metrics += self.predict(batch, modes)
-                accum_metrics += self.get_metrics(batch)
-            for mode in modes:
-                exact_matches = getattr(accum_metrics, f'prf_{mode}_exact_matches').total
-                total_pred = getattr(accum_metrics, f'prf_{mode}_total_pred').total
-                total_correct = getattr(accum_metrics, f'prf_{mode}_total_correct').total
-                precision = exact_matches / (total_pred + 1e-8)
-                recall = exact_matches / (total_correct + 1e-8)
-                f1 = 2 * precision * recall / (precision + recall + 1e-8)
-                # HACK(j_luo) Should use report_mean = True, but `save` cannot handle .total right now.
-                accum_metrics += Metric(f'prf_{mode}_precision', precision, 1.0)
-                accum_metrics += Metric(f'prf_{mode}_recall', recall, 1.0)
-                accum_metrics += Metric(f'prf_{mode}_f1', f1, 1.0)
+    def _evaluate_one_data_loader(self, dl: ContinuousTextDataLoader) -> Metrics:
+        task = dl.task
+        accum_metrics = Metrics()
+        modes = ['local']
+        if self.mode == 'global':  # pylint: disable=no-member
+            modes.append('global')
+
+        for batch in dl:
+            accum_metrics += self.predict(batch, modes, task)
+            accum_metrics += self.get_metrics(batch)
+        for mode in modes:
+            exact_matches = getattr(accum_metrics, f'{task}_prf_{mode}_exact_matches').total
+            total_pred = getattr(accum_metrics, f'{task}_prf_{mode}_total_pred').total
+            total_correct = getattr(accum_metrics, f'{task}_prf_{mode}_total_correct').total
+            precision = exact_matches / (total_pred + 1e-8)
+            recall = exact_matches / (total_correct + 1e-8)
+            f1 = 2 * precision * recall / (precision + recall + 1e-8)
+            accum_metrics += Metric(f'{task}_prf_{mode}_precision', precision, report_mean=False)
+            accum_metrics += Metric(f'{task}_prf_{mode}_recall', recall, 1.0, report_mean=False)
+            accum_metrics += Metric(f'{task}_prf_{mode}_f1', f1, 1.0, report_mean=False)
         return accum_metrics
 
-    def predict(self, batch: ContinuousTextIpaBatch, modes: List[str]) -> Metrics:
+    def predict(self, batch: ContinuousTextIpaBatch, modes: List[str], task: DecipherTask) -> Metrics:
         self.model: DecipherModel
         mode = 'local' if 'global' not in modes else 'global'
         ret = self.model(batch, mode)
@@ -131,7 +147,7 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
             else:
                 raise ValueError(f'Unrecognized value for mode "{mode}".')
             ground_truths = [segment.to_segmentation() for segment in batch.segments]
-            prf_scores = get_prf_scores(predictions, ground_truths, mode)
+            prf_scores = get_prf_scores(predictions, ground_truths, mode, task)
             metrics += prf_scores
 
         return metrics

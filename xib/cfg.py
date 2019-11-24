@@ -96,11 +96,11 @@ class DecipherEsTest(DecipherEn):
 
 @reg
 class DecipherEsNoisyP3Test(DecipherEsTest):
-    dev_data_path: str = 'data/Spanish.clean.100.dev.noisy_p3.ipa'
+    dev_data_path: str = 'data/Spanish.ipa.noise_7500.dev'
 
     def __post_init__(self):
         super().__post_init__()
-        self.data_path = 'data/Spanish.clean.100.noisy_p3.ipa'
+        self.data_path = 'data/Spanish.ipa.noise_7500.5000'
 
 
 @reg

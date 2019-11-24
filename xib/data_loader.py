@@ -184,6 +184,9 @@ class ContinuousTextIpaDataset(IpaDataset):
                 for start in range(len(tokens)):
                     while end < len(tokens) and cum_lengths[end] - ex_cum_lengths[start] <= g.max_segment_length:
                         end += 1
+                    if end <= start:
+                        end = start + 1
+                        continue
                     if end > last_end:
                         segment_window = segments[start: end]
                         segment_windows.append(segment_window)

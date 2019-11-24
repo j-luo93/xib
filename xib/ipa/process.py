@@ -1,4 +1,5 @@
 from __future__ import annotations
+import random
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -222,6 +223,9 @@ class Segment(BaseSegment):
     def merged_ipa_str(self) -> List[str]:
         """Represent `merged_ipa`, a list of IPAChar, as a list of units."""
         return [''.join(map(str, unit)) for unit in self.merged_ipa]
+
+    def permute(self) -> str:
+        return ''.join(random.sample(self.merged_ipa_str, len(self)))
 
     def __str__(self):
         return '-'.join(self.merged_ipa_str)

@@ -72,13 +72,13 @@ class DecipherManager:
         if has_gpus():
             self.model.cuda()
 
-        train_task = DecipherTask()
-        dev_task = DecipherTask()
+        train_task = DecipherTask('train')
+        dev_task = DecipherTask('dev')
 
         self.dl_reg = DataLoaderRegistry()
         self.dl_reg.register_data_loader(train_task, g.data_path)
         self.dl_reg.register_data_loader(dev_task, g.dev_data_path)
-        self.evaluator = DecipherEvaluator(self.model, self.dl_reg[dev_task])
+        self.evaluator = DecipherEvaluator(self.model, self.dl_reg, [train_task, dev_task])
         self.trainer = DecipherTrainer(self.model, [train_task], [1.0], 'total_step',
                                        evaluator=self.evaluator,
                                        check_interval=g.check_interval,

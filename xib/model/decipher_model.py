@@ -146,6 +146,7 @@ class DecipherModel(nn.Module):
     add_argument('num_heads', default=4, dtype=int, msg='Number for heads for self attention.')
     add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
     add_argument('dropout', default=0.2, dtype=float, msg='dropout rate')
+    add_argument('sampling_temperature', default=1.0, dtype=float, msg='Sampling temperature')
 
     @not_supported_argument_value('new_style', True)
     def __init__(self):
@@ -228,7 +229,8 @@ class DecipherModel(nn.Module):
         else:
             gold_tag_seqs = None
 
-        temperature = 1.0  # HACK(j_luo)
+        # HACK(j_luo)
+        temperature = g.sampling_temperature if self.training else 0.1
         sampling_probs = (logits / temperature).log_softmax(dim='label').exp()
         samples, sample_log_probs = self._sample(
             label_probs, sampling_probs, batch.source_padding, gold_tag_seqs=gold_tag_seqs)

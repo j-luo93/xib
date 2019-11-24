@@ -232,7 +232,9 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
 
     def load(self, path: Path, load_optimizer_state: bool = False):
         saved = torch.load(path)
-        self.model.load_state_dict(saved['model'])
+        # NOTE(j_luo) Ignore lm_model.
+        saved_model_state_dict = {k: v for k, v in saved['model'].items() if not k.startswith('lm_model')}
+        self.model.load_state_dict(saved_model_state_dict, strict=False)
         if load_optimizer_state:
             self.optimizer.load_state_dict(saved['optimizer'])
         logging.imp(f'Loading model from {path}.')

@@ -438,7 +438,7 @@ def merge(df, progress=False):
         iterator = tqdm(iterator)
     for r, s in iterator:
         ipa = s['ipa']
-        datum = merge_ipa(s, ipa)
+        datum = merge_ipa(s, ipa, s['segment'])
         if datum:
             data.append(datum)
 
@@ -458,7 +458,7 @@ def indexify(df, progress=False):
     for feat in Category:
         col = feat.name.lower()
         new_col = f'{col}_idx'
-        df[new_col] = _apply(df[col], lambda col: indexify_ipa(col, lst), progress=progress)
+        df[new_col] = _apply(df[col], lambda lst, col=col: indexify_ipa(col, lst), progress=progress)
 
 
 def get_feat_matrix(s: Union[pd.Series, Segment]) -> torch.LongTensor:

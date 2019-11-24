@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from typing import Tuple
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Sequence
 
 import pandas as pd
 import torch
 
+from dev_misc import g
 from dev_misc.arglib import g
 from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
+from dev_misc.trainlib.tracker.tracker import Tracker
 from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
                              DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
@@ -90,26 +94,36 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
         self.tasks = tasks
         self.mode: str = None
 
-    def evaluate(self) -> Metrics:
+    def evaluate(self, tracker: Tracker) -> Metrics:
         metrics = Metrics()
         with torch.no_grad():
             self.model.eval()
             for task in self.tasks:
                 dl = self.dl_reg[task]
-                task_metrics = self._evaluate_one_data_loader(dl)
+                task_metrics = self._evaluate_one_data_loader(dl, tracker)
                 metrics += task_metrics
         return metrics
 
-    def _evaluate_one_data_loader(self, dl: ContinuousTextDataLoader) -> Metrics:
+    def _evaluate_one_data_loader(self, dl: ContinuousTextDataLoader, tracker: Tracker) -> Metrics:
         task = dl.task
         accum_metrics = Metrics()
         modes = ['local']
         if self.mode == 'global':  # pylint: disable=no-member
             modes.append('global')
 
+        dfs = {mode: list() for mode in modes}
         for batch in dl:
-            accum_metrics += self.predict(batch, modes, task)
+            batch_metrics, batch_dfs = self.predict(batch, modes, task)
+            accum_metrics += batch_metrics
             accum_metrics += self.get_metrics(batch)
+            for mode in modes:
+                dfs[mode].append(batch_dfs[mode])
+        dfs = {mode: pd.concat(dfs[mode], axis=0) for mode in modes}
+        for mode, df in dfs.items():
+            out_path = g.log_dir / 'predictions' / f'{task}.{mode}.{tracker.total_step}.tsv'
+            out_path.parent.mkdir(exist_ok=True, parents=True)
+            df.to_csv(out_path, index=None, sep='\t')
+
         for mode in modes:
             exact_matches = getattr(accum_metrics, f'{task}_prf_{mode}_exact_matches').total
             total_pred = getattr(accum_metrics, f'{task}_prf_{mode}_total_pred').total
@@ -122,11 +136,12 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
             accum_metrics += Metric(f'{task}_prf_{mode}_f1', f1, 1.0, report_mean=False)
         return accum_metrics
 
-    def predict(self, batch: ContinuousTextIpaBatch, modes: List[str], task: DecipherTask) -> Metrics:
+    def predict(self, batch: ContinuousTextIpaBatch, modes: List[str], task: DecipherTask) -> Tuple[Metrics, Dict[str, pd.DataFrame]]:
         self.model: DecipherModel
         mode = 'local' if 'global' not in modes else 'global'
         ret = self.model(batch, mode)
         metrics = Metrics()
+        results = dict()
         for mode in modes:
             if mode == 'local':
                 label_log_probs = ret['label_log_probs'].align_to('batch', 'length', 'label')
@@ -150,4 +165,9 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
             prf_scores = get_prf_scores(predictions, ground_truths, mode, task)
             metrics += prf_scores
 
-        return metrics
+            data = map(lambda x: map(str, x), zip(batch.segments, ground_truths, predictions))
+            df = pd.DataFrame(data, columns=['segment', 'ground_truth', 'prediction'])
+
+            results[mode] = df
+
+        return metrics, results

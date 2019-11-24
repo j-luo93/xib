@@ -87,11 +87,11 @@ class DecipherEsTest(DecipherEn):
     lang = 'es'
 
     supervised: bool = True
-    dev_data_path: str = 'data/Spanish.clean.100.dev.ipa'
+    dev_data_path: str = 'data/Spanish.ipa.dev'
 
     def __post_init__(self):
         super().__post_init__()
-        self.data_path = 'data/Spanish.clean.100.ipa'
+        self.data_path = 'data/Spanish.ipa.5000'
 
 
 @reg

@@ -154,6 +154,9 @@ class Span:
             return False
         return self.start == other.start and self.end == other.end
 
+    def __str__(self):
+        return f'{self.value}:{self.start}:{self.end}'
+
 
 @dataclass
 class Segmentation:
@@ -164,6 +167,9 @@ class Segmentation:
 
     def __iter__(self):
         yield from self.spans
+
+    def __str__(self):
+        return ' '.join([str(span) for span in self.spans])
 
 
 class BaseSegment(ABC):

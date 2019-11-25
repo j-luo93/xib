@@ -80,3 +80,8 @@ class TestSegmentWindow(TestCase):
         seg2 = Segment('θɹiː')
         sw = SegmentWindow([seg1, seg2])
         self.assertArrayEqual(sw.gold_tag_seq, [O, O, O, B, I, I])
+        spans = sw.to_segmentation().spans
+        self.assertEqual(len(spans), 1)
+        span = spans[0]
+        self.assertEqual(span.start, 3)
+        self.assertEqual(span.end, 5)

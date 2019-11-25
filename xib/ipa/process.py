@@ -332,8 +332,8 @@ class SegmentWindow(BaseSegment):
             if span is not None:
                 span.start += offset
                 span.end += offset
-                offset = span.end + 1
                 spans.append(span)
+            offset += len(segment)
         return Segmentation(spans)
 
     @property

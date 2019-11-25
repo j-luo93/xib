@@ -108,3 +108,4 @@ notebooks/
 *impl.c
 *impl.html
 *.prof
+*.cpp

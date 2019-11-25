@@ -102,10 +102,10 @@ class DecipherManager:
         self.trainer.tracker.reset_all()
         if not g.local_model_path:
             self.trainer.load(g.log_dir / 'saved.local.best')
-        freeze(self.model.self_attn_layers)
-        freeze(self.model.positional_embedding)
-        freeze(self.model.label_predictor)
-        freeze(self.model.emb_for_label)
+        # freeze(self.model.self_attn_layers)
+        # freeze(self.model.positional_embedding)
+        # freeze(self.model.label_predictor)
+        # freeze(self.model.emb_for_label)
         # DEBUG(j_luo)
         # self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1, 0, 0]]))
 

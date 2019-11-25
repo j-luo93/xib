@@ -104,6 +104,15 @@ class DecipherEsNoisyP3Test(DecipherEsTest):
 
 
 @reg
+class DecipherEsNoisyP5Test(DecipherEsTest):
+    dev_data_path: str = 'data/Spanish.ipa.noise_12500.dev'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path = 'data/Spanish.ipa.noise_12500.5000'
+
+
+@reg
 class MetricPCV(SharedConfig):
     num_epochs: int = 500
     eval_interval: int = 10

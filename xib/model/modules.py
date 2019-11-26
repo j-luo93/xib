@@ -59,7 +59,7 @@ class FeatEmbedding(nn.Module):
     def _get_embeddings(self):
         return nn.Embedding(g.num_features, g.dim)
 
-    def forward(self, feat_matrix: LT, padding: BT) -> FT:
+    def forward(self, feat_matrix: LT, padding: BT, masked_positions: Optional[LT] = None) -> FT:
         feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
         # Convert old style to new style ipa features.
         if g.new_style:
@@ -79,6 +79,13 @@ class FeatEmbedding(nn.Module):
         feat_emb = feat_emb.align_to('batch', 'length', self.char_emb_name)
         padding = padding.align_to('batch', 'length')
         feat_emb.rename(None)[padding.rename(None)] = 0.0
+
+        if masked_positions is not None:
+            batch_i = get_range(padding.size('batch'), 1, 0)
+            feat_emb = feat_emb.align_to('batch', 'char_emb', 'length')
+            # feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
+            # TODO(j_luo) ugly
+            feat_emb.rename(None)[batch_i, :, masked_positions.rename(None)] = 0.0
         return feat_emb
 
 
@@ -127,12 +134,8 @@ class Encoder(nn.Module):
     def forward(self, feat_matrix: LT, pos_to_predict: LT, source_padding: BT) -> FT:
         bs = source_padding.size('batch')
         l = source_padding.size('length')
-        feat_emb = self.feat_embedding(feat_matrix, source_padding)
-        feat_emb = feat_emb.align_to('batch', 'char_emb', 'length')
-        # feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
         batch_i = get_range(bs, 1, 0)
-        # TODO(j_luo) ugly
-        feat_emb.rename(None)[batch_i, :, pos_to_predict.rename(None)] = 0.0
+        feat_emb = self.feat_embedding(feat_matrix, source_padding, masked_positions=pos_to_predict)
         output = self.conv_layers(feat_emb.rename(None))
         output = output.refine_names('batch', 'char_conv_repr', 'length')  # size: bs x D x l
         output = self.linear(output.align_to(..., 'char_conv_repr'))  # size: bs x l x n_hid

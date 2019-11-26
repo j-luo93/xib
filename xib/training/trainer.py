@@ -210,6 +210,8 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
         batch = dl.get_next_batch()
         ret = self.model(batch, 'local')
         out = ret['out']
+        out = out.refine_names(..., 'dim')
+        out = out.gather('length', batch.pos_to_predict)
         distr = self.model.predictor(out)
         scores = LM.score_distr(self.model, distr, batch)  # HACK(j_luo)
         metrics = LMTrainer.analyze_scores(self, scores)

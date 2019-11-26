@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from dev_misc.arglib import Registry
+from dev_misc.utils import buggy
 
 reg = Registry('cfg')
 
@@ -106,6 +107,25 @@ class DecipherEsNoisyP3Test(DecipherEsTest):
 @reg
 class DecipherEsNoisyP5Test(DecipherEsTest):
     dev_data_path: str = 'data/Spanish.ipa.noise_12500.dev'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path = 'data/Spanish.ipa.noise_12500.5000'
+
+
+@buggy
+@reg
+class DecipherEsNoisyItalianP5Test(DecipherEsTest):
+    dev_data_path: str = 'data/Spanish.Italian_p5.ipa.dev'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path = 'data/Spanish.Italian_p5.ipa.5000'
+
+
+@reg
+class DecipherEsNoisyGermanP5Test(DecipherEsTest):
+    dev_data_path: str = 'data/Spanish.Italian_p5.ipa.dev'
 
     def __post_init__(self):
         super().__post_init__()

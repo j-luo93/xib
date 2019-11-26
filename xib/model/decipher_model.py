@@ -1,7 +1,6 @@
 from collections import defaultdict
-from xib.model.modules import Predictor
 from dataclasses import InitVar, dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -22,7 +21,8 @@ from xib.check_in_vocab_impl import \
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
 from xib.ipa import Category, should_include
-from xib.ipa.process import Segmentation, Span, O
+from xib.ipa.process import O, Segmentation, Span
+from xib.model.modules import Predictor
 
 from . import BT, FT, LT
 from .lm_model import LM
@@ -106,7 +106,7 @@ class PositionalEmbedding(nn.Module):
     def forward(self, positions: LT):
         with NoName(self.embeddings, positions):
             ret = self.embeddings[positions]
-        new_names = positions.names + ('char_emb_for_label', )
+        new_names = positions.names + ('char_emb', )
         return ret.refine_names(*new_names)
 
 
@@ -164,7 +164,7 @@ class DecipherModel(nn.Module):
         freeze(self.lm_model)
 
         # NOTE(j_luo) I'm keeping a separate embedding for label prediction.
-        self.emb_for_label = FeatEmbedding('feat_emb_for_label', 'chosen_feat_group', 'char_emb_for_label')
+        self.emb_for_label = FeatEmbedding('feat_emb_for_label', 'chosen_feat_group', 'char_emb')
 
         cat_dim = g.dim * self.emb_for_label.effective_num_feature_groups
         self.self_attn_layers = nn.ModuleList()
@@ -204,18 +204,23 @@ class DecipherModel(nn.Module):
         else:
             raise NotImplementedError()
 
-    def forward(self, batch: ContinuousTextIpaBatch, mode: str):
+    def forward(self, batch: Union[ContinuousTextIpaBatch, IpaBatch], mode: str):
         bs = batch.batch_size
         ret = dict()
 
         # ------------------------- Local mode ------------------------- #
 
         # Get the samples of label sequences first.
-        out = self.emb_for_label(batch.feat_matrix, batch.source_padding)
+        # HACK(j_luo)
+        masked_positions = None
+        if isinstance(batch, IpaBatch):
+            masked_positions = batch.pos_to_predict
+        out = self.emb_for_label(batch.feat_matrix, batch.source_padding, masked_positions=masked_positions)
+
         positions = get_named_range(batch.feat_matrix.size('length'), name='length')
-        pos_emb = self.positional_embedding(positions)
+        pos_emb = self.positional_embedding(positions).align_as(out)
         out = out + pos_emb
-        out = out.align_to('length', 'batch', 'char_emb_for_label')
+        out = out.align_to('length', 'batch', 'char_emb')
         for i, layer in enumerate(self.self_attn_layers):
             # out, _ = self_attend(layer, out, f'self_attn_repr')
             with NoName(out, batch.source_padding):

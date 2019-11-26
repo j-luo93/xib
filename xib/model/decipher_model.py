@@ -1,4 +1,5 @@
 from collections import defaultdict
+from xib.model.modules import Predictor
 from dataclasses import InitVar, dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -194,6 +195,9 @@ class DecipherModel(nn.Module):
         )
         self.seq_scorer[0].refine_names('weight', ['score', 'seq_feat'])
 
+        if g.use_mlm_loss:
+            self.predictor = Predictor(cat_dim)
+
     def _adapt(self, packed_feat_matrix: LT) -> LT:
         if g.adapt_mode == 'none':
             return packed_feat_matrix
@@ -217,6 +221,7 @@ class DecipherModel(nn.Module):
             with NoName(out, batch.source_padding):
                 out = layer(out, src_key_padding_mask=batch.source_padding)
         out = out.refine_names('length', 'batch', None)
+        ret['out'] = out
         logits = self.label_predictor(out)
         label_log_probs = logits.log_softmax(dim='label')
         label_probs = label_log_probs.exp()

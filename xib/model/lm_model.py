@@ -42,6 +42,9 @@ class LM(nn.Module):
 
     def score(self, batch) -> Dict[Cat, FT]:
         distr = self(batch)
+        return self.score_distr(distr, batch)
+
+    def score_distr(self, distr: Dict[Cat, FT], batch: IpaBatch) -> Dict[Cat, FT]:
         scores = dict()
         for name, output in distr.items():
             i = get_index(name, new_style=g.new_style)

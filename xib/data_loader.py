@@ -232,7 +232,7 @@ class ContinuousTextDataLoader(IpaDataLoader):
 class DataLoaderRegistry(BaseDataLoaderRegistry):
 
     def get_data_loader(self, task: Task, data_path: Path):
-        if task.name == 'lm':
+        if task.name in ['lm', 'mlm']:
             dl = IpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer']:
             dl = ContinuousTextDataLoader(data_path, task)

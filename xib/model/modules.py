@@ -1,3 +1,4 @@
+from typing import Optional
 from typing import Dict
 
 import numpy as np
@@ -146,13 +147,14 @@ class Encoder(nn.Module):
 
 class Predictor(nn.Module):
 
-    def __init__(self):
+    def __init__(self, hidden_size: Optional[int] = None):
+        hidden_size = hidden_size or g.hidden_size
         super().__init__()
-        self.linear = nn.Linear(g.hidden_size, g.hidden_size)
+        self.linear = nn.Linear(hidden_size, hidden_size)
         self.feat_predictors = nn.ModuleDict()
         for e in get_needed_categories(g.feat_groups, new_style=g.new_style, breakdown=g.new_style):
             # NOTE(j_luo) ModuleDict can only handle str as keys.
-            self.feat_predictors[e.__name__] = nn.Linear(g.hidden_size, len(e))
+            self.feat_predictors[e.__name__] = nn.Linear(hidden_size, len(e))
         # If new_style, we need to get the necessary indices to convert the breakdown groups into the original feature groups.
         if g.new_style:
             self.conversion_idx = dict()
@@ -210,9 +212,9 @@ class Predictor(nn.Module):
 
                 condition_name = Name(condition_name, 'camel')
                 cat_name = Name(cat_name, 'camel')
-                condition_log_probs = ret[condition_name][:, index.f_idx]
+                condition_log_probs = ret[condition_name][..., index.f_idx]
                 # condition_log_probs.align_as(ret[cat_name])
-                ret[cat_name] = ret[cat_name] + condition_log_probs.rename(None).unsqueeze(dim=1)
+                ret[cat_name] = ret[cat_name] + condition_log_probs.rename(None).unsqueeze(dim=-1)
         return ret
 
 

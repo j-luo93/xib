@@ -6,6 +6,7 @@ from typing import List, Optional, Union
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.nn.utils.clip_grad import clip_grad_norm_
 
 from dev_misc.arglib import add_argument, g, init_g_attr
 from dev_misc.devlib import get_length_mask
@@ -153,6 +154,8 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
     add_argument('supervised', dtype=bool, default=False, msg='supervised mode')
     add_argument('mode', default='local-supervised', dtype=str,
                  choices=['local-supervised', 'global-supervised'], msg='training mode')
+    add_argument('mlm_coeff', dtype=float, default=0.05, msg='Flag to use mlm loss.')
+    add_argument('warmup_updates', dtype=int, default=4000, msg='Number of warmup updates for Adam.')
 
     # def __init__(self, model: DecipherModel, train_data_loader: ContinuousTextDataLoader, evaluator: DecipherEvaluator):
     #     super().__init__(model, train_data_loader, g.num_steps, g.learning_rate,
@@ -171,7 +174,7 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
 
     def set_optimizer(self):
         super().set_optimizer(AdamInverseSqrtWithWarmup,
-                              lr=g.learning_rate, betas=(0.9, 0.98))
+                              lr=g.learning_rate, betas=(0.9, 0.98), warmup_updates=g.warmup_updates)
 
     # # DEBUG(j_luo)
     # def init_params(self):
@@ -198,9 +201,30 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
+        if dl.task.name == 'mlm':
+            return self._train_one_step_mlm(dl)
+        else:
+            return self._train_one_step_decipher(dl)
+
+    def _train_one_step_mlm(self, dl: IpaDataLoader) -> Metrics:
         batch = dl.get_next_batch()
-        metrics = self.get_metrics(batch)
-        if metrics is None:
+        ret = self.model(batch, 'local')
+        out = ret['out']
+        distr = self.model.predictor(out)
+        scores = LM.score_distr(self.model, distr, batch)  # HACK(j_luo)
+        metrics = LMTrainer.analyze_scores(self, scores)
+        loss = g.mlm_coeff * metrics.loss.mean
+        loss.backward()
+        grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)
+        self.optimizer.step()
+        weight = (~batch.source_padding).sum()
+        metrics += Metric('grad_norm', grad_norm * weight, weight)
+        return metrics.with_prefix_(f'mlm_{dl.task}')
+
+    def _train_one_step_decipher(self, dl: ContinuousTextDataLoader) -> Metrics:
+        batch = dl.get_next_batch()
+        metrics = self.get_metrics(batch, use_mlm_loss=g.use_mlm_loss)
+        if metrics is None:  # HACK(j_luo)
             return Metrics()
         # modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
         # sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
@@ -228,10 +252,10 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
         #     loss = -score.mean
         metrics.total_loss.mean.backward()
         self.optimizer.step()
-        grad_norm = get_grad_norm(self.model)
+        grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)
         weight = (~batch.source_padding).sum()
         metrics += Metric('grad_norm', grad_norm * weight, weight)
-        return metrics
+        return metrics.with_prefix_('decipher')
 
     def load(self, path: Path, load_lm_model: bool = False, load_optimizer_state: bool = False, load_seq_scorer: bool = False):
         saved = torch.load(path)

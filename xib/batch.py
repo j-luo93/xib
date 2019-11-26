@@ -4,6 +4,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import torch
 
+from dev_misc import FT, LT
 from dev_misc.devlib import BaseBatch as BaseBatchDev
 from dev_misc.devlib import (batch_class, get_array, get_length_mask,
                              get_range, get_zeros)
@@ -87,6 +88,14 @@ class BaseBatch(BaseBatchDev):
         return batches
 
 
+def mask_out_target_weight(target_weight: FT, target_feat: LT):
+    for cat, index in conditions.items():
+        idx = cat.value
+        condition_idx = index.f_idx
+        mask = condition_idx != target_feat[:, index.c_idx]
+        target_weight[mask, idx] = 0.0
+
+
 @batch_class
 class IpaBatch(BaseBatch):
     pos_to_predict: torch.LongTensor = field(init=False)
@@ -122,11 +131,7 @@ class IpaBatch(BaseBatch):
         self.target_feat = self._g2f[target_feat]
 
         # NOTE(j_luo) If the condition is not satisfied, the target weight should be set to 0.
-        for cat, index in conditions.items():
-            idx = cat.value
-            condition_idx = index.f_idx
-            mask = condition_idx != self.target_feat[:, index.c_idx]
-            self.target_weight[mask, idx] = 0.0
+        mask_out_target_weight(self.target_weight, self.target_feat)
 
         # NOTE(j_luo) Refine names.
         # TODO(j_luo) We can move this process a bit earlier to DataLoader (serialization not yet implemented for named tensors).

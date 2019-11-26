@@ -18,3 +18,9 @@ class DecipherTask(Task):
 @task_class
 class TransferTask(DecipherTask):
     name = 'transfer'
+
+
+@task_class
+class MlmTask(DecipherTask):
+    """This task is used for DecipherManager."""
+    name = 'mlm'

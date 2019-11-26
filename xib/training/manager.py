@@ -13,7 +13,7 @@ from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
 from xib.model.decipher_model import DecipherModel, TransferModel
 from xib.model.lm_model import LM, AdaptedLM
 from xib.training.evaluator import DecipherEvaluator, LMEvaluator
-from xib.training.task import DecipherTask, LMTask, TransferTask
+from xib.training.task import DecipherTask, LMTask, MlmTask, TransferTask
 from xib.training.trainer import DecipherTrainer, LMTrainer, TransferTrainer
 
 add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'adapt', 'transfer'], msg='which task to run')
@@ -53,6 +53,7 @@ class DecipherManager:
     add_argument('dev_data_path', dtype='path', msg='Path to dev data.')
     add_argument('saved_path', dtype='path')
     add_argument('local_model_path', dtype='path', msg='Path to a saved local model, skipping the local training phase.')
+    add_argument('use_mlm_loss', dtype=bool, default=False, msg='Flag to use mlm loss.')
 
     # def _get_model(self):
     #     return DecipherModel()
@@ -75,12 +76,22 @@ class DecipherManager:
 
         train_task = DecipherTask('train')
         dev_task = DecipherTask('dev')
-
+        train_tasks = [train_task]
+        task_weights = [1.0]
         self.dl_reg = DataLoaderRegistry()
+        if g.use_mlm_loss:
+            train_mlm_task = MlmTask('train')
+            dev_mlm_task = MlmTask('dev')
+            train_tasks.append(train_mlm_task)
+            train_tasks.append(dev_mlm_task)
+            task_weights.extend([1.0, 1.0])
+            self.dl_reg.register_data_loader(train_mlm_task, g.data_path)
+            self.dl_reg.register_data_loader(dev_mlm_task, g.dev_data_path)
+
         self.dl_reg.register_data_loader(train_task, g.data_path)
         self.dl_reg.register_data_loader(dev_task, g.dev_data_path)
         self.evaluator = DecipherEvaluator(self.model, self.dl_reg, [train_task, dev_task])
-        self.trainer = DecipherTrainer(self.model, [train_task], [1.0], 'total_step',
+        self.trainer = DecipherTrainer(self.model, train_tasks, task_weights, 'total_step',
                                        evaluator=self.evaluator,
                                        check_interval=g.check_interval,
                                        eval_interval=g.eval_interval)

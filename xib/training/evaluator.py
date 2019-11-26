@@ -121,7 +121,11 @@ class DecipherEvaluator(LMEvaluator, BaseDecipherRunner):
             if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
                 logging.imp(f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
                 break
-            batch_metrics, batch_dfs = self.predict(batch, modes, task)
+            try:
+                batch_metrics, batch_dfs = self.predict(batch, modes, task)
+            except RuntimeError:
+                logging.error("ah oh")
+                continue
             accum_metrics += batch_metrics
             accum_metrics += self.get_metrics(batch)
             for mode in modes:

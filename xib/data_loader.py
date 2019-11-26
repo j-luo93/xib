@@ -234,8 +234,8 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
     def get_data_loader(self, task: Task, data_path: Path):
         if task.name == 'lm':
             dl = IpaDataLoader(data_path, task)
-        elif task.name == 'decipher':
+        elif task.name in ['decipher', 'transfer']:
             dl = ContinuousTextDataLoader(data_path, task)
         else:
-            raise NotImplementedError()
+            raise ValueError(f'Unsupported task {task.name}.')
         return dl

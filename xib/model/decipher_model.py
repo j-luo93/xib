@@ -1,4 +1,3 @@
-from typing import List
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
 from typing import Dict, List, Optional, Tuple
@@ -22,11 +21,11 @@ from xib.check_in_vocab_impl import \
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
 from xib.ipa import Category, should_include
-from xib.ipa.process import Segmentation, Span
+from xib.ipa.process import Segmentation, Span, O
 
 from . import BT, FT, LT
 from .lm_model import LM
-from .modules import FeatEmbedding
+from .modules import AdaptLayer, FeatEmbedding
 
 
 @dataclass
@@ -149,6 +148,7 @@ class DecipherModel(nn.Module):
     add_argument('num_heads', default=4, dtype=int, msg='Number for heads for self attention.')
     add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
     add_argument('dropout', default=0.2, dtype=float, msg='dropout rate')
+    add_argument('use_local_probs', default=True, dtype=bool, msg='Flag to use local probs for producing global probs.')
     add_argument('sampling_temperature', default=1.0, dtype=float, msg='Sampling temperature')
     add_argument('vocab_path', dtype='path',
                  msg='Path to a vocabulary file which would provide word-level features to the  model.')
@@ -187,11 +187,12 @@ class DecipherModel(nn.Module):
                 self.vocab = set(line.strip() for line in fin)
 
         # For supervised mode, you want to use a global predictor to predict the probs for sequences.
-        if g.supervised:
-            self.seq_scorer = nn.Sequential(
-                nn.Linear(3 + (self.vocab is not None), 1),
-            )
-            self.seq_scorer[0].refine_names('weight', ['score', 'seq_feat'])
+        seq_scorer_dim = 2 + (self.vocab is not None) + (g.use_local_probs)
+        # if g.supervised:
+        self.seq_scorer = nn.Sequential(
+            nn.Linear(seq_scorer_dim, 1),
+        )
+        self.seq_scorer[0].refine_names('weight', ['score', 'seq_feat'])
 
     def _adapt(self, packed_feat_matrix: LT) -> LT:
         if g.adapt_mode == 'none':
@@ -268,6 +269,9 @@ class DecipherModel(nn.Module):
         lm_score, in_vocab_score = self._unpack(nlls, packed_words, bs)
 
         # DEBUG(j_luo)
+        # lm_score = lm_score.exp()
+
+        # DEBUG(j_luo)
         # print(packed_words.sampled_segments)
         # print(packed_words.sampled_segments_by_batch)
         # print(packed_words.get_segment_nlls(nlls))
@@ -285,20 +289,30 @@ class DecipherModel(nn.Module):
         if self.vocab is not None:
             ret['in_vocab_score'] = in_vocab_score
 
-        if g.supervised:
+        # if g.supervised:
             # features = torch.stack([ret['lm_score'], ret['word_score']], new_name='seq_feat')
-            word_level_features = [sample_log_probs.exp(), lm_score, word_score]
-            if self.vocab is not None:
-                word_level_features.append(in_vocab_score)
-            features = torch.stack(word_level_features, new_name='seq_feat')
-            # features = torch.stack([ret['sample_log_probs'].exp(), ret['lm_score'],
-            #                         ret['word_score']], new_name='seq_feat')
-            seq_scores = self.seq_scorer(features).squeeze(dim='score')
-            ret['seq_scores'] = seq_scores
-            modified_seq_log_probs = seq_scores + (~is_unique).float() * (-999.9)
-            seq_log_probs = modified_seq_log_probs.log_softmax(dim='sample')
-            ret['seq_log_probs'] = seq_log_probs
-            ret['packed_words'] = packed_words
+        word_level_features = [lm_score, word_score]
+        if self.vocab is not None:
+            word_level_features.append(in_vocab_score)
+        if g.use_local_probs:
+            word_level_features.append(sample_log_probs.exp())
+        features = torch.stack(word_level_features, new_name='seq_feat')
+        # features = torch.stack([ret['sample_log_probs'].exp(), ret['lm_score'],
+        #                         ret['word_score']], new_name='seq_feat')
+        seq_scores = self.seq_scorer(features).squeeze(dim='score')
+        # HACK(j_luo)
+        ret['seq_scores'] = seq_scores.exp() / 5.0
+
+        # if not hasattr(self, 'cnt'):
+        #     self.cnt = 0
+        # self.cnt += 1
+        # if self.cnt == 100:
+        #     breakpoint()  # DEBUG(j_luo)
+
+        modified_seq_scores = seq_scores + (~is_unique).float() * (-999.9)
+        seq_log_probs = modified_seq_scores.log_softmax(dim='sample')
+        ret['seq_log_probs'] = seq_log_probs
+        ret['packed_words'] = packed_words
         return ret
 
     def _get_word_score(self, packed_words: PackedWords, batch_size: int) -> FT:
@@ -407,7 +421,8 @@ class DecipherModel(nn.Module):
         # Add the ground truth if needed.
         if gold_tag_seqs is not None:
             gold_tag_seqs = gold_tag_seqs.align_as(label_samples)
-            label_samples = torch.cat([gold_tag_seqs, label_samples], dim='sample')
+            all_other_tag_seqs = torch.full_like(gold_tag_seqs, O)
+            label_samples = torch.cat([gold_tag_seqs, all_other_tag_seqs, label_samples], dim='sample')
         batch_idx = get_named_range(label_samples.size('batch'), 'batch').align_as(label_samples).rename(None)
         length_idx = get_named_range(label_samples.size('length'), 'length').align_as(label_samples).rename(None)
         label_sample_probs = label_probs.rename(None)[batch_idx, length_idx, label_samples.rename(None)]
@@ -416,3 +431,16 @@ class DecipherModel(nn.Module):
         label_sample_log_probs = ((~source_padding).align_as(label_sample_log_probs).float()
                                   * label_sample_log_probs).sum(dim='length')
         return label_samples, label_sample_log_probs
+
+
+class TransferModel(DecipherModel):
+
+    def __init__(self):
+        super().__init__()
+
+        self.adapter = AdaptLayer()
+
+    def forward(self, batch: ContinuousTextIpaBatch, mode: str):
+        ret = super().forward(batch, mode)
+        ...  # FIXME(j_luo) fill in the adapter part
+        return ret

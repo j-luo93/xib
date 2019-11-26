@@ -9,6 +9,7 @@ import torch.optim as optim
 
 from dev_misc.arglib import add_argument, g, init_g_attr
 from dev_misc.devlib import get_length_mask
+from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import (Metric, Metrics, Tracker, get_grad_norm,
                                get_trainable_params, log_this)
 from dev_misc.trainlib.base_trainer import BaseTrainer as BaseTrainerDev
@@ -199,6 +200,8 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
         self.optimizer.zero_grad()
         batch = dl.get_next_batch()
         metrics = self.get_metrics(batch)
+        if metrics is None:
+            return Metrics()
         # modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
         # sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
 
@@ -261,3 +264,35 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
         self.model: DecipherModel
         print(self.model.seq_scorer[0].weight)
         return ret
+
+
+class TransferTrainer(DecipherTrainer):
+
+    def get_metrics(self, batch: ContinuousTextIpaBatch) -> Metrics:
+        try:
+            ret = self.model(batch, self.mode)  # pylint: disable=no-member
+        except RuntimeError:
+            logging.error("Ah oh.")
+            return None  # HACK(j_luo)
+
+        metrics = Metrics()
+
+        # best_seq_log_probs, _ = ret['seq_log_probs'].max(dim='sample')
+        # loss = -best_seq_log_probs.sum()
+        # total_loss = Metric('total_loss', loss, batch.batch_size)
+        # metrics += total_loss
+
+        # return metrics
+
+        # if self.tracker.total_step == 100:
+        #     breakpoint()  # DEBUG(j_luo)
+        modified_log_probs = ret['sample_log_probs'] * g.concentration + (~ret['is_unique']).float() * (-999.9)
+        sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
+        score = (sample_probs * ret['seq_scores']).sum()
+        total_loss = Metric('total_loss', -score, batch.batch_size)
+        metrics += total_loss
+        return metrics
+
+    def load(self, path: Path):
+        super().load(path, load_lm_model=True,
+                     load_seq_scorer=True, load_optimizer_state=False)

@@ -13,3 +13,8 @@ class DecipherTask(Task):
 
     def __str__(self):
         return self.split
+
+
+@task_class
+class TransferTask(DecipherTask):
+    name = 'transfer'

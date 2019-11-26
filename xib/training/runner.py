@@ -45,7 +45,15 @@ class BaseDecipherRunner:
         if self.mode == 'local':  # pylint: disable=no-member
             total_loss = Metric('total_loss', local_loss.total, weight)
         elif self.mode == 'global':  # pylint: disable=no-member
-            global_target_log_probs = ret['seq_log_probs'].align_to('batch', 'sample', 'seq_feat')[:, 0]
+            # # DEBUG(j_luo)
+            # modified_log_probs = ret['sample_log_probs'] * g.concentration + (~ret['is_unique']).float() * (-999.9)
+            # sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
+            # score = (sample_probs * ret['seq_scores']).sum()
+            # total_loss = Metric('total_loss', -score, batch.batch_size)
+            # metrics += total_loss
+
+            global_target_log_probs = ret['seq_log_probs'].align_to('batch', 'sample')[:, 0]
+            # FIXME(j_luo) This should be divided by batch size, not weight.
             global_loss = Metric('global_loss', -global_target_log_probs.sum(), weight)
             metrics += global_loss
             total_loss = Metric('total_loss', local_loss.total + global_loss.total, weight)

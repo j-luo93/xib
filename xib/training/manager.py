@@ -10,13 +10,13 @@ from dev_misc.trainlib import Metrics, has_gpus, set_random_seeds
 from dev_misc.trainlib.trainer import freeze
 from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
                              DenseIpaDataLoader, IpaDataLoader)
-from xib.model.decipher_model import DecipherModel
+from xib.model.decipher_model import DecipherModel, TransferModel
 from xib.model.lm_model import LM, AdaptedLM
 from xib.training.evaluator import DecipherEvaluator, LMEvaluator
-from xib.training.task import DecipherTask, LMTask
-from xib.training.trainer import DecipherTrainer, LMTrainer
+from xib.training.task import DecipherTask, LMTask, TransferTask
+from xib.training.trainer import DecipherTrainer, LMTrainer, TransferTrainer
 
-add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'adapt'], msg='which task to run')
+add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'adapt', 'transfer'], msg='which task to run')
 
 
 class LMManager:
@@ -110,4 +110,40 @@ class DecipherManager:
         # self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1, 0, 0]]))
 
         self.trainer.set_optimizer()
+        self.trainer.train(self.dl_reg)
+
+
+class TransferManager:
+
+    add_argument('global_model_path', dtype='path', msg='Path to the saved global model.')
+
+    def __init__(self):
+        self.model = TransferModel()
+        # freeze(self.model.self_attn_layers)
+        # freeze(self.model.positional_embedding)
+        # freeze(self.model.label_predictor)
+        # freeze(self.model.emb_for_label)
+        # freeze(self.model.adapter)
+        # freeze(self.model.seq_scorer)
+        if has_gpus():
+            self.model.cuda()
+
+        dev_task = TransferTask('dev')
+
+        self.dl_reg = DataLoaderRegistry()
+        self.dl_reg.register_data_loader(dev_task, g.dev_data_path)
+
+        self.evaluator = DecipherEvaluator(self.model, self.dl_reg, [dev_task])
+        self.evaluator.mode = 'global'  # HACK(j_luo)
+        self.trainer = TransferTrainer(self.model, [dev_task], [1.0], 'total_step',
+                                       evaluator=self.evaluator,
+                                       check_interval=g.check_interval,
+                                       eval_interval=g.eval_interval)
+        self.trainer.mode = 'global'  # HACK(j_luo)
+
+    def run(self):
+        self.trainer.load(g.global_model_path)
+        # DEBUG(j_luo)
+        # self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1.0, 0.2, 2.5]]))
+
         self.trainer.train(self.dl_reg)

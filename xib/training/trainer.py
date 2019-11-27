@@ -225,7 +225,7 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
 
     def _train_one_step_decipher(self, dl: ContinuousTextDataLoader) -> Metrics:
         batch = dl.get_next_batch()
-        metrics = self.get_metrics(batch, use_mlm_loss=g.use_mlm_loss)
+        metrics = self.get_metrics(batch)
         if metrics is None:  # HACK(j_luo)
             return Metrics()
         # modified_log_probs = ret['sample_log_probs'] * self.concentration + (~ret['is_unique']).float() * (-999.9)
@@ -310,8 +310,6 @@ class TransferTrainer(DecipherTrainer):
 
         # return metrics
 
-        # if self.tracker.total_step == 100:
-        #     breakpoint()  # DEBUG(j_luo)
         modified_log_probs = ret['sample_log_probs'] * g.concentration + (~ret['is_unique']).float() * (-999.9)
         sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
         score = (sample_probs * ret['seq_scores']).sum()

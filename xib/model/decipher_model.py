@@ -310,14 +310,8 @@ class DecipherModel(nn.Module):
         # features = torch.stack([ret['sample_log_probs'].exp(), ret['lm_score'],
         #                         ret['word_score']], new_name='seq_feat')
         seq_scores = self.seq_scorer(features).squeeze(dim='score')
-        # HACK(j_luo)
+        # DEBUG(j_luo) # HACK(j_luo)
         ret['seq_scores'] = seq_scores.exp() / 5.0
-
-        # if not hasattr(self, 'cnt'):
-        #     self.cnt = 0
-        # self.cnt += 1
-        # if self.cnt == 100:
-        #     breakpoint()  # DEBUG(j_luo)
 
         modified_seq_scores = seq_scores + (~is_unique).float() * (-999.9)
         seq_log_probs = modified_seq_scores.log_softmax(dim='sample')

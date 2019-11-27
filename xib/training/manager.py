@@ -54,6 +54,7 @@ class DecipherManager:
     add_argument('saved_path', dtype='path')
     add_argument('local_model_path', dtype='path', msg='Path to a saved local model, skipping the local training phase.')
     add_argument('use_mlm_loss', dtype=bool, default=False, msg='Flag to use mlm loss.')
+    add_argument('mlm_model_path', dtype='path', msg='Path to a saved mlm model.')
 
     # def _get_model(self):
     #     return DecipherModel()
@@ -77,14 +78,14 @@ class DecipherManager:
         train_task = DecipherTask('train')
         dev_task = DecipherTask('dev')
         train_tasks = [train_task]
-        task_weights = [0.0]  # DEBUG(j_luo)
+        task_weights = [0.0 if g.use_mlm_loss else 1.0]
         self.dl_reg = DataLoaderRegistry()
         if g.use_mlm_loss:
             train_mlm_task = MlmTask('train')
             dev_mlm_task = MlmTask('dev')
             train_tasks.append(train_mlm_task)
             train_tasks.append(dev_mlm_task)
-            task_weights.extend([1.0, 0.0])  # DEBUG(j_luo)
+            task_weights.extend([1.0, 1.0])
             self.dl_reg.register_data_loader(train_mlm_task, g.data_path)
             self.dl_reg.register_data_loader(dev_mlm_task, g.dev_data_path)
 
@@ -101,6 +102,9 @@ class DecipherManager:
             self.trainer.load(g.local_model_path, load_lm_model=False,
                               load_seq_scorer=False, load_optimizer_state=False)
         else:
+            if g.mlm_model_path:
+                self.trainer.load(g.mlm_model_path, load_lm_model=False,
+                                  load_seq_scorer=False, load_optimizer_state=False)
             logging.info('Running on local mode.')
             self.evaluator.mode = 'local'
             self.trainer.mode = 'local'
@@ -130,12 +134,12 @@ class TransferManager:
 
     def __init__(self):
         self.model = TransferModel()
-        # freeze(self.model.self_attn_layers)
-        # freeze(self.model.positional_embedding)
+        freeze(self.model.self_attn_layers)
+        freeze(self.model.positional_embedding)
         # freeze(self.model.label_predictor)
         # freeze(self.model.emb_for_label)
         # freeze(self.model.adapter)
-        # freeze(self.model.seq_scorer)
+        freeze(self.model.seq_scorer)
         if has_gpus():
             self.model.cuda()
 
@@ -155,6 +159,6 @@ class TransferManager:
     def run(self):
         self.trainer.load(g.global_model_path)
         # DEBUG(j_luo)
-        # self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1.0, 0.2, 2.5]]))
+        self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1.0, 0.2, 2.5]]))
 
         self.trainer.train(self.dl_reg)

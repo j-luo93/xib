@@ -125,11 +125,36 @@ class DecipherEsNoisyItalianP5Test(DecipherEsTest):
 
 @reg
 class DecipherEsNoisyGermanP5Test(DecipherEsTest):
-    dev_data_path: str = 'data/Spanish.Italian_p5.ipa.dev'
+    dev_data_path: str = 'data/Spanish.German_p5.ipa.dev'
 
     def __post_init__(self):
         super().__post_init__()
         self.data_path = 'data/Spanish.ipa.noise_12500.5000'
+
+
+@reg
+class DecipherEsToEsWithP5GermanTest(DecipherEsNoisyGermanP5Test):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path = 'data/Spanish.ipa.5000'
+
+
+@reg
+class DecipherEsWithP5NoiseToEsWithP5GermanTest(DecipherEsNoisyGermanP5Test):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path = 'data/Spanish.ipa.noise_12500.5000'
+
+
+@reg
+class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):
+    task: str = 'transfer'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path = self.dev_data_path
 
 
 @reg

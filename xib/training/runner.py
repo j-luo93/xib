@@ -36,7 +36,7 @@ class BaseLMRunner:
 
 class BaseDecipherRunner:
 
-    def get_metrics(self, batch: ContinuousTextIpaBatch, use_mlm_loss: bool = False) -> Metrics:
+    def get_metrics(self, batch: ContinuousTextIpaBatch) -> Metrics:
         ret = self.model(batch, self.mode)  # pylint: disable=no-member
         metrics = Metrics()
         with NoName(batch.lengths):
@@ -48,21 +48,6 @@ class BaseDecipherRunner:
             local_loss = Metric('local_loss', -local_losses.sum(), weight)
             metrics += local_loss
         total_loss = 0.0
-        # if use_mlm_loss:
-        #     # HACK(j_luo)
-        #     with NoName(length_mask):
-        #         batch.pos_to_predict = torch.multinomial(length_mask.float(), 1).squeeze(dim=1).rename('batch')
-        #     batch.target_feat = batch.feat_matrix.gather('length', batch.pos_to_predict)
-        #     bs, ml, nfg = batch.feat_matrix.shape
-        #     batch.target_weight =
-        #     out = ret['out'].clone()
-        #     distr = self.model.predictor(out)
-        #     scores = LM.score_distr(self.model, distr, batch)
-        #     # scores = self.model.score(batch)  # pylint: disable=no-member
-        #     breakpoint()  # DEBUG(j_luo)
-        #     mlm_metrics = BaseLMRunner.analyze_scores(self, scores)
-        #     metrics += mlm_metrics
-        #     total_loss += metrics.loss.total
         if self.mode == 'local':  # pylint: disable=no-member
             # total_loss = Metric('total_loss', local_loss.total, weight)
             total_loss += local_loss.total

@@ -1,3 +1,4 @@
+import math
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
 from typing import Dict, List, Optional, Tuple, Union
@@ -15,13 +16,13 @@ from dev_misc.devlib import (dataclass_numpy, dataclass_size_repr, get_array,
 from dev_misc.devlib.named_tensor import (NoName, expand_as, get_named_range,
                                           self_attend)
 from dev_misc.trainlib import freeze
-from dev_misc.utils import cached_property
+from dev_misc.utils import cached_property, deprecated
 from xib.check_in_vocab_impl import \
     check_in_vocab  # pylint: disable=no-name-in-module
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
 from xib.ipa import Category, should_include
-from xib.ipa.process import O, Segmentation, Span
+from xib.ipa.process import B, I, O, Segmentation, Span
 from xib.model.modules import Predictor
 
 from . import BT, FT, LT
@@ -140,7 +141,8 @@ class TransformerLayer(TransformerEncoderLayer):
         self.activation = torch.nn.functional.gelu
 
 
-class DecipherModel(nn.Module):
+@deprecated
+class OldDecipherModel(nn.Module):
 
     add_argument('adapt_mode', default='none', choices=['none'], dtype=str,
                  msg='how to adapt the features from one language to another')
@@ -435,6 +437,109 @@ class DecipherModel(nn.Module):
         label_sample_log_probs = ((~source_padding).align_as(label_sample_log_probs).float()
                                   * label_sample_log_probs).sum(dim='length')
         return label_samples, label_sample_log_probs
+
+
+class DecipherModel(OldDecipherModel):
+
+    add_argument('unreadable_baseline', dtype=float, default=0.9,
+                 msg='Baseline probability for unextracted characters.')
+
+    def forward(self, batch: Union[ContinuousTextIpaBatch, IpaBatch], mode: str):
+        assert mode == 'risk'  # HACK(j_luo)
+        bs = batch.batch_size
+        ret = dict()
+
+        # Get the samples of label sequences first.
+        out = self.emb_for_label(batch.feat_matrix, batch.source_padding)
+        positions = get_named_range(batch.feat_matrix.size('length'), name='length')
+        pos_emb = self.positional_embedding(positions).align_as(out)
+        out = out + pos_emb
+        out = out.align_to('length', 'batch', 'char_emb')
+        for i, layer in enumerate(self.self_attn_layers):
+            # out, _ = self_attend(layer, out, f'self_attn_repr')
+            with NoName(out, batch.source_padding):
+                out = layer(out, src_key_padding_mask=batch.source_padding)
+        out = out.refine_names('length', 'batch', None)
+        ret['out'] = out
+        logits = self.label_predictor(out)
+        label_log_probs = logits.log_softmax(dim='label')
+        label_probs = label_log_probs.exp()
+        ret['label_probs'] = label_probs
+        ret['label_log_probs'] = label_log_probs
+
+        # NOTE(j_luo) O is equivalent to None.
+        mask = expand_as(batch.source_padding, label_probs)
+        source = expand_as(get_tensor([0.0, 0.0, 1.0]).refine_names('label').float(), label_probs)
+        # TODO(j_luo) ugly
+        label_probs = label_probs.rename(None).masked_scatter(mask.rename(None), source.rename(None))
+        label_probs = label_probs.refine_names('length', 'batch', 'label')
+
+        if g.supervised and self.training:
+            gold_tag_seqs = batch.gold_tag_seqs
+            if gold_tag_seqs is None:
+                raise RuntimeError(f'Gold tag seqsuence must be provided in supervised mode.')
+        else:
+            gold_tag_seqs = None
+
+        temperature = g.sampling_temperature if self.training else 0.1
+        sampling_probs = (logits / temperature).log_softmax(dim='label').exp()
+        samples, sample_log_probs = self._sample(
+            label_probs, sampling_probs, batch.source_padding, gold_tag_seqs=gold_tag_seqs)
+
+        # Get the lm score.
+        # TODO(j_luo) unique is still a bit buggy -- BIO is the same as IIO.
+        segment_list = None
+        if self.vocab is not None:
+            segment_list = [segment.segment_list for segment in batch.segments]
+        packed_words, is_unique = self.pack(samples, batch.lengths, batch.feat_matrix,
+                                            batch.segments, segment_list=segment_list)
+        packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
+        lm_batch = self._prepare_batch(packed_words)  # TODO(j_luo)  This is actually continous batching.
+        scores = self._get_lm_scores(lm_batch)
+        nlls = list()
+        for cat, (nll, weight) in scores.items():
+            if should_include(g.feat_groups, cat):
+                nlls.append(nll * weight)
+        nlls = sum(nlls)  # NOTE(j_luo) Do not normalize the scores by length.
+        bw = packed_words.word_lengths.size('batch_word')
+        p = packed_words.word_positions.size('position')
+        nlls = nlls.unflatten('batch', [('batch_word', bw), ('position', p)])
+        nlls = nlls.sum(dim='position')
+        lm_score, in_vocab_score = self._unpack(nlls, packed_words, bs)
+
+        # Compute word score that corresponds to the number of readable words.
+        readable_score, unreadable_score = self._get_readable_scores(batch.source_padding, samples)
+        ret['readable_score'] = readable_score
+        ret['unreadable_score'] = unreadable_score
+
+        ret.update(
+            readable_score=readable_score,
+            lm_score=lm_score,
+            sample_log_probs=sample_log_probs,
+            is_unique=is_unique,
+        )
+
+        if self.vocab is not None:
+            ret['in_vocab_score'] = in_vocab_score
+
+        # modified_seq_scores = seq_scores + (~is_unique).float() * (-999.9)
+        # seq_log_probs = modified_seq_scores.log_softmax(dim='sample')
+        # ret['seq_log_probs'] = seq_log_probs
+        ret['packed_words'] = packed_words
+        sample_score = ret['readable_score'] - ret['unreadable_score'] + ret['lm_score']
+        ret['sample_score'] = sample_score
+        breakpoint()  # DEBUG(j_luo)
+        return ret
+
+    def _get_readable_scores(self, source_padding: BT, samples: LT) -> Tuple[FT, FT]:
+        samples = samples.align_to('batch', 'sample', 'length')
+        source_padding = source_padding.align_as(samples)
+        is_part_of_word = ((samples == B) | (samples == I)) & ~source_padding
+        not_part_of_word = (samples == O) & ~source_padding
+        readable_score = is_part_of_word.float().sum(dim='length')
+        breakpoint()  # DEBUG(j_luo)
+        unreadable_score = not_part_of_word.float().sum(dim='length') * math.log(g.unreadable_baseline)
+        return readable_score, unreadable_score
 
 
 class TransferModel(DecipherModel):

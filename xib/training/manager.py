@@ -8,6 +8,7 @@ from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
 from dev_misc.trainlib import Metrics, has_gpus, set_random_seeds
 from dev_misc.trainlib.trainer import freeze
+from dev_misc.utils import deprecated
 from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
                              DenseIpaDataLoader, IpaDataLoader)
 from xib.model.decipher_model import DecipherModel, TransferModel
@@ -48,7 +49,8 @@ class LMManager:
 #         return AdaptedLM()
 
 
-class DecipherManager:
+@deprecated
+class OldDecipherManager:
 
     add_argument('dev_data_path', dtype='path', msg='Path to dev data.')
     add_argument('saved_path', dtype='path')
@@ -125,6 +127,34 @@ class DecipherManager:
         # self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1, 0, 0]]))
 
         self.trainer.set_optimizer()
+        self.trainer.train(self.dl_reg)
+
+
+class DecipherManager:
+
+    def __init__(self):
+        self.model = DecipherModel()
+        if has_gpus():
+            self.model.cuda()
+
+        train_task = DecipherTask('train')
+        self.dl_reg = DataLoaderRegistry()
+        self.dl_reg.register_data_loader(train_task, g.data_path)
+        self.evaluator = DecipherEvaluator(self.model, self.dl_reg, [train_task])
+        self.trainer = DecipherTrainer(self.model, [train_task], [1.0], 'total_step',
+                                       evaluator=self.evaluator,
+                                       check_interval=g.check_interval,
+                                       eval_interval=g.eval_interval)
+        self.trainer.mode = 'risk'  # HACK(j_luo)
+
+    def run(self):
+        self.trainer.train(self.dl_reg)
+        # freeze(self.model.self_attn_layers)
+        # freeze(self.model.positional_embedding)
+        # freeze(self.model.label_predictor)
+        # freeze(self.model.emb_for_label)
+        # DEBUG(j_luo)
+        # self.model.seq_scorer[0].weight.data.copy_(torch.FloatTensor([[1, 0, 0]]))
         self.trainer.train(self.dl_reg)
 
 

@@ -149,6 +149,14 @@ class DecipherEsWithP5NoiseToEsWithP5GermanTest(DecipherEsNoisyGermanP5Test):
 
 
 @reg
+class DecipherEsWithP5GermanTest(DecipherEsNoisyGermanP5Test):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = 'data/Spanish.German_p5.ipa.dev'
+
+
+@reg
 class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):
     task: str = 'transfer'
 

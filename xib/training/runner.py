@@ -47,6 +47,16 @@ class BaseDecipherRunner:
             local_losses = (length_mask.float().align_as(local_target_log_probs) * local_target_log_probs)
             local_loss = Metric('local_loss', -local_losses.sum(), weight)
             metrics += local_loss
+
+        if self.mode == 'risk':  # pylint: disable=no-member
+            modified_log_probs = ret['sample_log_probs'] * g.concentration + (~ret['is_unique']).float() * (-999.9)
+            sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
+            score = (sample_probs * ret['sample_score']).sum()
+            total_loss = Metric('total_loss', -score, batch.batch_size)
+            metrics += total_loss
+            return metrics
+
+        # Other modes # HACK(j_luo)
         total_loss = 0.0
         if self.mode == 'local':  # pylint: disable=no-member
             # total_loss = Metric('total_loss', local_loss.total, weight)

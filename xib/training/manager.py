@@ -145,9 +145,14 @@ class DecipherManager:
                                        evaluator=self.evaluator,
                                        check_interval=g.check_interval,
                                        eval_interval=g.eval_interval)
-        self.trainer.mode = 'risk'  # HACK(j_luo)
+        # HACK(j_luo)
+        self.trainer.mode = 'risk'
+        self.evaluator.mode = 'risk'
 
     def run(self):
+        if g.local_model_path:
+            self.trainer.load(g.local_model_path, load_lm_model=False,
+                              load_seq_scorer=False, load_optimizer_state=False)
         self.trainer.train(self.dl_reg)
         # freeze(self.model.self_attn_layers)
         # freeze(self.model.positional_embedding)

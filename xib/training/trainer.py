@@ -273,6 +273,8 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
         logging.imp(f'Loading model from {path}.')
 
     def save(self, eval_metrics: Metrics):
+        return  # DEBUG(j_luo)
+
         if self.mode == 'local':
             name = 'dev_prf_local_f1'
         else:

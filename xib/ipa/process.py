@@ -234,7 +234,7 @@ class Segment(BaseSegment):
         return ''.join(random.sample(self.merged_ipa_str, len(self)))
 
     def __str__(self):
-        return '-'.join(self.merged_ipa_str)
+        return '#' * self.is_noise + '-'.join(self.merged_ipa_str)
 
     def _apply_all(self):
         for name, dg in name2dg.items():

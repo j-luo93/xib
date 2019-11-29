@@ -497,8 +497,12 @@ class DecipherModel(OldDecipherModel):
             label_log_probs_hard = (label_probs_hard + 1e-8).log()
             sample_log_probs = None
         else:
-            label_log_probs = logits.log_softmax(dim='label')
-            label_probs = label_log_probs.exp()
+            # DEBUG(j_luo)
+            label_probs, _, _ = gumbel_softmax(logits, 1.0)  # , g.num_samples)
+            label_log_probs = (1e-8 + label_probs).log()
+
+            # label_log_probs = logits.log_softmax(dim='label')
+            # label_probs = label_log_probs.exp()
 
             # NOTE(j_luo) O is equivalent to None.
             mask = expand_as(batch.source_padding, label_probs)
@@ -514,8 +518,11 @@ class DecipherModel(OldDecipherModel):
             else:
                 gold_tag_seqs = None
 
-            temperature = g.sampling_temperature if self.training else 0.1
-            sampling_probs = (logits / temperature).log_softmax(dim='label').exp()
+            # DEBUG(j_luo)
+            # temperature = g.sampling_temperature if self.training else 0.1
+            # sampling_probs = (logits / temperature).log_softmax(dim='label').exp()
+            sampling_probs = label_probs
+
             samples, sample_log_probs = self._sample(
                 label_probs, sampling_probs, batch.source_padding, gold_tag_seqs=gold_tag_seqs)
 
@@ -537,7 +544,9 @@ class DecipherModel(OldDecipherModel):
             for cat, (nll, weight) in scores.items():
                 if should_include(g.feat_groups, cat):
                     nlls.append(nll * weight)
-            nlls = sum(nlls)  # NOTE(j_luo) Do not normalize the scores by length.
+            # NOTE(j_luo) Do not normalize the scores by length.
+            nlls = sum(nlls) / torch.pow(lm_batch.lengths.float(), 0.5)
+            # nlls = sum(nlls)
             bw = packed_words.word_lengths.size('batch_word')
             p = packed_words.word_positions.size('position')
             nlls = nlls.unflatten('batch', [('batch_word', bw), ('position', p)])
@@ -575,6 +584,13 @@ class DecipherModel(OldDecipherModel):
         # DEBUG(j_luo)
         # from pprint import pprint
         # pprint(packed_words.sampled_segments_by_batch[0])
+
+        # try:
+        #     self._cnt += 1
+        # except:
+        #     self._cnt = 1
+        # if self._cnt % 300 == 0:
+        #     breakpoint()  # DEBUG(j_luo)
 
         if g.gumbel_vae:
 

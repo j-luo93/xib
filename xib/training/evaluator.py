@@ -133,7 +133,10 @@ class OldDecipherEvaluator(LMEvaluator, BaseDecipherRunner):
             for mode in self.available_modes:
                 dfs[mode].append(batch_dfs[mode])
             total_num_samples += batch.batch_size
-        dfs = {mode: pd.concat(dfs[mode], axis=0) for mode in self.available_modes}
+        try:
+            dfs = {mode: pd.concat(dfs[mode], axis=0) for mode in self.available_modes}
+        except ValueError:
+            return Metrics()
 
         # Write the predictions to file.
         for mode, df in dfs.items():

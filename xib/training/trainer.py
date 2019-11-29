@@ -173,8 +173,12 @@ class DecipherTrainer(BaseTrainer, BaseDecipherRunner):
         self.set_optimizer()
 
     def set_optimizer(self):
-        super().set_optimizer(AdamInverseSqrtWithWarmup,
-                              lr=g.learning_rate, betas=(0.9, 0.98), warmup_updates=g.warmup_updates)
+        if g.search:
+            super().set_optimizer(optim.Adam,
+                                  lr=g.learning_rate, betas=(0.9, 0.999))
+        else:
+            super().set_optimizer(AdamInverseSqrtWithWarmup,
+                                  lr=g.learning_rate, betas=(0.9, 0.98), warmup_updates=g.warmup_updates)
 
     # # DEBUG(j_luo)
     # def init_params(self):

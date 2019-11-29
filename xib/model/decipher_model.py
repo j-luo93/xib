@@ -1,4 +1,3 @@
-from xib.gumbel import gumbel_softmax
 import math
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
@@ -22,6 +21,7 @@ from xib.check_in_vocab_impl import \
     check_in_vocab  # pylint: disable=no-name-in-module
 from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
+from xib.gumbel import gumbel_softmax
 from xib.ipa import Category, should_include
 from xib.ipa.process import B, I, O, Segmentation, Span
 from xib.model.modules import Predictor
@@ -38,6 +38,7 @@ class PackedWords:
     batch_indices: LT
     sample_indices: LT
     word_positions: LT
+    is_unique: BT
     num_samples: int
     orig_segments: np.ndarray
     in_vocab: Optional[BT]
@@ -342,7 +343,7 @@ class OldDecipherModel(nn.Module):
         return num_words
 
     def _get_lm_scores(self, lm_batch: IpaBatch) -> Dict[Category, FT]:
-        max_size = min(300000, lm_batch.batch_size)
+        max_size = min(100000, lm_batch.batch_size)
         with torch.no_grad():
             batches = lm_batch.split(max_size)
             all_scores = [self.lm_model.score(batch) for batch in batches]
@@ -401,6 +402,7 @@ class OldDecipherModel(nn.Module):
             word_feat_matrices = feat_matrix.rename(None)[key]
             word_feat_matrices = word_feat_matrices.refine_names('batch_word', 'position', 'feat_group')
             packed_words = PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions,
+                                       is_unique,
                                        ns,
                                        segments,
                                        in_vocab=in_vocab)
@@ -496,6 +498,15 @@ class DecipherModel(OldDecipherModel):
             label_log_probs = (1e-8 + label_probs).log()
             label_log_probs_hard = (label_probs_hard + 1e-8).log()
             sample_log_probs = None
+        elif g.search:
+            search_result = self.searcher.search(batch)
+            rs = search_result['readable_score']
+            urs = search_result['unreadable_score']
+            lms = search_result['lm_score']
+            ivs = search_result['in_vocab_score']
+            ds = search_result['diff_score']
+            fv = torch.stack([rs, urs, lms, ivs, ds], new_name='feature')
+            return {'feature': fv}
         else:
             # DEBUG(j_luo)
             label_probs, _, _ = gumbel_softmax(logits, 1.0)  # , g.num_samples)
@@ -528,7 +539,76 @@ class DecipherModel(OldDecipherModel):
 
         ret['label_probs'] = label_probs
         ret['label_log_probs'] = label_log_probs
+        ret['sample_log_probs'] = sample_log_probs
 
+        scores = self.get_scores(samples, batch)
+        # DEBUG(j_luo)
+        # from pprint import pprint
+        # pprint(packed_words.sampled_segments_by_batch[0])
+
+        # try:
+        #     self._cnt += 1
+        # except:
+        #     self._cnt = 1
+        # if self._cnt % 300 == 0:
+        #     breakpoint()  # DEBUG(j_luo)
+
+        if g.gumbel_vae:
+
+            # if self._cnt % 300 == 0:
+            #     breakpoint()  # DEBUG(j_luo)
+
+            # total_score = lm_score + unreadable_score + in_vocab_score
+            sample_score = ret['sample_score']
+
+            weight = (~batch.source_padding).float()
+            sample_log_probs = label_log_probs_hard.gather('label', samples)
+            _log_probs = sample_log_probs * weight.align_as(sample_log_probs)
+            _log_probs = _log_probs.sum(dim='length')
+            q_score = _log_probs.exp().align_as(sample_score) * sample_score
+            # q_score = (q_score + unreadable_score + in_vocab_score + readable_score).sum(dim='sample')
+            # import time; time.sleep(0.5)
+            q_score = q_score.sum(dim='sample')  # / g.num_samples
+            # lm_score = (lm_score.align_as(label_log_probs_hard) * label_log_probs_hard)
+            # lm_score = (lm_score + ret['unreadable_score']) * weight.align_as(lm_score)
+            # lm_score = lm_score.sum(dim='label').sum(dim='sample')
+            # DEBUG(j_luo) No kl so far
+            # kl_tmp = label_probs * (label_log_probs - math.log(1.0 / 3))
+            # kl = (kl_tmp * weight.align_as(kl_tmp)).sum(dim='label').sum(dim='length')
+            elbo = q_score  # - kl
+            ret['elbo'] = elbo
+
+            # DEBUG(j_luo)
+            segment_list = None
+            if self.vocab is not None:
+                segment_list = [segment.segment_list for segment in batch.segments]
+            best_packed_words, _ = self.pack(best_samples, batch.lengths, batch.feat_matrix,
+                                             batch.segments, segment_list=segment_list)
+
+            # DEBUG(j_luo)
+            # print('-' * 30)
+            # print('logits:')
+            # print(logits)
+            # print('label_probs:')
+            # print(label_probs)
+            # print('sampled:')
+            # print(packed_words.sampled_segments_by_batch)
+            # print('best:')
+            # print(best_packed_words.sampled_segments_by_batch)
+            # print('elbo:')
+            # print(elbo)
+            # print('q_score:')
+            # print(q_score.sum(), q_score.sum() / readable_score.sum())
+            # print('unreadable:')
+            # print(unreadable_score.sum())
+
+            # import time; time.sleep(0.5) # DEBUG(j_luo)
+
+        return ret
+
+    def get_scores(self, samples: LT, batch: ContinuousTextIpaBatch):
+        ret = dict()
+        bs = batch.batch_size
         # Get the lm score.
         # TODO(j_luo) unique is still a bit buggy -- BIO is the same as IIO.
         segment_list = None
@@ -564,7 +644,6 @@ class DecipherModel(OldDecipherModel):
         ret.update(
             readable_score=readable_score,
             lm_score=lm_score,
-            sample_log_probs=sample_log_probs,
             is_unique=is_unique,
         )
 
@@ -574,71 +653,14 @@ class DecipherModel(OldDecipherModel):
         # modified_seq_scores = seq_scores + (~is_unique).float() * (-999.9)
         # seq_log_probs = modified_seq_scores.log_softmax(dim='sample')
         # ret['seq_log_probs'] = seq_log_probs
+        # DEBUG(j_luo)
         ret['packed_words'] = packed_words
         word_score = self._get_word_score(packed_words, bs)
         diff_score = (word_score - in_vocab_score) * (-5.0)
         sample_score = ret['readable_score'] + ret['unreadable_score'] + \
             ret['lm_score'] + ret['in_vocab_score'] + diff_score
         ret['sample_score'] = sample_score
-
-        # DEBUG(j_luo)
-        # from pprint import pprint
-        # pprint(packed_words.sampled_segments_by_batch[0])
-
-        # try:
-        #     self._cnt += 1
-        # except:
-        #     self._cnt = 1
-        # if self._cnt % 300 == 0:
-        #     breakpoint()  # DEBUG(j_luo)
-
-        if g.gumbel_vae:
-
-            # if self._cnt % 300 == 0:
-            #     breakpoint()  # DEBUG(j_luo)
-
-            # total_score = lm_score + unreadable_score + in_vocab_score
-
-            weight = (~batch.source_padding).float()
-            sample_log_probs = label_log_probs_hard.gather('label', samples)
-            _log_probs = sample_log_probs * weight.align_as(sample_log_probs)
-            _log_probs = _log_probs.sum(dim='length')
-            q_score = _log_probs.exp().align_as(sample_score) * sample_score
-            # q_score = (q_score + unreadable_score + in_vocab_score + readable_score).sum(dim='sample')
-            # import time; time.sleep(0.5)
-            q_score = q_score.sum(dim='sample')  # / g.num_samples
-            # lm_score = (lm_score.align_as(label_log_probs_hard) * label_log_probs_hard)
-            # lm_score = (lm_score + ret['unreadable_score']) * weight.align_as(lm_score)
-            # lm_score = lm_score.sum(dim='label').sum(dim='sample')
-            # DEBUG(j_luo) No kl so far
-            # kl_tmp = label_probs * (label_log_probs - math.log(1.0 / 3))
-            # kl = (kl_tmp * weight.align_as(kl_tmp)).sum(dim='label').sum(dim='length')
-            elbo = q_score  # - kl
-            ret['elbo'] = elbo
-
-            # DEBUG(j_luo)
-            best_packed_words, _ = self.pack(best_samples, batch.lengths, batch.feat_matrix,
-                                             batch.segments, segment_list=segment_list)
-
-            # DEBUG(j_luo)
-            # print('-' * 30)
-            # print('logits:')
-            # print(logits)
-            # print('label_probs:')
-            # print(label_probs)
-            # print('sampled:')
-            # print(packed_words.sampled_segments_by_batch)
-            # print('best:')
-            # print(best_packed_words.sampled_segments_by_batch)
-            # print('elbo:')
-            # print(elbo)
-            # print('q_score:')
-            # print(q_score.sum(), q_score.sum() / readable_score.sum())
-            # print('unreadable:')
-            # print(unreadable_score.sum())
-
-            # import time; time.sleep(0.5) # DEBUG(j_luo)
-
+        ret['diff_score'] = diff_score
         return ret
 
     def _get_readable_scores(self, source_padding: BT, samples: LT) -> Tuple[FT, FT]:

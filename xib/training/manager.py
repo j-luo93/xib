@@ -1,3 +1,5 @@
+import torch.nn as nn
+from xib.search.searcher import BruteForceSearcher
 import logging
 import os
 import random
@@ -132,8 +134,15 @@ class OldDecipherManager:
 
 class DecipherManager:
 
+    add_argument('search', dtype=bool, default=False, msg='Flag to use searcher.')
+
     def __init__(self):
         self.model = DecipherModel()
+        # DEBUG(j_luo)
+        if g.search:
+            self.model.wv = nn.Linear(5, 1)
+            self.model.wv.refine_names('weight', ['score', 'feature'])
+
         if has_gpus():
             self.model.cuda()
 
@@ -141,18 +150,23 @@ class DecipherManager:
         self.dl_reg = DataLoaderRegistry()
         self.dl_reg.register_data_loader(train_task, g.data_path)
         self.evaluator = DecipherEvaluator(self.model, self.dl_reg, [train_task])
+        self.searcher = BruteForceSearcher(self.model, self.dl_reg[train_task])
         self.trainer = DecipherTrainer(self.model, [train_task], [1.0], 'total_step',
                                        evaluator=self.evaluator,
                                        check_interval=g.check_interval,
                                        eval_interval=g.eval_interval)
+        self.model.searcher = self.searcher
+
         # HACK(j_luo)
         self.trainer.mode = 'risk'
         self.evaluator.mode = 'risk'
+        self.evaluator.searcher = self.searcher
 
     def run(self):
         if g.local_model_path:
             self.trainer.load(g.local_model_path, load_lm_model=False,
                               load_seq_scorer=False, load_optimizer_state=False)
+
         self.trainer.train(self.dl_reg)
         # freeze(self.model.self_attn_layers)
         # freeze(self.model.positional_embedding)

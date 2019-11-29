@@ -1,3 +1,4 @@
+from dev_misc.devlib import get_range
 import torch
 
 from dev_misc import g, get_tensor
@@ -10,6 +11,7 @@ from xib.data_loader import ContinuousTextIpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words  # pylint: disable=no-name-in-module
 from xib.ipa import should_include
 from xib.model.lm_model import LM
+from xib.search.searcher import SearchResult
 
 
 class BaseLMRunner:
@@ -42,6 +44,28 @@ class BaseDecipherRunner:
         with NoName(batch.lengths):
             length_mask = get_length_mask(batch.lengths, batch.lengths.max()).refine_names('batch', 'length')
         weight = length_mask.sum()
+        if g.search:
+            feature = ret['feature']
+            # assert batch.batch_size == 1
+            score = self.model.wv(feature).squeeze('score')
+            log_probs = score.log_softmax(dim='sample')
+            max_len = batch.gold_tag_seqs.size('length')
+            length = batch.lengths.align_to('batch', 'length') - get_range(max_len, 2, 1) - 1
+            radical = torch.full_like(length, 3).pow(length)
+            gold_sample_idx = (radical * batch.gold_tag_seqs).sum(dim='length')
+            gold_log_probs = log_probs.gather('sample', gold_sample_idx)
+            total_loss = Metric('total_loss', -gold_log_probs.sum(), batch.batch_size)
+
+            try:
+                self._cnt += 1
+            except:
+                self._cnt = 1
+            if self._cnt % 10 == 0:
+                print(self.model.wv.weight)
+
+            metrics += total_loss
+            return metrics
+
         if 'supervised' in g.mode:
             local_target_log_probs = ret['label_log_probs'].gather('label', batch.gold_tag_seqs)
             local_losses = (length_mask.float().align_as(local_target_log_probs) * local_target_log_probs)
@@ -61,6 +85,7 @@ class BaseDecipherRunner:
 
         # Other modes # HACK(j_luo)
         total_loss = 0.0
+
         if self.mode == 'local':  # pylint: disable=no-member
             # total_loss = Metric('total_loss', local_loss.total, weight)
             total_loss += local_loss.total

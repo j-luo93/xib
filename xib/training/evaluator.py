@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dev_misc.devlib import get_range
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -209,6 +210,34 @@ class OldDecipherEvaluator(LMEvaluator, BaseDecipherRunner):
 class DecipherEvaluator(OldDecipherEvaluator):
 
     def _predict_with_mode(self, ret, batch, mode):
+        if g.search:
+            search_result = self.searcher.search(batch)
+            rs = search_result['readable_score']
+            urs = search_result['unreadable_score']
+            lms = search_result['lm_score']
+            ivs = search_result['in_vocab_score']
+            ds = search_result['diff_score']
+            fv = torch.stack([rs, urs, lms, ivs, ds], new_name='feature')
+            score = self.model.wv(fv).squeeze('score')
+            values, indices = score.max('sample')
+
+            max_len = batch.gold_tag_seqs.size('length')
+            length = batch.lengths.align_to('batch', 'length') - get_range(max_len, 2, 1) - 1
+            radical = torch.full_like(length, 3).pow(length)
+            _indices = indices.clone()
+            vs = list()
+            for l in range(max_len):
+                _rad = radical[:, l]
+                v = _indices // _rad
+                _indices = _indices % _rad
+                vs.append(v)
+            samples = torch.stack(vs, new_name='length').cpu().numpy().tolist()
+            predictions = list()
+            for sample, segment in zip(samples, batch.segments):
+                seg = segment.get_segmentation_from_tags(sample)
+                predictions.append(seg)
+            return predictions
+            # gold_sample_idx = (radical * batch.gold_tag_seqs).sum(dim='length')
         if mode == 'risk':
             return super()._predict_with_mode(ret, batch, 'local')
         else:

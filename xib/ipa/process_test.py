@@ -85,3 +85,15 @@ class TestSegmentWindow(TestCase):
         span = spans[0]
         self.assertEqual(span.start, 3)
         self.assertEqual(span.end, 5)
+
+    def test_get_segmentation_from_tags(self):
+        tags = [B, I, O, I, B, O]
+        seg = self.sw.get_segmentation_from_tags(tags)
+        self.assertEqual(len(seg), 3)
+        span1, span2, span3 = seg.spans
+        self.assertEqual(span1.start, 0)
+        self.assertEqual(span1.end, 1)
+        self.assertEqual(span2.start, 3)
+        self.assertEqual(span2.end, 3)
+        self.assertEqual(span3.start, 4)
+        self.assertEqual(span3.end, 4)

@@ -336,12 +336,31 @@ class SegmentWindow(BaseSegment):
             offset += len(segment)
         return Segmentation(spans)
 
-    @property
+    @cached_property
     def segment_list(self) -> List[str]:
         ret = list()
         for segment in self._segments:
             ret.extend(segment.merged_ipa_str)
         return ret
+
+    def get_segmentation_from_tags(self, tags: Sequence[int]) -> Segmentation:
+        assert len(tags) >= len(self)
+
+        i = 0
+        spans = list()
+        while i < len(self):
+            t_i = tags[i]
+            if t_i == O:
+                i += 1
+            elif t_i == I or t_i == B:
+                j = i + 1
+                while j < len(self) and tags[j] == I:
+                    j += 1
+                value = self.segment_list[i: j]
+                span = Span(value, i, j - 1)
+                spans.append(span)
+                i = j
+        return Segmentation(spans)
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):

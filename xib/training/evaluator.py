@@ -217,7 +217,8 @@ class DecipherEvaluator(OldDecipherEvaluator):
             lms = search_result['lm_score']
             ivs = search_result['in_vocab_score']
             ds = search_result['diff_score']
-            fv = torch.stack([rs, urs, lms, ivs, ds], new_name='feature')
+            ts = search_result['tag_score']
+            fv = torch.stack([rs, urs, lms, ivs, ds, ts], new_name='feature')
             score = self.model.wv(fv).squeeze('score')
             values, indices = score.max('sample')
 

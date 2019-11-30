@@ -56,12 +56,13 @@ class BaseDecipherRunner:
             gold_log_probs = log_probs.gather('sample', gold_sample_idx)
             total_loss = Metric('total_loss', -gold_log_probs.sum(), batch.batch_size)
 
-            try:
-                self._cnt += 1
-            except:
-                self._cnt = 1
-            if self._cnt % 10 == 0:
-                print(self.model.wv.weight)
+            # DEBUG(j_luo)
+            # try:
+            #     self._cnt += 1
+            # except:
+            #     self._cnt = 1
+            # if self._cnt % 10 == 0:
+            #     print(self.model.wv.weight)
 
             metrics += total_loss
             return metrics

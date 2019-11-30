@@ -482,19 +482,19 @@ class DecipherModel(OldDecipherModel):
                 self._cnt += 1
             except:
                 self._cnt = 1
-                self._temp = 10.0
+                self._temp = 1.0
             if self._cnt % 10 == 0:
-                self._temp *= 0.95
-                self._temp = max(self._temp, 1.0)
+                self._temp *= 0.98
+                self._temp = max(self._temp, 0.1)
                 print(self._temp)
 
-            label_probs, label_probs_hard, samples = gumbel_softmax(logits, self._temp)  # , g.num_samples)
+            label_probs, label_probs_hard, samples, seq_probs = gumbel_softmax(logits, self._temp, g.num_samples)
 
             # DEBUG(j_luo)
             # from itertools import product
             # samples = get_tensor(list(product([B, I, O], repeat=3))).refine_names('sample', 'length')
 
-            _, _, best_samples = gumbel_softmax(logits, 0.1)  # , 1)  # DEBUG(j_luo)
+            _, _, best_samples, _ = gumbel_softmax(logits, 0.1)  # , 1)  # DEBUG(j_luo)
             label_log_probs = (1e-8 + label_probs).log()
             label_log_probs_hard = (label_probs_hard + 1e-8).log()
             sample_log_probs = None
@@ -505,12 +505,13 @@ class DecipherModel(OldDecipherModel):
             lms = search_result['lm_score']
             ivs = search_result['in_vocab_score']
             ds = search_result['diff_score']
-            fv = torch.stack([rs, urs, lms, ivs, ds], new_name='feature')
+            ts = search_result['tag_score']
+            fv = torch.stack([rs, urs, lms, ivs, ds, ts], new_name='feature')
             return {'feature': fv}
         else:
-            # DEBUG(j_luo)
-            label_probs, _, _ = gumbel_softmax(logits, 1.0)  # , g.num_samples)
-            label_log_probs = (1e-8 + label_probs).log()
+            # # DEBUG(j_luo)
+            # label_probs, _, _, _ = gumbel_softmax(logits, 1.0)  # , g.num_samples)
+            # label_log_probs = (1e-8 + label_probs).log()
 
             # label_log_probs = logits.log_softmax(dim='label')
             # label_probs = label_log_probs.exp()
@@ -559,16 +560,17 @@ class DecipherModel(OldDecipherModel):
             #     breakpoint()  # DEBUG(j_luo)
 
             # total_score = lm_score + unreadable_score + in_vocab_score
-            sample_score = ret['sample_score']
+            sample_score = scores['sample_score'] / 10
+            q_score = seq_probs.align_as(sample_score) * sample_score
 
-            weight = (~batch.source_padding).float()
-            sample_log_probs = label_log_probs_hard.gather('label', samples)
-            _log_probs = sample_log_probs * weight.align_as(sample_log_probs)
-            _log_probs = _log_probs.sum(dim='length')
-            q_score = _log_probs.exp().align_as(sample_score) * sample_score
+            # weight = (~batch.source_padding).float()
+            # sample_log_probs = label_log_probs_hard.gather('label', samples)
+            # _log_probs = sample_log_probs * weight.align_as(sample_log_probs)
+            # _log_probs = _log_probs.sum(dim='length')
+            # q_score = _log_probs.exp().align_as(sample_score) * sample_score
             # q_score = (q_score + unreadable_score + in_vocab_score + readable_score).sum(dim='sample')
             # import time; time.sleep(0.5)
-            q_score = q_score.sum(dim='sample')  # / g.num_samples
+            q_score = q_score.sum(dim='sample') / g.num_samples
             # lm_score = (lm_score.align_as(label_log_probs_hard) * label_log_probs_hard)
             # lm_score = (lm_score + ret['unreadable_score']) * weight.align_as(lm_score)
             # lm_score = lm_score.sum(dim='label').sum(dim='sample')
@@ -661,6 +663,19 @@ class DecipherModel(OldDecipherModel):
             ret['lm_score'] + ret['in_vocab_score'] + diff_score
         ret['sample_score'] = sample_score
         ret['diff_score'] = diff_score
+
+        if g.search:
+            samples = samples.align_to('length', 'batch', 'sample')
+            flat_samples = samples.flatten(['batch', 'sample'], 'batch_X_sample')
+            flat_sample_embeddings = self.tag_embedding(flat_samples)
+            bxs = flat_samples.size('batch_X_sample')
+            h0 = get_zeros([1, bxs, 100])
+            c0 = get_zeros([1, bxs, 100])
+            with NoName(flat_sample_embeddings):
+                output, (hn, _) = self.tag_lstm(flat_sample_embeddings, (h0, c0))
+            tag_score = self.tag_scorer(hn).squeeze(dim=0).squeeze(dim=-1)
+            tag_score = tag_score.view(samples.size('batch'), samples.size('sample'))
+            ret['tag_score'] = tag_score.rename('batch', 'sample')
         return ret
 
     def _get_readable_scores(self, source_padding: BT, samples: LT) -> Tuple[FT, FT]:

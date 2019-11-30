@@ -140,8 +140,16 @@ class DecipherManager:
         self.model = DecipherModel()
         # DEBUG(j_luo)
         if g.search:
-            self.model.wv = nn.Linear(5, 1)
-            self.model.wv.refine_names('weight', ['score', 'feature'])
+            self.model.wv = nn.Sequential(
+                nn.Linear(6, 25),
+                nn.LeakyReLU(0.1),
+                nn.Linear(25, 125),
+                nn.LeakyReLU(0.1),
+                nn.Linear(125, 1))
+            self.model.wv[-1].refine_names('weight', ['score', None])
+            self.model.tag_embedding = nn.Embedding(3, 100)
+            self.model.tag_lstm = nn.LSTM(100, 100)
+            self.model.tag_scorer = nn.Linear(100, 1)
 
         if has_gpus():
             self.model.cuda()

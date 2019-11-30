@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dev_misc.devlib import get_range
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -12,6 +11,7 @@ import torch
 
 from dev_misc import add_argument, g
 from dev_misc.arglib import g
+from dev_misc.devlib import get_range
 from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from dev_misc.trainlib.tracker.tracker import Tracker
@@ -20,7 +20,7 @@ from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
                              DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
 from xib.model.decipher_model import DecipherModel, Segmentation, Span
-from xib.training.runner import BaseDecipherRunner, BaseLMRunner
+from xib.training.analyzer import DecipherAnalyzer, LMAnalyzer
 from xib.training.task import DecipherTask
 
 
@@ -34,11 +34,12 @@ class BaseEvaluator(ABC):
     def evaluate(self): ...
 
 
-class LMEvaluator(BaseEvaluator, BaseLMRunner):
+class LMEvaluator(BaseEvaluator):
     """An evaluator class for LMs. Note that this is done over the entire training corpus, instead of a separate split."""
 
     def __init__(self, model, data_loader):
         super().__init__(model, data_loader)
+        self.analyzer = LMAnalyzer()
 
     def evaluate(self, *args) -> Metrics:  # HACK(j_luo) *args is used just comply with BaseTrainer function signature.
         with torch.no_grad():
@@ -46,7 +47,7 @@ class LMEvaluator(BaseEvaluator, BaseLMRunner):
             all_metrics = Metrics()
             for batch in self.data_loader:
                 scores = self.model.score(batch)
-                metrics = self.analyze_scores(scores)
+                metrics = self.analyzer.analyze(scores)
                 all_metrics += metrics
         return all_metrics
 
@@ -88,8 +89,8 @@ def get_prf_scores(predictions: List[Segmentation], ground_truths: List[Segmenta
     return Metrics(exact_matches, total_correct, total_pred)
 
 
-@deprecated
-class OldDecipherEvaluator(LMEvaluator, BaseDecipherRunner):
+# @deprecated
+class DecipherEvaluator(BaseEvaluator):
 
     add_argument('eval_max_num_samples', default=0, dtype=int, msg='Max number of samples to evaluate on.')
 
@@ -97,7 +98,7 @@ class OldDecipherEvaluator(LMEvaluator, BaseDecipherRunner):
         self.model = model
         self.dl_reg = dl_reg
         self.tasks = tasks
-        self.mode: str = None
+        self.analyzer = DecipherAnalyzer()
 
     def evaluate(self, tracker: Tracker) -> Metrics:
         metrics = Metrics()
@@ -109,19 +110,20 @@ class OldDecipherEvaluator(LMEvaluator, BaseDecipherRunner):
                 metrics += task_metrics.with_prefix_(task)
         return metrics
 
-    @property
-    def available_modes(self) -> List[str]:
-        modes = ['local']
-        if self.mode == 'global':  # pylint: disable=no-member
-            modes.append('global')
-        return modes
+    # @property
+    # def available_modes(self) -> List[str]:
+    #     modes = ['local']
+    #     if self.mode == 'global':  # pylint: disable=no-member
+    #         modes.append('global')
+    #     return modes
 
     def _evaluate_one_data_loader(self, dl: ContinuousTextDataLoader, tracker: Tracker) -> Metrics:
         task = dl.task
         accum_metrics = Metrics()
 
         # Get all metrics from batches.
-        dfs = {mode: list() for mode in self.available_modes}
+        # dfs = {mode: list() for mode in self.available_modes}
+        dfs = list()
         total_num_samples = 0
         for batch in dl:
             if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
@@ -130,7 +132,7 @@ class OldDecipherEvaluator(LMEvaluator, BaseDecipherRunner):
 
             batch_metrics, batch_dfs = self.predict(batch)
             accum_metrics += batch_metrics
-            accum_metrics += self.get_metrics(batch)
+            accum_metrics += self.analyzer.analyze(ret, batch)
             for mode in self.available_modes:
                 dfs[mode].append(batch_dfs[mode])
             total_num_samples += batch.batch_size
@@ -207,47 +209,47 @@ class OldDecipherEvaluator(LMEvaluator, BaseDecipherRunner):
         return metrics, results
 
 
-class DecipherEvaluator(OldDecipherEvaluator):
+# class DecipherEvaluator(OldDecipherEvaluator):
 
-    def _predict_with_mode(self, ret, batch, mode):
-        if g.search:
-            search_result = self.searcher.search(batch)
-            rs = search_result['readable_score']
-            urs = search_result['unreadable_score']
-            lms = search_result['lm_score']
-            ivs = search_result['in_vocab_score']
-            ds = search_result['diff_score']
-            ts = search_result['tag_score']
-            fv = torch.stack([rs, urs, lms, ivs, ds, ts], new_name='feature')
-            score = self.model.wv(fv).squeeze('score')
-            values, indices = score.max('sample')
+#     def _predict_with_mode(self, ret, batch, mode):
+#         if g.search:
+#             search_result = self.searcher.search(batch)
+#             rs = search_result['readable_score']
+#             urs = search_result['unreadable_score']
+#             lms = search_result['lm_score']
+#             ivs = search_result['in_vocab_score']
+#             ds = search_result['diff_score']
+#             ts = search_result['tag_score']
+#             fv = torch.stack([rs, urs, lms, ivs, ds, ts], new_name='feature')
+#             score = self.model.wv(fv).squeeze('score')
+#             values, indices = score.max('sample')
 
-            max_len = batch.gold_tag_seqs.size('length')
-            length = batch.lengths.align_to('batch', 'length') - get_range(max_len, 2, 1) - 1
-            radical = torch.full_like(length, 3).pow(length)
-            _indices = indices.clone()
-            vs = list()
-            for l in range(max_len):
-                _rad = radical[:, l]
-                v = _indices // _rad
-                _indices = _indices % _rad
-                vs.append(v)
-            samples = torch.stack(vs, new_name='length').cpu().numpy().tolist()
-            predictions = list()
-            for sample, segment in zip(samples, batch.segments):
-                seg = segment.get_segmentation_from_tags(sample)
-                predictions.append(seg)
-            return predictions
-            # gold_sample_idx = (radical * batch.gold_tag_seqs).sum(dim='length')
-        if mode == 'risk':
-            return super()._predict_with_mode(ret, batch, 'local')
-        else:
-            return super()._predict_with_mode(ret, batch, mode)
+#             max_len = batch.gold_tag_seqs.size('length')
+#             length = batch.lengths.align_to('batch', 'length') - get_range(max_len, 2, 1) - 1
+#             radical = torch.full_like(length, 3).pow(length)
+#             _indices = indices.clone()
+#             vs = list()
+#             for l in range(max_len):
+#                 _rad = radical[:, l]
+#                 v = _indices // _rad
+#                 _indices = _indices % _rad
+#                 vs.append(v)
+#             samples = torch.stack(vs, new_name='length').cpu().numpy().tolist()
+#             predictions = list()
+#             for sample, segment in zip(samples, batch.segments):
+#                 seg = segment.get_segmentation_from_tags(sample)
+#                 predictions.append(seg)
+#             return predictions
+#             # gold_sample_idx = (radical * batch.gold_tag_seqs).sum(dim='length')
+#         if mode == 'risk':
+#             return super()._predict_with_mode(ret, batch, 'local')
+#         else:
+#             return super()._predict_with_mode(ret, batch, mode)
 
-    @property
-    def model_mode(self):
-        return 'risk'
+#     @property
+#     def model_mode(self):
+#         return 'risk'
 
-    @property
-    def available_modes(self):
-        return ['risk']
+#     @property
+#     def available_modes(self):
+#         return ['risk']

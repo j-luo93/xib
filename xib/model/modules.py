@@ -1,14 +1,15 @@
-from typing import Optional
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.modules import MultiheadAttention
+from torch.nn.modules.transformer import TransformerEncoderLayer
 
 from dev_misc import g
 from dev_misc.arglib import add_argument, not_supported_argument_value
 from dev_misc.devlib import get_range, get_tensor
-from dev_misc.devlib.named_tensor import adv_index, embed
+from dev_misc.devlib.named_tensor import NoName, adv_index, embed
 from dev_misc.utils import check_explicit_arg
 from xib.ipa import (Category, Name, conditions, get_enum_by_cat,
                      get_needed_categories, get_new_style_enum, get_none_index,
@@ -248,3 +249,53 @@ class AdaptLayer(nn.Module):
                 sfm_adapted = sfm @ alignment
                 ret[cat] = sfm_adapted.refine_names('batch', 'length', f'{cat.name}_feat_adapted')
         return ret
+
+
+class PositionalEmbedding(nn.Module):
+
+    def __init__(self, n_pos, dim):
+        super().__init__()
+        embeddings = torch.zeros(n_pos, dim)
+        position_enc = np.array([
+            [pos / np.power(10000, 2 * (j // 2) / dim) for j in range(dim)]
+            for pos in range(n_pos)
+        ])
+        embeddings[:, 0::2] = torch.FloatTensor(np.sin(position_enc[:, 0::2]))
+        embeddings[:, 1::2] = torch.FloatTensor(np.cos(position_enc[:, 1::2]))
+        self.register_buffer('embeddings', embeddings)
+
+    def forward(self, positions: LT):
+        with NoName(self.embeddings, positions):
+            ret = self.embeddings[positions]
+        new_names = positions.names + ('char_emb', )
+        return ret.refine_names(*new_names)
+
+
+class SelfAttention(MultiheadAttention):
+    """Always set `_qkv_same_embed_dim` to False."""
+
+    @property
+    def _qkv_same_embed_dim(self):
+        return False
+
+    @_qkv_same_embed_dim.setter
+    def _qkv_same_embed_dim(self, value):
+        pass
+
+
+class TransformerLayer(TransformerEncoderLayer):
+
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+        super().__init__(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout)
+        self.self_attn = SelfAttention(d_model, nhead, dropout=dropout)
+        # Implementation of Feedforward model
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.activation = torch.nn.functional.gelu

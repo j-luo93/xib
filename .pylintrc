@@ -1,0 +1,3 @@
+[MASTER]
+
+extension-pkg-whitelist=xib.check_in_vocab_impl,xib.extract_words_impl

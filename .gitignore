@@ -109,3 +109,7 @@ notebooks/
 *impl.html
 *.prof
 *.cpp
+scripts/*
+dump/*
+cmdl/*
+.testmondata

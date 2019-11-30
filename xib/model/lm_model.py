@@ -1,13 +1,11 @@
 import logging
-from dataclasses import dataclass
 from typing import Dict, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-from dev_misc.arglib import (add_argument, g, init_g_attr,
-                             not_supported_argument_value)
+from dev_misc.arglib import add_argument, g, not_supported_argument_value
 from dev_misc.devlib import get_tensor, get_zeros
 from dev_misc.trainlib import freeze
 from xib.data_loader import DenseIpaBatch, IpaBatch

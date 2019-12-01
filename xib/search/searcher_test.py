@@ -15,7 +15,7 @@ class TestBeamSearcher(TestCase):
                     [70, 20, 10],
                     [60, 30, 5],
                     [70, 20, 10],
-                    [70, 20, 10],
+                    [0, 0, 0],
                 ],
                 [
                     [10, 70, 20],
@@ -27,17 +27,20 @@ class TestBeamSearcher(TestCase):
         ).rename('batch', 'length', 'label')
         searcher = BeamSearcher()
         samples, sample_log_probs = searcher.search(lengths, label_log_probs)
-        ans_samples = [
+        ans_samples = torch.LongTensor(
             [
-                [0, 0, 0, 0],
-                [0, 1, 0, 0],
-                [1, 0, 0, 0],
-            ],
-            [
-                [1, 2, 1, 1],
-                [1, 0, 1, 1],
-                [2, 2, 1, 1]
+                [
+                    [0, 0, 0, 0],
+                    [0, 1, 0, 0],
+                    [1, 0, 0, 0],
+                ],
+                [
+                    [1, 2, 1, 1],
+                    [1, 0, 1, 1],
+                    [2, 2, 1, 1]
+                ]
             ]
-        ]
-        self.assertArrayEqual(samples, ans_samples)
-        self.assertArrayEqual(sample_log_probs, [[270, 240, 220], [270, 240, 220]])
+        )
+        self.assertArrayEqual(samples[0][:, :3], ans_samples[0][:, :3])
+        self.assertArrayEqual(samples[1], ans_samples[1])
+        self.assertArrayEqual(sample_log_probs, [[200, 170, 150], [270, 240, 220]])

@@ -7,7 +7,7 @@ import torch
 
 from dev_misc import BT, FT, LT, add_argument, g, get_tensor, get_zeros
 from dev_misc.devlib import BaseBatch, batch_class, get_length_mask
-from dev_misc.devlib.named_tensor import NoName
+from dev_misc.devlib.named_tensor import NoName, get_named_range
 from dev_misc.trainlib import Metric, Metrics, Tracker
 from xib.data_loader import ContinuousTextDataLoader, ContinuousTextIpaBatch
 from xib.ipa.process import B, I, O
@@ -57,6 +57,7 @@ class Beam(BaseBatch):
     hyp_log_probs: List[FT] = field(init=False, default=None)
     beam_ids: List[LT] = field(init=False, default=None)
     samples: LT = field(init=False, default=None)
+    sample_log_probs: FT = field(init=False, default=None)
 
     def __post_init__(self):
         if self.hyps is None:
@@ -78,13 +79,21 @@ class Beam(BaseBatch):
         self.hyps.append(label_ids.rename(beam_X_label='beam'))
         self.hyp_log_probs.append(top_values.rename(beam_X_label='beam'))
 
-    def finish_search(self):
-        last_beam_id = self.beam_ids[-1]
-        samples = [self.hyps[-1]]
-        for hyp, beam_id in zip(reversed(self.hyps[:-1]), reversed(self.beam_ids[:-1])):
-            samples.append(hyp.gather('beam', last_beam_id))
-            last_beam_id = beam_id.gather('beam', last_beam_id)
+    def finish_search(self, lengths: LT):
+        last_beam_id = get_zeros(lengths.size('batch'), g.beam_size).long().rename('batch', 'beam')
+        start_beam_id = get_named_range(g.beam_size, 'beam').align_as(last_beam_id)
+        samples = list()
+        for i, (hyp, beam_id) in enumerate(zip(reversed(self.hyps), reversed(self.beam_ids))):
+            step = len(self.beam_ids) - i
+            start_backtrack = (step == lengths).align_as(beam_id)
+            # new_last_beam_id = beam_id.gather('beam', last_beam_id)
+            this_beam_id = torch.where(start_backtrack, start_beam_id, last_beam_id)
+            samples.append(hyp.gather('beam', this_beam_id))
+            last_beam_id = beam_id.gather('beam', this_beam_id)
         self.samples = torch.stack(samples[::-1], new_name='length')
+
+        hyp_log_probs = torch.stack(self.hyp_log_probs, new_name='length')
+        self.sample_log_probs = hyp_log_probs.gather('length', lengths.align_as(hyp_log_probs)).squeeze('length')
 
 
 class BeamSearcher(BaseSearcher):
@@ -101,7 +110,7 @@ class BeamSearcher(BaseSearcher):
             # __lengths = lengths[step]
             within_length = (step < lengths).align_as(__label_log_probs)  # __lengths
             beam.extend(__label_log_probs * within_length.float())
-        beam.finish_search()
+        beam.finish_search(lengths)
         samples = beam.samples.rename(beam='sample')
-        sample_log_probs = beam.hyp_log_probs[-1].rename(beam='sample')
+        sample_log_probs = beam.sample_log_probs.rename(beam='sample')
         return samples, sample_log_probs

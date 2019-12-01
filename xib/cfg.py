@@ -23,7 +23,6 @@ class LMEn(SharedConfig):
     char_per_batch: int = 2000
     num_steps: int = 10000
     window_size: int = 5
-    use_cached_pth: bool = True
 
     def __post_init__(self):
         self.data_path = f'data/phones_{self.lang}_idx.pth'
@@ -71,7 +70,6 @@ for lang in _all_other_langs:
 class DecipherEn(LMEn):
     task: str = 'decipher'
     learning_rate: float = 5e-4
-    use_cached_pth: bool = False
 
 
 @reg

@@ -313,13 +313,14 @@ class Segment(BaseSegmentWithGoldTagSeq):
         new_feat_matrix = self.feat_matrix[start: end + 1]
         new_list_of_units = self.segment_list[start: end + 1]
         new_gold_tag_seq = torch.LongTensor([O] * (end + 1 - start))
-        return BrokenSegment(new_list_of_units, new_feat_matrix, new_gold_tag_seq)
+        return BrokenSegment(new_list_of_units, new_feat_matrix, new_gold_tag_seq, self)
 
 
 class SegmentWindow(BaseSegmentWithGoldTagSeq):
 
-    def __init__(self, segments: List[Union[Segment, BrokenSegment]]):
+    def __init__(self, segments: List[Union[Segment, BrokenSegment]], original: Optional[SegmentWindow] = None):
         self._segments = segments
+        self.original = original
 
     def __len__(self):
         return sum(len(segment) for segment in self._segments)
@@ -350,8 +351,9 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
         for seg_idx, segment in enumerate(self._segments):
             length += len(segment)
             if length > idx:
-                idx_in_seg = idx - (length - len(segment))
-                return seg_idx, idx_in_seg
+                break
+        idx_in_seg = idx - (length - len(segment))
+        return seg_idx, idx_in_seg
 
     def to_segmentation(self) -> Segmentation:
         spans = list()
@@ -453,20 +455,25 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
         return segments, duplicated
 
     def break_segment(self, start: int, end: int) -> SegmentWindow:
+        if start == 0 and end == len(self) - 1:
+            return self
+
         start_seg_idx, idx_in_start = self._find_segment(start)
         end_seg_idx, idx_in_end = self._find_segment(end)
 
         if start_seg_idx == end_seg_idx:
             seg = self._segments[start_seg_idx]
             broken = seg.break_segment(idx_in_start, idx_in_end)
-            return SegmentWindow([broken])
+            original = SegmentWindow([seg])
+            return SegmentWindow([broken], original=original)
         else:
             start_seg = self._segments[start_seg_idx]
             end_seg = self._segments[end_seg_idx]
             broken_start = start_seg.break_segment(idx_in_start, len(start_seg) - 1)
             broken_end = end_seg.break_segment(0, idx_in_end)
             middle = [self._segments[i] for i in range(start_seg_idx + 1, end_seg_idx)]
-            return SegmentWindow([broken_start] + middle + [broken_end])
+            original = SegmentWindow([start_seg] + middle + [end_seg])
+            return SegmentWindow([broken_start] + middle + [broken_end], original=original)
 
 
 class BaseSpecialSegment(BaseSegment):
@@ -502,18 +509,22 @@ class PerturbedSegment(BaseSpecialSegment):
 
 class BrokenSegment(BaseSpecialSegment, BaseSegmentWithGoldTagSeq):
 
-    def __init__(self, list_of_units: List[str], feat_matrix: LT, gold_tag_seq: LT):
+    def __init__(self, list_of_units: List[str], feat_matrix: LT, gold_tag_seq: LT, original: Segment):
         super().__init__(list_of_units, feat_matrix)
         self._gold_tag_seq = gold_tag_seq
         if len(self._gold_tag_seq) != len(list_of_units):
             raise ValueError('Length mismatch.')
+        self.original = original
 
     @property
     def gold_tag_seq(self) -> LT:
         return self._gold_tag_seq
 
     def __str__(self):
-        return '[?]' + '-'.join(self._list_of_units)
+        return ']' + '-'.join(self._list_of_units) + '['
+
+    def to_span(self) -> None:
+        return
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):

@@ -3,7 +3,7 @@ import random
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Type, Union
 
 import numpy as np
 import torch
@@ -23,21 +23,21 @@ from xib.training.task import Task
 from .batch import BaseBatch, DenseIpaBatch, IpaBatch
 
 
-class IpaDataset(Dataset):
-
-    add_argument('use_cached_pth', default=False, dtype=bool,
-                 msg='Flag to use precomputed pth file instead of processing the data on the file.')
+class BaseDataset(Dataset, metaclass=ABCMeta):
 
     def __init__(self, data_path: Path):
-        if g.use_cached_pth:
-            self.data = torch.load(data_path)
+        cache_path = Path(str(data_path) + '.cache')
+        if cache_path.exists():
+            self.data = torch.load(cache_path)
+            path = cache_path
         else:
-            segments = self._get_segment_dict(data_path)
-            self.data = {
-                'segments': get_array(list(segments.keys())),
-                'matrices': [segment.feat_matrix for segment in segments.values()]
-            }
-        logging.info(f'Loaded {len(self)} segments in total.')
+            self.data = self.load_data(data_path)
+            torch.save(self.data, cache_path)
+            path = data_path
+        logging.info(f'Loaded {len(self)} segments in total from {path}.')
+
+    @abstractmethod
+    def load_data(self, data_path: Path) -> Dict: ...
 
     def _get_segment_dict(self, data_path: Path) -> Dict[str, Segment]:
         segments = dict()
@@ -60,6 +60,19 @@ class IpaDataset(Dataset):
             'segment': segment,
             'matrix': matrix,
             'length': length
+        }
+
+
+class IpaDataset(BaseDataset):
+
+    # add_argument('use_cached_pth', default=False, dtype=bool,
+    #              msg='Flag to use precomputed pth file instead of processing the data on the file.')
+
+    def load_data(self, data_path: Path):
+        segments = self._get_segment_dict(data_path)
+        return {
+            'segments': get_array(list(segments.keys())),
+            'matrices': [segment.feat_matrix for segment in segments.values()]
         }
 
 
@@ -164,13 +177,14 @@ class DenseIpaDataLoader(IpaDataLoader):
     batch_cls = DenseIpaBatch
 
 
-class ContinuousTextIpaDataset(IpaDataset):
+add_argument('max_segment_length', default=10, dtype=int,
+             msg='Max length for segments. Longer ones will be broken down into moving windows.')
+add_argument('broken_words', default=True, dtype=bool, msg='Flag to break words down.')
 
-    add_argument('max_segment_length', default=10, dtype=int,
-                 msg='Max length for segments. Longer ones will be broken down into moving windows.')
-    add_argument('broken_words', default=True, dtype=bool, msg='Flag to break words down.')
 
-    def __init__(self, data_path: Path):
+class UnbrokenTextIpaDataset(IpaDataset):
+
+    def load_data(self, data_path: Path):
         segment_dict = self._get_segment_dict(data_path)
         segment_windows = list()
         with data_path.open('r', encoding='utf8') as fin:
@@ -192,15 +206,44 @@ class ContinuousTextIpaDataset(IpaDataset):
                         segment_window = segments[start: end]
                         segment_windows.append(segment_window)
                     last_end = end
-        self.data = {
+        return {
             'segments': get_array(segment_windows),
             'matrices': [torch.cat([segment.feat_matrix for segment in segment_window], dim=0) for segment_window in segment_windows]
         }
-        logging.info(f'Loaded {len(self)} segments in total.')
 
     def __getitem__(self, idx):
         ret = super().__getitem__(idx)
         ret['segment'] = SegmentWindow(ret['segment'])
+        ret['gold_tag_seq'] = ret['segment'].gold_tag_seq
+        return ret
+
+
+class BrokenTextIpaDataset(IpaDataset):
+
+    def load_data(self, data_path: Path):
+        segment_dict = self._get_segment_dict(data_path)
+        segment_windows = list()
+        with data_path.open('r', encoding='utf8') as fin:
+            for line in fin:
+                tokens = line.strip().split()
+                segments = [segment_dict[token] for token in tokens]
+                sw = SegmentWindow(segments)
+                start = 0
+                while True:
+                    end = min(start + g.max_segment_length, len(sw))
+                    broken_sw = sw.break_segment(start, end - 1)
+                    segment_windows.append(broken_sw)
+                    if end >= len(sw):
+                        break
+                    start += 1
+
+        return {
+            'segments': get_array(segment_windows),
+            'matrices': [sw.feat_matrix for sw in segment_windows]
+        }
+
+    def __getitem__(self, idx):
+        ret = super().__getitem__(idx)
         ret['gold_tag_seq'] = ret['segment'].gold_tag_seq
         return ret
 
@@ -214,10 +257,10 @@ class ContinuousTextIpaBatch(BaseBatch):
         self.gold_tag_seqs.rename_('batch', 'length')
 
 
-class ContinuousTextDataLoader(IpaDataLoader):
+class UnbrokenTextDataLoader(IpaDataLoader):
 
     batch_cls = ContinuousTextIpaBatch
-    dataset_cls = ContinuousTextIpaDataset
+    dataset_cls = UnbrokenTextIpaDataset
 
     def _prepare_batch(self, collate_return: CollateReturn) -> ContinuousTextIpaBatch:
         cls = type(self)
@@ -230,13 +273,22 @@ class ContinuousTextDataLoader(IpaDataLoader):
         )
 
 
+class BrokenTextDataLoader(UnbrokenTextDataLoader):
+
+    dataset_cls = BrokenTextIpaDataset
+
+
+ContinuousTextDataLoader = Union[BrokenTextDataLoader, UnbrokenTextDataLoader]
+
+
 class DataLoaderRegistry(BaseDataLoaderRegistry):
 
     def get_data_loader(self, task: Task, data_path: Path):
         if task.name in ['lm', 'mlm']:
             dl = IpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer']:
-            dl = ContinuousTextDataLoader(data_path, task)
+            dl_cls = BrokenTextDataLoader if g.broken_words else UnbrokenTextDataLoader
+            dl = dl_cls(data_path, task)
         else:
             raise ValueError(f'Unsupported task {task.name}.')
         return dl

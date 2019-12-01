@@ -387,7 +387,8 @@ class SegmentWindow(BaseNormalSegment):
             return self.perturb_shift()
 
     def perturb_swap(self) -> PerturbedSegment:
-        assert len(self) > 1
+        if len(self) <= 1:
+            return self
         # Swap two consecutive units.
         pos = random.randint(0, len(self) - 2)
         left = self.segment_list[:pos]
@@ -402,7 +403,8 @@ class SegmentWindow(BaseNormalSegment):
         return PerturbedSegment(new_list_of_units, new_feat_matrix)
 
     def perturb_shift(self) -> PerturbedSegment:
-        assert len(self) > 1
+        if len(self) <= 1:
+            return self
         shift = random.randint(1, len(self) - 1)
         mid_pt = len(self) - shift
         left = self.segment_list[mid_pt:]

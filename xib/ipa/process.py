@@ -200,6 +200,15 @@ class BaseSegment(ABC):
     def segment_list(self) -> List[str]:
         """Represent a list of IPAChar, as a list of units."""
 
+    def __eq__(self, other: BaseSegment):
+        if not isinstance(other, BaseSegment):
+            return False
+        else:
+            return self.segment_list == other.segment_list
+
+    def __hash__(self):
+        return hash(tuple(self.segment_list))
+
 
 class BaseNormalSegment(BaseSegment):
 
@@ -370,7 +379,15 @@ class SegmentWindow(BaseNormalSegment):
                 i = j
         return Segmentation(spans)
 
-    def perturb(self) -> PerturbedSegment:
+    def perturb(self, mode) -> PerturbedSegment:
+        assert mode in ['swap', 'shift']
+        if mode == 'swap':
+            return self.perturb_swap()
+        else:
+            return self.perturb_shift()
+
+    def perturb_swap(self) -> PerturbedSegment:
+        assert len(self) > 1
         # Swap two consecutive units.
         pos = random.randint(0, len(self) - 2)
         left = self.segment_list[:pos]
@@ -383,6 +400,43 @@ class SegmentWindow(BaseNormalSegment):
         right_m = self.feat_matrix[pos + 2:]
         new_feat_matrix = torch.cat([left_m] + mid_m + [right_m], dim=0)
         return PerturbedSegment(new_list_of_units, new_feat_matrix)
+
+    def perturb_shift(self) -> PerturbedSegment:
+        assert len(self) > 1
+        shift = random.randint(1, len(self) - 1)
+        mid_pt = len(self) - shift
+        left = self.segment_list[mid_pt:]
+        right = self.segment_list[:mid_pt]
+        new_list_of_units = left + right
+
+        left_m = self.feat_matrix[mid_pt:]
+        right_m = self.feat_matrix[:mid_pt]
+        new_feat_matrix = torch.cat([left_m, right_m], dim=0)
+        return PerturbedSegment(new_list_of_units, new_feat_matrix)
+
+    def perturb_n_times(self, times: int) -> Tuple[List[PerturbedSegment], List[bool]]:
+        """This will return a list of perturbed segments, as well as the original segment."""
+        segment_set = set()
+        duplicated = list()
+        segments = list()
+
+        def update(seg):
+            if seg not in segment_set:
+                duplicated.append(False)
+                segment_set.add(seg)
+            else:
+                duplicated.append(True)
+            segments.append(seg)
+
+        update(self)
+
+        for _ in range(times):
+            ptb_segment_swap = self.perturb_swap()
+            update(ptb_segment_swap)
+            ptb_segment_shift = self.perturb_shift()
+            update(ptb_segment_shift)
+
+        return segments, duplicated
 
 
 class PerturbedSegment(BaseSegment):

@@ -265,19 +265,23 @@ class DecipherModel(nn.Module):
                                  segment_list=segment_list)
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
 
-        lm_batch = self._prepare_batch(packed_words)  # TODO(j_luo)  This is actually continous batching.
-        scores = self._get_lm_scores(lm_batch)
-        nlls = list()
-        for cat, (nll, weight) in scores.items():
-            if should_include(g.feat_groups, cat):
-                nlls.append(nll * weight)
-        nlls = sum(nlls)
-        # nlls = sum(nlls) / lm_batch.lengths
-        bw = packed_words.word_lengths.size('batch_word')
-        p = packed_words.word_positions.size('position')
-        nlls = nlls.unflatten('batch', [('batch_word', bw), ('position', p)])
-        nlls = nlls.sum(dim='position')
-        lm_score, in_vocab_score = self._unpack(nlls, packed_words, bs)
+        try:
+            lm_batch = self._prepare_batch(packed_words)  # TODO(j_luo)  This is actually continous batching.
+            scores = self._get_lm_scores(lm_batch)
+            nlls = list()
+            for cat, (nll, weight) in scores.items():
+                if should_include(g.feat_groups, cat):
+                    nlls.append(nll * weight)
+            # nlls = sum(nlls)
+            nlls = sum(nlls) / lm_batch.lengths
+            bw = packed_words.word_lengths.size('batch_word')
+            p = packed_words.word_positions.size('position')
+            nlls = nlls.unflatten('batch', [('batch_word', bw), ('position', p)])
+            nlls = nlls.sum(dim='position')
+            lm_score, in_vocab_score = self._unpack(nlls, packed_words, bs)
+        except EmptyPackedWords:
+            lm_score = get_zeros(bs, packed_words.num_samples)
+            in_vocab_score = get_zeros(bs, packed_words.num_samples)
 
         word_score = self._get_word_score(packed_words, bs)
         readable_score, unreadable_score = self._get_readable_scores(source_padding, samples)

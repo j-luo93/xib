@@ -5,8 +5,8 @@ from typing import Dict, List, Tuple
 
 import torch
 
-from dev_misc import FT, LT, add_argument, g, get_tensor, get_zeros
-from dev_misc.devlib import BaseBatch, batch_class
+from dev_misc import FT, LT, BT, add_argument, g, get_tensor, get_zeros
+from dev_misc.devlib import BaseBatch, batch_class, get_length_mask
 from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metric, Metrics, Tracker
 from xib.data_loader import ContinuousTextDataLoader, ContinuousTextIpaBatch
@@ -27,7 +27,10 @@ class BruteForceSearcher(BaseSearcher):
         samples.rename_('sample', 'length')
         bs = label_log_probs.size('batch')
         samples = samples.align_to('batch', 'sample', 'length').expand(bs, -1, -1)
-        sample_log_probs = label_log_probs.gather('label', samples).sum(dim='length')
+        sample_log_probs = label_log_probs.gather('label', samples)
+        length_mask = get_length_mask(lengths, max_length).rename('batch', 'length')
+        length_mask = length_mask.align_to(sample_log_probs)
+        sample_log_probs = (sample_log_probs * length_mask.float()).sum(dim='length')
         return samples, sample_log_probs
 
 
@@ -79,7 +82,9 @@ class BeamSearcher(BaseSearcher):
         beam = Beam(bs)
         for step in range(max_length):
             __label_log_probs = label_log_probs[step]
-            beam.extend(__label_log_probs)
+            __lengths = lengths[step]
+            within_length = step < __lengths
+            beam.extend(__label_log_probs * within_length.float())
         beam.finish_search()
         samples = beam.samples.rename(beam='sample')
         sample_log_probs = beam.hyp_log_probs[-1].rename(beam='sample')

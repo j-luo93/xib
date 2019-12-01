@@ -208,14 +208,15 @@ class DecipherModel(nn.Module):
         label_probs = label_probs.rename(None).masked_scatter(mask.rename(None), source.rename(None))
         label_probs = label_probs.refine_names('length', 'batch', 'label')
 
-        if not self.training:
+        if not self.training or (g.supervised and not g.train_phi):
             probs = DecipherModelProbReturn(label_log_probs, None)
             return DecipherModelReturn(state, probs, None, None, None, None, None)
 
         # ------------------ More info during training ----------------- #
 
         # Get the lm score.
-        samples, sample_log_probs = self.searcher.search(batch.lengths, label_log_probs)
+        gold_tag_seqs = batch.gold_tag_seqs if g.supervised and g.train_phi else None
+        samples, sample_log_probs = self.searcher.search(batch.lengths, label_log_probs, gold_tag_seqs=gold_tag_seqs)
         probs = DecipherModelProbReturn(label_log_probs, sample_log_probs)
 
         packed_words, scores = self._get_scores(samples,
@@ -223,6 +224,11 @@ class DecipherModel(nn.Module):
                                                 batch.lengths,
                                                 batch.feat_matrix,
                                                 batch.source_padding)
+
+        if g.supervised and g.train_phi:
+            return DecipherModelReturn(state, probs, packed_words, None, scores, None, None)
+
+        # ------------------- Contrastive estimation ------------------- #
 
         ptb_segments = list()
         duplicates = list()

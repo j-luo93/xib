@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
 from dataclasses import InitVar, dataclass, field
 from itertools import product
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from dev_misc import FT, LT, BT, add_argument, g, get_tensor, get_zeros
+from dev_misc import BT, FT, LT, add_argument, g, get_tensor, get_zeros
 from dev_misc.devlib import BaseBatch, batch_class, get_length_mask
 from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metric, Metrics, Tracker
@@ -15,20 +15,36 @@ from xib.ipa.process import B, I, O
 
 class BaseSearcher(ABC):
 
+    def search(self, lengths: LT, label_log_probs: FT, gold_tag_seqs: Optional[LT] = None) -> Tuple[LT, FT]:
+        samples, sample_log_probs = self.search_by_probs(lengths, label_log_probs)
+        if gold_tag_seqs is not None:
+            gold_tag_seqs = gold_tag_seqs.align_as(samples)
+
+            max_length = lengths.max().item()
+            with NoName(lengths):
+                length_mask = get_length_mask(lengths, max_length).rename('batch', 'length')
+            gold_log_probs = label_log_probs.gather('label', gold_tag_seqs)
+            gold_log_probs = (gold_log_probs * length_mask.align_as(gold_log_probs)).sum('length')
+
+            samples = torch.cat([gold_tag_seqs, samples], dim='sample')
+            sample_log_probs = torch.cat([gold_log_probs, sample_log_probs], dim='sample')
+        return samples, sample_log_probs
+
     @abstractmethod
-    def search(self, lengths: LT, label_log_probs: FT) -> Tuple[LT, FT]: ...
+    def search_by_probs(self, lengths: LT, label_log_probs: FT) -> Tuple[LT, FT]: ...
 
 
 class BruteForceSearcher(BaseSearcher):
 
-    def search(self, lengths: LT, label_log_probs: FT) -> Tuple[LT, FT]:
+    def search_by_probs(self, lengths: LT, label_log_probs: FT) -> Tuple[LT, FT]:
         max_length = lengths.max().item()
         samples = get_tensor(torch.LongTensor(list(product([B, I, O], repeat=max_length))))
         samples.rename_('sample', 'length')
         bs = label_log_probs.size('batch')
         samples = samples.align_to('batch', 'sample', 'length').expand(bs, -1, -1)
         sample_log_probs = label_log_probs.gather('label', samples)
-        length_mask = get_length_mask(lengths, max_length).rename('batch', 'length')
+        with NoName(lengths):
+            length_mask = get_length_mask(lengths, max_length).rename('batch', 'length')
         length_mask = length_mask.align_to(sample_log_probs)
         sample_log_probs = (sample_log_probs * length_mask.float()).sum(dim='length')
         return samples, sample_log_probs
@@ -75,15 +91,15 @@ class BeamSearcher(BaseSearcher):
 
     add_argument('beam_size', default=200, dtype=int, msg='Size of beam.')
 
-    def search(self, lengths: LT, label_log_probs: FT) -> Tuple[LT, FT]:
+    def search_by_probs(self, lengths: LT, label_log_probs: FT) -> Tuple[LT, FT]:
         max_length = lengths.max().item()
         bs = label_log_probs.size('batch')
         label_log_probs = label_log_probs.align_to('length', 'batch', 'label')
         beam = Beam(bs)
         for step in range(max_length):
             __label_log_probs = label_log_probs[step]
-            __lengths = lengths[step]
-            within_length = step < __lengths
+            # __lengths = lengths[step]
+            within_length = (step < lengths).align_as(__label_log_probs)  # __lengths
             beam.extend(__label_log_probs * within_length.float())
         beam.finish_search()
         samples = beam.samples.rename(beam='sample')

@@ -87,10 +87,13 @@ class DecipherTrainer(BaseTrainer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.set_optimizer(AdamInverseSqrtWithWarmup,
-                           lr=g.learning_rate, betas=(0.9, 0.98),
-                           warmup_updates=g.warmup_updates)
         self.analyzer = DecipherAnalyzer()
+        self.set_optimizer()
+
+    def set_optimizer(self):
+        super().set_optimizer(AdamInverseSqrtWithWarmup,
+                              lr=g.learning_rate, betas=(0.9, 0.98),
+                              warmup_updates=g.warmup_updates)
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
@@ -110,15 +113,13 @@ class DecipherTrainer(BaseTrainer):
         metrics += Metric('grad_norm', grad_norm * weight, weight)
         return metrics.with_prefix_('decipher')
 
-    @deprecated
-    def load(self, path: Path, load_lm_model: bool = False, load_optimizer_state: bool = False, load_seq_scorer: bool = False):
+    def load(self, path: Path, load_lm_model: bool = False, load_optimizer_state: bool = False, load_phi_scorer: bool = False):
         saved = torch.load(path)
-        # NOTE(j_luo) Ignore lm_model.
         smsd = saved['model']
         if not load_lm_model:
             smsd = {k: v for k, v in smsd.items() if not k.startswith('lm_model')}
-        if not load_seq_scorer:
-            smsd = {k: v for k, v in smsd.items() if not k.startswith('seq_scorer')}
+        if not load_phi_scorer:
+            smsd = {k: v for k, v in smsd.items() if not k.startswith('phi_scorer')}
         self.model.load_state_dict(smsd, strict=False)
         if load_optimizer_state:
             self.optimizer.load_state_dict(saved['optimizer'])

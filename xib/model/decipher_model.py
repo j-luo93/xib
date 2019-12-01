@@ -123,6 +123,7 @@ class DecipherModelReturn(BaseBatch):
     ptb_packed_words: PackedWords  # NOTE(j_luo) ptb stands for perturbed.
     scores: DecipherModelScoreReturn
     ptb_scores: DecipherModelScoreReturn
+    duplicates: List[bool]
 
 
 class DecipherModel(nn.Module):
@@ -138,6 +139,7 @@ class DecipherModel(nn.Module):
     add_argument('vocab_path', dtype='path',
                  msg='Path to a vocabulary file which would provide word-level features to the  model.')
     add_argument('use_brute_force', dtype=bool, default=False, msg='Use brute force searcher.')
+    add_argument('n_times', dtype=int, default=5, msg='Number of neighbors.')
 
     @not_supported_argument_value('new_style', True)
     def __init__(self):
@@ -215,20 +217,34 @@ class DecipherModel(nn.Module):
                                                 batch.feat_matrix,
                                                 batch.source_padding)
 
-        ptb_segments = [segment.perturb() for segment in batch.segments]
+        ptb_segments = list()
+        duplicates = list()
+        for segment in batch.segments:
+            __ptb_segments, __duplicates = segment.perturb_n_times(g.n_times)
+            # NOTE(j_luo) Ignore the first one.
+            ptb_segments.extend(__ptb_segments[1:])
+            duplicates.extend(__duplicates[1:])
+        # ptb_segments = [segment.perturb_n_times(5) for segment in batch.segments]
         ptb_feat_matrix = [segment.feat_matrix for segment in ptb_segments]
         ptb_feat_matrix = torch.nn.utils.rnn.pad_sequence(ptb_feat_matrix, batch_first=True)
         ptb_feat_matrix.rename_('batch', 'length', 'feat_group')
-        if self.vocab is not None:
-            ptb_segment_list = [segment.segment_list for segment in ptb_segments]
-        ptb_packed_words, ptb_scores = self._get_scores(samples,
+        samples = samples.align_to('batch', ...)
+        with NoName(samples, batch.lengths, batch.source_padding):
+            ptb_samples = torch.repeat_interleave(samples, g.n_times * 2, dim=0)
+            ptb_lengths = torch.repeat_interleave(batch.lengths, g.n_times * 2, dim=0)
+            ptb_source_padding = torch.repeat_interleave(batch.source_padding, g.n_times * 2, dim=0)
+        ptb_samples.rename_(*samples.names)
+        ptb_lengths.rename_('batch')
+        ptb_source_padding.rename_('batch', 'length')
+
+        ptb_packed_words, ptb_scores = self._get_scores(ptb_samples,
                                                         ptb_segments,
-                                                        batch.lengths,
+                                                        ptb_lengths,
                                                         ptb_feat_matrix,
-                                                        batch.source_padding)
+                                                        ptb_source_padding)
 
         probs = DecipherModelProbReturn(label_log_probs, sample_log_probs)
-        ret = DecipherModelReturn(state, probs, packed_words, ptb_packed_words, scores, ptb_scores)
+        ret = DecipherModelReturn(state, probs, packed_words, ptb_packed_words, scores, ptb_scores, duplicates)
         return ret
 
     def _get_scores(self, samples: LT, segments: Sequence[SegmentWindow], lengths: LT, feat_matrix: LT, source_padding: BT) -> Tuple[PackedWords, DecipherModelScoreReturn]:
@@ -250,6 +266,7 @@ class DecipherModel(nn.Module):
             if should_include(g.feat_groups, cat):
                 nlls.append(nll * weight)
         nlls = sum(nlls)
+        # nlls = sum(nlls) / lm_batch.lengths
         bw = packed_words.word_lengths.size('batch_word')
         p = packed_words.word_positions.size('position')
         nlls = nlls.unflatten('batch', [('batch_word', bw), ('position', p)])

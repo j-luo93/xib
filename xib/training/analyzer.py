@@ -49,7 +49,13 @@ class DecipherAnalyzer:
         modified_logits = model_ret.probs.sample_log_probs * g.concentration + (~is_unique).float() * (-999.9)
         sample_scores = model_ret.scores.phi_score
         ptb_sample_scores = model_ret.ptb_scores.phi_score
-        all_scores = torch.stack([sample_scores, ptb_sample_scores], new_name='contrast')
+        duplicates = model_ret.duplicates
+        with NoName(ptb_sample_scores):
+            ptb_sample_scores[duplicates] = -999.9
+        bs = sample_scores.size('batch')
+        ptb_sample_scores = ptb_sample_scores.unflatten('batch', [('batch', bs), ('contrast', g.n_times * 2)])
+        sample_scores = sample_scores.align_as(ptb_sample_scores)
+        all_scores = torch.cat([sample_scores, ptb_sample_scores], dim='contrast')
         all_probs = all_scores.log_softmax(dim='contrast').exp()
         sample_probs = all_probs.align_to(..., 'contrast')[..., 0]
         utility = _compute_utility(modified_logits, sample_probs)

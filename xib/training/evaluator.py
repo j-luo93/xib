@@ -19,7 +19,8 @@ from dev_misc.utils import deprecated
 from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
                              DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
-from xib.model.decipher_model import DecipherModel, Segmentation, Span
+from xib.model.decipher_model import (DecipherModel, DecipherModelReturn,
+                                      Segmentation, Span)
 from xib.training.analyzer import DecipherAnalyzer, LMAnalyzer
 from xib.training.task import DecipherTask
 
@@ -110,19 +111,11 @@ class DecipherEvaluator(BaseEvaluator):
                 metrics += task_metrics.with_prefix_(task)
         return metrics
 
-    # @property
-    # def available_modes(self) -> List[str]:
-    #     modes = ['local']
-    #     if self.mode == 'global':  # pylint: disable=no-member
-    #         modes.append('global')
-    #     return modes
-
     def _evaluate_one_data_loader(self, dl: ContinuousTextDataLoader, tracker: Tracker) -> Metrics:
         task = dl.task
         accum_metrics = Metrics()
 
         # Get all metrics from batches.
-        # dfs = {mode: list() for mode in self.available_modes}
         dfs = list()
         total_num_samples = 0
         for batch in dl:
@@ -130,83 +123,58 @@ class DecipherEvaluator(BaseEvaluator):
                 logging.imp(f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
                 break
 
-            batch_metrics, batch_dfs = self.predict(batch)
-            accum_metrics += batch_metrics
-            accum_metrics += self.analyzer.analyze(ret, batch)
-            for mode in self.available_modes:
-                dfs[mode].append(batch_dfs[mode])
-            total_num_samples += batch.batch_size
-        try:
-            dfs = {mode: pd.concat(dfs[mode], axis=0) for mode in self.available_modes}
-        except ValueError:
-            return Metrics()
+            model_ret = self.model(batch)
 
+            batch_metrics, batch_df = self.predict(model_ret, batch)
+            accum_metrics += batch_metrics
+            accum_metrics += self.analyzer.analyze(model_ret, batch)
+            total_num_samples += batch.batch_size
+            dfs.append(batch_df)
+
+        df = pd.concat(dfs, axis=0)
         # Write the predictions to file.
-        for mode, df in dfs.items():
-            out_path = g.log_dir / 'predictions' / f'{task}.{mode}.{tracker.total_step}.tsv'
-            out_path.parent.mkdir(exist_ok=True, parents=True)
-            df.to_csv(out_path, index=None, sep='\t')
+        out_path = g.log_dir / 'predictions' / f'{task}.{tracker.total_step}.tsv'
+        out_path.parent.mkdir(exist_ok=True, parents=True)
+        df.to_csv(out_path, index=None, sep='\t')
 
         # Compute P/R/F scores.
-        for mode in self.available_modes:
-            exact_matches = getattr(accum_metrics, f'{mode}_prf_exact_matches').total
-            total_pred = getattr(accum_metrics, f'{mode}_prf_total_pred').total
-            total_correct = getattr(accum_metrics, f'{mode}_prf_total_correct').total
-            precision = exact_matches / (total_pred + 1e-8)
-            recall = exact_matches / (total_correct + 1e-8)
-            f1 = 2 * precision * recall / (precision + recall + 1e-8)
-            accum_metrics += Metric(f'{mode}_prf_precision', precision, report_mean=False)
-            accum_metrics += Metric(f'{mode}_prf_recall', recall, 1.0, report_mean=False)
-            accum_metrics += Metric(f'{mode}_prf_f1', f1, 1.0, report_mean=False)
+        exact_matches = getattr(accum_metrics, f'prf_exact_matches').total
+        total_pred = getattr(accum_metrics, f'prf_total_pred').total
+        total_correct = getattr(accum_metrics, f'prf_total_correct').total
+        precision = exact_matches / (total_pred + 1e-8)
+        recall = exact_matches / (total_correct + 1e-8)
+        f1 = 2 * precision * recall / (precision + recall + 1e-8)
+        accum_metrics += Metric(f'prf_precision', precision, report_mean=False)
+        accum_metrics += Metric(f'prf_recall', recall, 1.0, report_mean=False)
+        accum_metrics += Metric(f'prf_f1', f1, 1.0, report_mean=False)
         return accum_metrics
 
-    @property
-    def model_mode(self):
-        mode = 'local' if 'global' not in self.available_modes else 'global'
-        return mode
-
-    def _predict_with_mode(self, ret, batch: ContinuousTextIpaBatch, mode: str) -> List[Segmentation]:
-        if mode == 'local':
-            label_log_probs = ret['label_log_probs'].align_to('batch', 'length', 'label')
-            _, tag_seqs = label_log_probs.max(dim='label')
-            tag_seqs = tag_seqs.align_to('batch', 'sample', 'length').int()
-            lengths = batch.lengths.align_to('batch', 'sample').int()
-            segment_list = None
-            if self.model.vocab is not None:
-                segment_list = [segment.segment_list for segment in batch.segments]
-            packed_words, is_unique = self.model.pack(
-                tag_seqs, lengths, batch.feat_matrix, batch.segments, segment_list=segment_list)
-            segments_by_batch = packed_words.sampled_segments_by_batch
-            # Only take the first (and only) sample.
-            predictions = [segments[0] for segments in segments_by_batch]
-        elif mode == 'global':
-            seq_log_probs = ret['seq_log_probs']
-            _, best_sample_inds = seq_log_probs.align_to('batch', 'sample').max(dim='sample')
-            packed_words = ret['packed_words']
-            segments_by_batch = packed_words.sampled_segments_by_batch
-            predictions = [segments[best_sample_ind]
-                           for segments, best_sample_ind in zip(segments_by_batch, best_sample_inds)]
-        else:
-            raise ValueError(f'Unrecognized value for mode "{mode}".')
+    def _get_predictions(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> List[Segmentation]:
+        label_log_probs = model_ret.probs.label_log_probs.align_to('batch', 'length', 'label')
+        _, tag_seqs = label_log_probs.max(dim='label')
+        tag_seqs = tag_seqs.align_to('batch', 'sample', 'length').int()
+        lengths = batch.lengths.align_to('batch', 'sample').int()
+        segment_list = None
+        if self.model.vocab is not None:
+            segment_list = [segment.segment_list for segment in batch.segments]
+        packed_words, _ = self.model.pack(
+            tag_seqs, lengths, batch.feat_matrix, batch.segments, segment_list=segment_list)
+        segments_by_batch = packed_words.sampled_segments_by_batch
+        # Only take the first (and only) sample.
+        predictions = [segments[0] for segments in segments_by_batch]
         return predictions
 
-    def predict(self, batch: ContinuousTextIpaBatch) -> Tuple[Metrics, Dict[str, pd.DataFrame]]:
-        self.model: DecipherModel
-        ret = self.model(batch, self.model_mode)
+    def predict(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> Tuple[Metrics, pd.DataFrame]:
         metrics = Metrics()
-        results = dict()
-        for mode in self.available_modes:
-            predictions = self._predict_with_mode(ret, batch, mode)
-            ground_truths = [segment.to_segmentation() for segment in batch.segments]
-            prf_scores = get_prf_scores(predictions, ground_truths).with_prefix_(mode)
-            metrics += prf_scores
+        predictions = self._get_predictions(model_ret, batch)
+        ground_truths = [segment.to_segmentation() for segment in batch.segments]
+        prf_scores = get_prf_scores(predictions, ground_truths)
+        metrics += prf_scores
 
-            data = map(lambda x: map(str, x), zip(batch.segments, ground_truths, predictions))
-            df = pd.DataFrame(data, columns=['segment', 'ground_truth', 'prediction'])
+        data = map(lambda x: map(str, x), zip(batch.segments, ground_truths, predictions))
+        df = pd.DataFrame(data, columns=['segment', 'ground_truth', 'prediction'])
 
-            results[mode] = df
-
-        return metrics, results
+        return metrics, df
 
 
 # class DecipherEvaluator(OldDecipherEvaluator):

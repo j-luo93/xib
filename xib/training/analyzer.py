@@ -34,16 +34,21 @@ class LMAnalyzer:
         return metrics
 
 
+def _compute_utility(logits: FT, sample_scores: FT) -> FT:
+    sample_log_probs = logits.log_softmax(dim='sample')
+    utility = (sample_log_probs.exp() * sample_scores).sum()
+    return utility
+
+
 class DecipherAnalyzer:
 
-    def analyze(self, ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> Metrics:
+    def analyze(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> Metrics:
         metrics = Metrics()
 
-        is_unique = ret.packed_words.is_unique
-        modified_log_probs = ret.probs.sample_log_probs * g.concentration + (~is_unique).float() * (-999.9)
-        sample_scores = ret.scores.lm_score + ret.scores.readable_score + ret.scores.unreadable_score
-        sample_probs = modified_log_probs.log_softmax(dim='sample').exp()
-        utility = (sample_probs * sample_scores).sum()
+        is_unique = model_ret.packed_words.is_unique
+        modified_logits = model_ret.probs.sample_log_probs * g.concentration + (~is_unique).float() * (-999.9)
+        sample_scores = model_ret.scores.lm_score + model_ret.scores.readable_score + model_ret.scores.unreadable_score
+        utility = _compute_utility(modified_logits, sample_scores)
         total_loss = Metric('total_loss', -utility, batch.batch_size)
         metrics += total_loss
 

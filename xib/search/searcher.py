@@ -26,7 +26,7 @@ class BruteForceSearcher(BaseSearcher):
         samples.rename_('sample', 'length')
         bs = label_log_probs.size('batch')
         samples = samples.align_to('batch', 'sample', 'length').expand(bs, -1, -1)
-        sample_log_probs = label_log_probs.gather('label', samples)
+        sample_log_probs = label_log_probs.gather('label', samples).sum(dim='length')
         return samples, sample_log_probs
 
 

@@ -78,8 +78,8 @@ class DecipherTrainer(BaseTrainer):
     add_argument('score_per_word', default=1.0, dtype=float, msg='score added for each word')
     add_argument('concentration', default=1e-2, dtype=float, msg='concentration hyperparameter')
     add_argument('supervised', dtype=bool, default=False, msg='supervised mode')
-    add_argument('mode', default='local-supervised', dtype=str,
-                 choices=['local-supervised', 'global-supervised'], msg='training mode')
+    # add_argument('mode', default='local-supervised', dtype=str,
+    #              choices=['local-supervised', 'global-supervised'], msg='training mode')
     add_argument('mlm_coeff', dtype=float, default=0.05, msg='Flag to use mlm loss.')
     add_argument('warmup_updates', dtype=int, default=4000, msg='Number of warmup updates for Adam.')
 
@@ -126,7 +126,7 @@ class DecipherTrainer(BaseTrainer):
 
     def save(self, eval_metrics: Metrics):
         self.save_to(g.log_dir / 'saved.latest')
-        self.tracker.update('best_loss', value=eval_metrics.total_loss.mean)
+        self.tracker.update('best_loss', value=eval_metrics.dev_total_loss.mean)
         if self.tracker.update('best_f1', value=eval_metrics.dev_prf_f1.value):
             out_path = g.log_dir / f'saved.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')

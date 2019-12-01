@@ -70,8 +70,7 @@ class DecipherManager:
 
         self.dl_reg.register_data_loader(train_task, g.data_path)
         self.dl_reg.register_data_loader(dev_task, g.dev_data_path)
-        self.evaluator = None
-        # self.evaluator = DecipherEvaluator(self.model, self.dl_reg, [train_task, dev_task])
+        self.evaluator = DecipherEvaluator(self.model, self.dl_reg, [train_task, dev_task])
         self.trainer = DecipherTrainer(self.model, [train_task], [1.0], 'total_step',
                                        evaluator=self.evaluator,
                                        check_interval=g.check_interval,

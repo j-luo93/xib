@@ -70,7 +70,6 @@ for lang in _all_other_langs:
 @reg
 class DecipherEn(LMEn):
     task: str = 'decipher'
-    mode: str = 'local-supervised'
     learning_rate: float = 5e-4
     use_cached_pth: bool = False
 

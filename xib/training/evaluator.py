@@ -127,7 +127,7 @@ class DecipherEvaluator(BaseEvaluator):
 
             batch_metrics, batch_df = self.predict(model_ret, batch)
             accum_metrics += batch_metrics
-            accum_metrics += self.analyzer.analyze(model_ret, batch)
+            # accum_metrics += self.analyzer.analyze(model_ret, batch)
             total_num_samples += batch.batch_size
             dfs.append(batch_df)
 

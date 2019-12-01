@@ -208,8 +208,15 @@ class DecipherModel(nn.Module):
         label_probs = label_probs.rename(None).masked_scatter(mask.rename(None), source.rename(None))
         label_probs = label_probs.refine_names('length', 'batch', 'label')
 
+        if not self.training:
+            probs = DecipherModelProbReturn(label_log_probs, None)
+            return DecipherModelReturn(state, probs, None, None, None, None, None)
+
+        # ------------------ More info during training ----------------- #
+
         # Get the lm score.
         samples, sample_log_probs = self.searcher.search(batch.lengths, label_log_probs)
+        probs = DecipherModelProbReturn(label_log_probs, sample_log_probs)
 
         packed_words, scores = self._get_scores(samples,
                                                 batch.segments,
@@ -243,7 +250,6 @@ class DecipherModel(nn.Module):
                                                         ptb_feat_matrix,
                                                         ptb_source_padding)
 
-        probs = DecipherModelProbReturn(label_log_probs, sample_log_probs)
         ret = DecipherModelReturn(state, probs, packed_words, ptb_packed_words, scores, ptb_scores, duplicates)
         return ret
 

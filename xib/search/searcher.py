@@ -81,4 +81,6 @@ class BeamSearcher(BaseSearcher):
             __label_log_probs = label_log_probs[step]
             beam.extend(__label_log_probs)
         beam.finish_search()
-        return beam.samples, beam.hyp_log_probs[-1]
+        samples = beam.samples.rename(beam='sample')
+        sample_log_probs = beam.hyp_log_probs[-1].rename(beam='sample')
+        return samples, sample_log_probs

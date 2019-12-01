@@ -94,7 +94,7 @@ class DecipherTrainer(BaseTrainer):
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
-        self.tracker.add_min_trackable('best_loss')
+        # self.tracker.add_min_trackable('best_loss')
         self.tracker.add_max_trackable('best_f1')
 
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
@@ -126,7 +126,7 @@ class DecipherTrainer(BaseTrainer):
 
     def save(self, eval_metrics: Metrics):
         self.save_to(g.log_dir / 'saved.latest')
-        self.tracker.update('best_loss', value=eval_metrics.dev_total_loss.mean)
+        # self.tracker.update('best_loss', value=eval_metrics.dev_total_loss.mean)
         if self.tracker.update('best_f1', value=eval_metrics.dev_prf_f1.value):
             out_path = g.log_dir / f'saved.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')

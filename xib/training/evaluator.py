@@ -157,7 +157,7 @@ class DecipherEvaluator(BaseEvaluator):
         segment_list = None
         if self.model.vocab is not None:
             segment_list = [segment.segment_list for segment in batch.segments]
-        packed_words, _ = self.model.pack(
+        packed_words = self.model.pack(
             tag_seqs, lengths, batch.feat_matrix, batch.segments, segment_list=segment_list)
         segments_by_batch = packed_words.sampled_segments_by_batch
         # Only take the first (and only) sample.

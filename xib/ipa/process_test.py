@@ -1,4 +1,5 @@
 from unittest import TestCase
+from unittest.mock import patch
 
 import torch
 
@@ -97,3 +98,20 @@ class TestSegmentWindow(TestCase):
         self.assertEqual(span2.end, 3)
         self.assertEqual(span3.start, 4)
         self.assertEqual(span3.end, 4)
+
+    def test_perturb(self):
+        with patch('xib.ipa.process.random.randint') as mock_rand_func:
+            mock_rand_func.return_value = 3
+            seg = self.sw.perturb()
+            self.assertListEqual(seg.segment_list, ['θ', 'ɹ', 'iː', 'ɹ', 'θ', 'iː'])
+            self.assertArrayEqual(seg.feat_matrix[3], seg.feat_matrix[1])
+
+            mock_rand_func.return_value = 0
+            seg = self.sw.perturb()
+            self.assertListEqual(seg.segment_list, ['ɹ', 'θ', 'iː', 'θ', 'ɹ', 'iː'])
+            self.assertArrayEqual(seg.feat_matrix[4], seg.feat_matrix[0])
+
+            mock_rand_func.return_value = 4
+            seg = self.sw.perturb()
+            self.assertListEqual(seg.segment_list, ['θ', 'ɹ', 'iː', 'θ', 'iː', 'ɹ'])
+            self.assertArrayEqual(seg.feat_matrix[5], seg.feat_matrix[1])

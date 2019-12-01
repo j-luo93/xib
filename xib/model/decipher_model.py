@@ -1,7 +1,7 @@
 import math
 from collections import defaultdict
 from dataclasses import InitVar, dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -21,7 +21,7 @@ from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words
 from xib.gumbel import gumbel_softmax
 from xib.ipa import Category, should_include
-from xib.ipa.process import B, I, O, Segmentation, Span
+from xib.ipa.process import B, I, O, Segmentation, SegmentWindow, Span
 from xib.model.modules import PositionalEmbedding, Predictor, TransformerLayer
 from xib.search.searcher import BaseSearcher, BeamSearcher, BruteForceSearcher
 
@@ -112,14 +112,17 @@ class DecipherModelScoreReturn(BaseBatch):
     in_vocab_score: FT
     readable_score: FT
     unreadable_score: FT
+    phi_score: FT
 
 
 @batch_class
 class DecipherModelReturn(BaseBatch):
     state: FT  # The hidden state before label prediction.
-    packed_words: PackedWords
     probs: DecipherModelProbReturn
+    packed_words: PackedWords
+    ptb_packed_words: PackedWords  # NOTE(j_luo) ptb stands for perturbed.
     scores: DecipherModelScoreReturn
+    ptb_scores: DecipherModelScoreReturn
 
 
 class DecipherModel(nn.Module):
@@ -172,6 +175,9 @@ class DecipherModel(nn.Module):
         searcher_cls = BruteForceSearcher if g.use_brute_force else BeamSearcher
         self.searcher = searcher_cls()
 
+        self.phi_scorer = nn.Linear(5, 1)
+        self.phi_scorer.refine_names('weight', ['score', 'feature'])
+
     def _adapt(self, packed_feat_matrix: LT) -> LT:
         if g.adapt_mode == 'none':
             return packed_feat_matrix
@@ -179,8 +185,6 @@ class DecipherModel(nn.Module):
             raise NotImplementedError()
 
     def forward(self, batch: Union[ContinuousTextIpaBatch, IpaBatch]) -> DecipherModelReturn:
-        bs = batch.batch_size
-
         # Get the samples of label sequences first.
         out = self.emb_for_label(batch.feat_matrix, batch.source_padding)
 
@@ -204,14 +208,41 @@ class DecipherModel(nn.Module):
 
         # Get the lm score.
         samples, sample_log_probs = self.searcher.search(batch.lengths, label_log_probs)
+
+        packed_words, scores = self._get_scores(samples,
+                                                batch.segments,
+                                                batch.lengths,
+                                                batch.feat_matrix,
+                                                batch.source_padding)
+
+        ptb_segments = [segment.perturb() for segment in batch.segments]
+        ptb_feat_matrix = [segment.feat_matrix for segment in ptb_segments]
+        ptb_feat_matrix = torch.nn.utils.rnn.pad_sequence(ptb_feat_matrix, batch_first=True)
+        ptb_feat_matrix.rename_('batch', 'length', 'feat_group')
+        if self.vocab is not None:
+            ptb_segment_list = [segment.segment_list for segment in ptb_segments]
+        ptb_packed_words, ptb_scores = self._get_scores(samples,
+                                                        ptb_segments,
+                                                        batch.lengths,
+                                                        ptb_feat_matrix,
+                                                        batch.source_padding)
+
+        probs = DecipherModelProbReturn(label_log_probs, sample_log_probs)
+        ret = DecipherModelReturn(state, probs, packed_words, ptb_packed_words, scores, ptb_scores)
+        return ret
+
+    def _get_scores(self, samples: LT, segments: Sequence[SegmentWindow], lengths: LT, feat_matrix: LT, source_padding: BT) -> Tuple[PackedWords, DecipherModelScoreReturn]:
+        bs = len(segments)
+
         segment_list = None
         if self.vocab is not None:
-            segment_list = [segment.segment_list for segment in batch.segments]
-        packed_words, is_unique = self.pack(samples, batch.lengths,
-                                            batch.feat_matrix,
-                                            batch.segments,
-                                            segment_list=segment_list)
+            segment_list = [segment.segment_list for segment in segments]
+        packed_words = self.pack(samples, lengths,
+                                 feat_matrix,
+                                 segments,
+                                 segment_list=segment_list)
         packed_words.word_feat_matrices = self._adapt(packed_words.word_feat_matrices)
+
         lm_batch = self._prepare_batch(packed_words)  # TODO(j_luo)  This is actually continous batching.
         scores = self._get_lm_scores(lm_batch)
         nlls = list()
@@ -226,7 +257,11 @@ class DecipherModel(nn.Module):
         lm_score, in_vocab_score = self._unpack(nlls, packed_words, bs)
 
         word_score = self._get_word_score(packed_words, bs)
-        readable_score, unreadable_score = self._get_readable_scores(batch.source_padding, samples)
+        readable_score, unreadable_score = self._get_readable_scores(source_padding, samples)
+
+        scores = [lm_score, word_score, in_vocab_score, readable_score, unreadable_score]
+        features = torch.stack(scores, new_name='feature')
+        phi_score = self.phi_scorer(features).squeeze('score')
 
         # if g.search:
         #     samples = samples.align_to('length', 'batch', 'sample')
@@ -240,12 +275,11 @@ class DecipherModel(nn.Module):
         #     tag_score = self.tag_scorer(hn).squeeze(dim=0).squeeze(dim=-1)
         #     tag_score = tag_score.view(samples.size('batch'), samples.size('sample'))
         #     ret['tag_score'] = tag_score.rename('batch', 'sample')
-
-        probs = DecipherModelProbReturn(label_log_probs, sample_log_probs)
         scores = DecipherModelScoreReturn(lm_score, word_score, in_vocab_score,
-                                          readable_score, unreadable_score)
-        ret = DecipherModelReturn(state, packed_words, probs, scores)
-        return ret
+                                          readable_score, unreadable_score,
+                                          phi_score)
+
+        return packed_words, scores
 
     @deprecated
     def _get_word_score(self, packed_words: PackedWords, batch_size: int) -> FT:
@@ -291,7 +325,7 @@ class DecipherModel(nn.Module):
         except RuntimeError:
             raise EmptyPackedWords()
 
-    def pack(self, samples: LT, lengths: LT, feat_matrix: LT, segments: np.ndarray, segment_list: Optional[List[List[str]]] = None) -> Tuple[PackedWords, BT]:
+    def pack(self, samples: LT, lengths: LT, feat_matrix: LT, segments: np.ndarray, segment_list: Optional[List[List[str]]] = None) -> PackedWords:
         with torch.no_grad():
             feat_matrix = feat_matrix.align_to('batch', 'length', 'feat_group')
             samples = samples.align_to('batch', 'sample', 'length').int()
@@ -318,12 +352,16 @@ class DecipherModel(nn.Module):
             )
             word_feat_matrices = feat_matrix.rename(None)[key]
             word_feat_matrices = word_feat_matrices.refine_names('batch_word', 'position', 'feat_group')
-            packed_words = PackedWords(word_feat_matrices, word_lengths, batch_indices, sample_indices, word_positions,
+            packed_words = PackedWords(word_feat_matrices,
+                                       word_lengths,
+                                       batch_indices,
+                                       sample_indices,
+                                       word_positions,
                                        is_unique,
                                        ns,
                                        segments,
                                        in_vocab=in_vocab)
-            return packed_words, is_unique
+            return packed_words
 
     def _unpack(self, nlls: FT, packed_words: PackedWords, batch_size: int) -> Tuple[FT, FT]:
         with torch.no_grad():

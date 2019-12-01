@@ -47,8 +47,12 @@ class DecipherAnalyzer:
 
         is_unique = model_ret.packed_words.is_unique
         modified_logits = model_ret.probs.sample_log_probs * g.concentration + (~is_unique).float() * (-999.9)
-        sample_scores = model_ret.scores.lm_score + model_ret.scores.readable_score + model_ret.scores.unreadable_score
-        utility = _compute_utility(modified_logits, sample_scores)
+        sample_scores = model_ret.scores.phi_score
+        ptb_sample_scores = model_ret.ptb_scores.phi_score
+        all_scores = torch.stack([sample_scores, ptb_sample_scores], new_name='contrast')
+        all_probs = all_scores.log_softmax(dim='contrast').exp()
+        sample_probs = all_probs.align_to(..., 'contrast')[..., 0]
+        utility = _compute_utility(modified_logits, sample_probs)
         total_loss = Metric('total_loss', -utility, batch.batch_size)
         metrics += total_loss
 

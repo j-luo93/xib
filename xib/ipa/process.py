@@ -1,11 +1,12 @@
 from __future__ import annotations
-import random
 
+import random
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import zip_longest
-from typing import Callable, Iterator, List, Sequence, TextIO, Tuple, Union
+from typing import (Callable, ClassVar, Iterator, List, Optional, Sequence,
+                    TextIO, Tuple, Union)
 
 import numpy as np
 import pandas as pd
@@ -174,23 +175,17 @@ class Segmentation:
 
 class BaseSegment(ABC):
 
+    has_gold_tag_seq: ClassVar[bool]
+
     @property
     @abstractmethod
-    def gold_tag_seq(self) -> LT:
-        pass
-
-    @cached_property
-    @abstractmethod
-    def feat_matrix(self) -> LT:
-        pass
+    def feat_matrix(self) -> LT: ...
 
     @abstractmethod
-    def __len__(self):
-        pass
+    def __len__(self): ...
 
     @abstractmethod
-    def __str__(self):
-        pass
+    def __str__(self): ...
 
     def __repr__(self):
         cls = type(self)
@@ -200,8 +195,22 @@ class BaseSegment(ABC):
     def __getitem__(self, idx: int) -> str:
         """Get the corresponding unit (merged) given the index."""
 
+    @property
+    @abstractmethod
+    def segment_list(self) -> List[str]:
+        """Represent a list of IPAChar, as a list of units."""
 
-class Segment(BaseSegment):
+
+class BaseNormalSegment(BaseSegment):
+
+    has_gold_tag_seq: ClassVar[bool] = True
+
+    @property
+    @abstractmethod
+    def gold_tag_seq(self) -> LT: ...
+
+
+class Segment(BaseNormalSegment):
 
     def __init__(self, raw_token: str):
         self._raw_token = raw_token
@@ -226,15 +235,14 @@ class Segment(BaseSegment):
             return torch.LongTensor([B] + [I] * (len(self) - 1))
 
     @property
-    def merged_ipa_str(self) -> List[str]:
-        """Represent `merged_ipa`, a list of IPAChar, as a list of units."""
+    def segment_list(self) -> List[str]:
         return [''.join(map(str, unit)) for unit in self.merged_ipa]
 
     def permute(self) -> str:
-        return ''.join(random.sample(self.merged_ipa_str, len(self)))
+        return ''.join(random.sample(self.segment_list, len(self)))
 
     def __str__(self):
-        return '#' * self.is_noise + '-'.join(self.merged_ipa_str)
+        return '#' * self.is_noise + '-'.join(self.segment_list)
 
     def _apply_all(self):
         for name, dg in name2dg.items():
@@ -246,7 +254,7 @@ class Segment(BaseSegment):
         if isinstance(feat_or_idx, str):
             return self._legacy_getitem(feat_or_idx)
         else:
-            return self.merged_ipa_str[feat_or_idx]
+            return self.segment_list[feat_or_idx]
 
     def _legacy_getitem(self, feat: str):
         if self._merged:
@@ -290,7 +298,7 @@ class Segment(BaseSegment):
             return span
 
 
-class SegmentWindow(BaseSegment):
+class SegmentWindow(BaseNormalSegment):
 
     def __init__(self, segments: List[Segment]):
         self._segments = segments
@@ -340,7 +348,7 @@ class SegmentWindow(BaseSegment):
     def segment_list(self) -> List[str]:
         ret = list()
         for segment in self._segments:
-            ret.extend(segment.merged_ipa_str)
+            ret.extend(segment.segment_list)
         return ret
 
     def get_segmentation_from_tags(self, tags: Sequence[int]) -> Segmentation:
@@ -361,6 +369,48 @@ class SegmentWindow(BaseSegment):
                 spans.append(span)
                 i = j
         return Segmentation(spans)
+
+    def perturb(self) -> PerturbedSegment:
+        # Swap two consecutive units.
+        pos = random.randint(0, len(self) - 2)
+        left = self.segment_list[:pos]
+        mid = [self.segment_list[pos + 1], self.segment_list[pos]]
+        right = self.segment_list[pos + 2:]
+        new_list_of_units = left + mid + right
+
+        left_m = self.feat_matrix[:pos]
+        mid_m = [self.feat_matrix[pos + 1: pos + 2], self.feat_matrix[pos: pos + 1]]
+        right_m = self.feat_matrix[pos + 2:]
+        new_feat_matrix = torch.cat([left_m] + mid_m + [right_m], dim=0)
+        return PerturbedSegment(new_list_of_units, new_feat_matrix)
+
+
+class PerturbedSegment(BaseSegment):
+
+    has_gold_tag_seq: ClassVar[bool] = False
+
+    def __init__(self, list_of_units: List[str], feat_matrix: LT):
+        self._list_of_units = list_of_units
+        self._feat_matrix = feat_matrix
+        if len(self._list_of_units) != len(self._feat_matrix):
+            raise ValueError(f'Length mismatch.')
+
+    @property
+    def feat_matrix(self):
+        return self._feat_matrix
+
+    def __len__(self):
+        return len(self._list_of_units)
+
+    def __str__(self):
+        return '!' + '-'.join(self._list_of_units)
+
+    def __getitem__(self, idx: int) -> str:
+        return self._list_of_units[idx]
+
+    @property
+    def segment_list(self):
+        return self._list_of_units
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):

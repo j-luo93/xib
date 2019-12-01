@@ -168,6 +168,7 @@ class ContinuousTextIpaDataset(IpaDataset):
 
     add_argument('max_segment_length', default=10, dtype=int,
                  msg='Max length for segments. Longer ones will be broken down into moving windows.')
+    add_argument('broken_words', default=True, dtype=bool, msg='Flag to break words down.')
 
     def __init__(self, data_path: Path):
         segment_dict = self._get_segment_dict(data_path)

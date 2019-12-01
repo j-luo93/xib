@@ -41,6 +41,20 @@ class TestSegment(TestCase):
         self.assertTrue(seg.is_noise)
         self.assertArrayEqual(seg.gold_tag_seq, [O, O, O])
 
+    def test_broken_segment(self):
+        new_seg = self.seg.break_segment(1, 2)
+
+        self.assertListEqual(new_seg.segment_list, ['ɹ', 'iː'])
+        self.assertArrayEqual(new_seg.gold_tag_seq, [O, O])
+
+        new_seg = self.seg.break_segment(0, 1)
+
+        self.assertListEqual(new_seg.segment_list, ['θ', 'ɹ'])
+        self.assertArrayEqual(new_seg.gold_tag_seq, [O, O])
+
+        new_seg = self.seg.break_segment(0, 2)
+        self.assertIs(new_seg, self.seg)
+
 
 class TestSegmentWindow(TestCase):
 
@@ -143,3 +157,24 @@ class TestSegmentWindow(TestCase):
             self.assertListEqual(segments[3].segment_list, ['θ', 'ɹ', 'iː', 'ɹ', 'θ', 'iː'])
             self.assertListEqual(segments[4].segment_list, ['θ', 'ɹ', 'iː', 'θ', 'ɹ', 'iː'])
             self.assertListEqual(duplicated, [False, False, True, True, True])
+
+    def test_broken_segment(self):
+        seg1 = Segment('θɹiː')
+        seg2 = Segment('θɹiː')
+        seg3 = Segment('θɹiː')
+        sw = SegmentWindow([seg1, seg2, seg3])
+
+        new_sw = sw.break_segment(1, 2)
+
+        self.assertListEqual(new_sw.segment_list, ['ɹ', 'iː'])
+        self.assertArrayEqual(new_sw.gold_tag_seq, [O, O])
+
+        new_sw = sw.break_segment(0, 3)
+
+        self.assertListEqual(new_sw.segment_list, ['θ', 'ɹ', 'iː', 'θ'])
+        self.assertArrayEqual(new_sw.gold_tag_seq, [B, I, I, O])
+
+        new_seg = sw.break_segment(1, 8)
+
+        self.assertListEqual(new_seg.segment_list, ['ɹ', 'iː', 'θ', 'ɹ', 'iː', 'θ', 'ɹ', 'iː'])
+        self.assertArrayEqual(new_seg.gold_tag_seq, [O, O, B, I, I, B, I, I])

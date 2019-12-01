@@ -210,7 +210,7 @@ class BaseSegment(ABC):
         return hash(tuple(self.segment_list))
 
 
-class BaseNormalSegment(BaseSegment):
+class BaseSegmentWithGoldTagSeq(BaseSegment):
 
     has_gold_tag_seq: ClassVar[bool] = True
 
@@ -219,7 +219,7 @@ class BaseNormalSegment(BaseSegment):
     def gold_tag_seq(self) -> LT: ...
 
 
-class Segment(BaseNormalSegment):
+class Segment(BaseSegmentWithGoldTagSeq):
 
     def __init__(self, raw_token: str):
         self._raw_token = raw_token
@@ -306,10 +306,19 @@ class Segment(BaseNormalSegment):
             span = Span(str(self), 0, len(self) - 1)
             return span
 
+    def break_segment(self, start: int, end: int) -> Union[BrokenSegment, Segment]:
+        if start == 0 and end == len(self) - 1:
+            return self
 
-class SegmentWindow(BaseNormalSegment):
+        new_feat_matrix = self.feat_matrix[start: end + 1]
+        new_list_of_units = self.segment_list[start: end + 1]
+        new_gold_tag_seq = torch.LongTensor([O] * (end + 1 - start))
+        return BrokenSegment(new_list_of_units, new_feat_matrix, new_gold_tag_seq)
 
-    def __init__(self, segments: List[Segment]):
+
+class SegmentWindow(BaseSegmentWithGoldTagSeq):
+
+    def __init__(self, segments: List[Union[Segment, BrokenSegment]]):
         self._segments = segments
 
     def __len__(self):
@@ -333,13 +342,16 @@ class SegmentWindow(BaseNormalSegment):
         if idx >= len(self):
             raise IndexError(f'Index {idx} out of bound for length {len(self)}.')
 
+        seg_idx, idx_in_seg = self._find_segment(idx)
+        return self._segments[seg_idx][idx_in_seg]
+
+    def _find_segment(self, idx: int) -> Tuple[int, int]:
         length = 0
-        for segment in self._segments:
+        for seg_idx, segment in enumerate(self._segments):
             length += len(segment)
             if length > idx:
-                break
-        seg_idx = idx - (length - len(segment))
-        return segment[seg_idx]
+                idx_in_seg = idx - (length - len(segment))
+                return seg_idx, idx_in_seg
 
     def to_segmentation(self) -> Segmentation:
         spans = list()
@@ -440,10 +452,24 @@ class SegmentWindow(BaseNormalSegment):
 
         return segments, duplicated
 
+    def break_segment(self, start: int, end: int) -> SegmentWindow:
+        start_seg_idx, idx_in_start = self._find_segment(start)
+        end_seg_idx, idx_in_end = self._find_segment(end)
 
-class PerturbedSegment(BaseSegment):
+        if start_seg_idx == end_seg_idx:
+            seg = self._segments[start_seg_idx]
+            broken = seg.break_segment(idx_in_start, idx_in_end)
+            return SegmentWindow([broken])
+        else:
+            start_seg = self._segments[start_seg_idx]
+            end_seg = self._segments[end_seg_idx]
+            broken_start = start_seg.break_segment(idx_in_start, len(start_seg) - 1)
+            broken_end = end_seg.break_segment(0, idx_in_end)
+            middle = [self._segments[i] for i in range(start_seg_idx + 1, end_seg_idx)]
+            return SegmentWindow([broken_start] + middle + [broken_end])
 
-    has_gold_tag_seq: ClassVar[bool] = False
+
+class BaseSpecialSegment(BaseSegment):
 
     def __init__(self, list_of_units: List[str], feat_matrix: LT):
         self._list_of_units = list_of_units
@@ -458,15 +484,36 @@ class PerturbedSegment(BaseSegment):
     def __len__(self):
         return len(self._list_of_units)
 
-    def __str__(self):
-        return '!' + '-'.join(self._list_of_units)
-
     def __getitem__(self, idx: int) -> str:
         return self._list_of_units[idx]
 
     @property
     def segment_list(self):
         return self._list_of_units
+
+
+class PerturbedSegment(BaseSpecialSegment):
+
+    has_gold_tag_seq: ClassVar[bool] = False
+
+    def __str__(self):
+        return '!' + '-'.join(self._list_of_units)
+
+
+class BrokenSegment(BaseSpecialSegment, BaseSegmentWithGoldTagSeq):
+
+    def __init__(self, list_of_units: List[str], feat_matrix: LT, gold_tag_seq: LT):
+        super().__init__(list_of_units, feat_matrix)
+        self._gold_tag_seq = gold_tag_seq
+        if len(self._gold_tag_seq) != len(list_of_units):
+            raise ValueError('Length mismatch.')
+
+    @property
+    def gold_tag_seq(self) -> LT:
+        return self._gold_tag_seq
+
+    def __str__(self):
+        return '[?]' + '-'.join(self._list_of_units)
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):

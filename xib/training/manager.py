@@ -59,6 +59,7 @@ class DecipherManager:
     add_argument('saved_model_path', dtype='path', msg='Path to a saved model, skipping the local training phase.')
     add_argument('train_phi', dtype=bool, default=False,
                  msg='Flag to train phi score. Used only with supervised mode.')
+    add_argument('fix_phi', dtype=bool, default=False, msg='Flag fix phi scorer.')
     # add_argument('use_mlm_loss', dtype=bool, default=False, msg='Flag to use mlm loss.')
 
     def __init__(self):
@@ -90,6 +91,8 @@ class DecipherManager:
             freeze(self.model.label_predictor)
         if g.saved_model_path:
             self.trainer.load(g.saved_model_path, load_phi_scorer=True)
+            if g.fix_phi:
+                freeze(self.model.phi_scorer)
         #     freeze(self.model.self_attn_layers)
         #     freeze(self.model.positional_embedding)
         #     freeze(self.model.emb_for_label)

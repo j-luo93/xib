@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tqdm import tqdm
+from xib.search.search_solver import SearchSolver
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -120,7 +122,8 @@ class DecipherEvaluator(BaseEvaluator):
         total_num_samples = 0
         for batch in dl:
             if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
-                logging.imp(f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
+                logging.imp(
+                    f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples from {task}.')
                 break
 
             model_ret = self.model(batch)
@@ -171,10 +174,42 @@ class DecipherEvaluator(BaseEvaluator):
         prf_scores = get_prf_scores(predictions, ground_truths)
         metrics += prf_scores
 
-        data = map(lambda x: map(str, x), zip(batch.segments, ground_truths, predictions))
-        df = pd.DataFrame(data, columns=['segment', 'ground_truth', 'prediction'])
+        df = _get_df(batch.segments, ground_truths, predictions)
 
         return metrics, df
+
+
+def _get_df(segments, ground_truths, predictions):
+    data = map(lambda x: map(str, x), zip(segments, ground_truths, predictions))
+    df = pd.DataFrame(data, columns=['segment', 'ground_truth', 'prediction'])
+    return df
+
+
+class SearchSolverEvaluator(BaseEvaluator):
+
+    def __init__(self, solver: SearchSolver):
+        self.solver = solver
+
+    def evaluate(self, dl: ContinuousTextDataLoader) -> Metrics:
+        segments = list()
+        ground_truths = list()
+        predictions = list()
+        for batch in tqdm(dl):
+            for segment in batch.segments:
+                segments.append(segment)
+                ground_truth = segment.to_segmentation()
+                ground_truths.append(ground_truth)
+
+                segment = ''.join([x[0] for x in segment.segment_list])
+                best_value, best_state = self.solver.find_best(segment)
+                prediction = Segmentation(best_state.spans)
+                predictions.append(prediction)
+
+        df = _get_df(segments, ground_truths, predictions)
+        out_path = g.log_dir / 'predictions' / 'search_solver.tsv'
+        out_path.parent.mkdir(exist_ok=True, parents=True)
+        df.to_csv(out_path, index=None, sep='\t')
+        return get_prf_scores(predictions, ground_truths)
 
 
 # class DecipherEvaluator(OldDecipherEvaluator):

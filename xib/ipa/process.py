@@ -18,6 +18,7 @@ from ipapy.ipachar import (DG_C_MANNER, DG_C_PLACE, DG_C_VOICING,
 from ipapy.ipastring import IPAString
 from tqdm import tqdm
 
+from dev_misc import add_argument, g
 from dev_misc.devlib import BT, LT
 from dev_misc.utils import cached_property
 from xib.ipa import Category
@@ -219,6 +220,9 @@ class BaseSegmentWithGoldTagSeq(BaseSegment):
     def gold_tag_seq(self) -> LT: ...
 
 
+add_argument('min_word_length', default=4, dtype=int, msg='Min length of words.')
+
+
 class Segment(BaseSegmentWithGoldTagSeq):
 
     def __init__(self, raw_token: str):
@@ -238,7 +242,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
 
     @property
     def gold_tag_seq(self) -> LT:
-        if self.is_noise:
+        if self.is_noise or len(self) < g.min_word_length:
             return torch.LongTensor([O] * len(self))
         else:
             return torch.LongTensor([B] + [I] * (len(self) - 1))
@@ -302,7 +306,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
         return ret
 
     def to_span(self) -> Optional[Span]:
-        if not self.is_noise:
+        if not self.is_noise and len(self) >= g.min_word_length:
             span = Span(str(self), 0, len(self) - 1)
             return span
 

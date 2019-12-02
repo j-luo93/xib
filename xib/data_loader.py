@@ -25,8 +25,10 @@ from .batch import BaseBatch, DenseIpaBatch, IpaBatch
 
 class BaseDataset(Dataset, metaclass=ABCMeta):
 
+    cache_suffix = 'cache'
+
     def __init__(self, data_path: Path):
-        cache_path = Path(str(data_path) + '.cache')
+        cache_path = Path(str(data_path) + f'.{self.cache_suffix}')
         if cache_path.exists():
             self.data = torch.load(cache_path)
             path = cache_path
@@ -183,6 +185,8 @@ add_argument('broken_words', default=True, dtype=bool, msg='Flag to break words 
 
 
 class UnbrokenTextIpaDataset(IpaDataset):
+
+    cache_suffix = 'unbroken.cache'
 
     def load_data(self, data_path: Path):
         segment_dict = self._get_segment_dict(data_path)

@@ -159,6 +159,14 @@ class Span:
     def __str__(self):
         return f'{self.value}:{self.start}:{self.end}'
 
+    def __len__(self):
+        return self.end - self.start + 1
+
+    def is_prefix_of(self, other: Span):
+        if not isinstance(other, Span):
+            return False
+        return self.start == other.start and self.end <= other.end and len(self) > len(other) * 0.5
+
 
 @dataclass
 class Segmentation:

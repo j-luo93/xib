@@ -117,6 +117,22 @@ class SearchSolverManager:
     P: 553 / 950 = 0.5821052631578948
     R: 553 / 978 = 0.565439672801636
     F: 0.5736514522821577
+
+    From 50 samples:
+    19 errors in total: 12 from vocab, 4 merged, 3 tricky/maybe solvable by counts.
+
+    After fixing merged:
+    P: 559 / 922 = 0.60629067245
+    R: 559 / 978 = 0.57157464212
+    F: 0.5884210526274193
+
+    After matching prefixes:
+    P: 673 / 922 = 0.72993492407
+    R: 673 / 978 = 0.6881390593
+    F: 0.708421052625276
+
+    Removing #words in the objective #chars - #words only marginally brings down the numbers. 556/665 matches for exact/prefix out of 928 predictions
+    compared with 559/673 out of 922.
     """
 
     def run(self):

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from tqdm import tqdm
-from xib.search.search_solver import SearchSolver
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -10,6 +8,7 @@ from typing import Dict, List, Sequence, Tuple
 
 import pandas as pd
 import torch
+from tqdm import tqdm
 
 from dev_misc import add_argument, g
 from dev_misc.arglib import g
@@ -23,6 +22,7 @@ from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
 from xib.ipa.process import Segmentation, Span
 from xib.model.decipher_model import (DecipherModel, DecipherModelReturn,
                                       Segmentation, Span)
+from xib.search.search_solver import SearchSolver
 from xib.training.analyzer import DecipherAnalyzer, LMAnalyzer
 from xib.training.task import DecipherTask
 
@@ -58,6 +58,7 @@ class LMEvaluator(BaseEvaluator):
 @dataclass
 class PrfScores:
     exact_matches: int
+    prefix_matches: int
     total_correct: int
     total_pred: int
 
@@ -79,17 +80,22 @@ class PrfScores:
 
 def get_prf_scores(predictions: List[Segmentation], ground_truths: List[Segmentation]) -> Metrics:
     exact_matches = 0
+    prefix_matches = 0
     for pred, gt in zip(predictions, ground_truths):
         for p in pred:
             for g in gt:
                 if p == g:
                     exact_matches += 1
+                    prefix_matches += 1
+                elif p.is_prefix_of(g) or g.is_prefix_of(p):
+                    prefix_matches += 1
     total_correct = sum(map(len, ground_truths))
     total_pred = sum(map(len, predictions))
     exact_matches = Metric(f'prf_exact_matches', exact_matches, 1.0, report_mean=False)
+    prefix_matches = Metric(f'prf_prefix_matches', prefix_matches, 1.0, report_mean=False)
     total_correct = Metric(f'prf_total_correct', total_correct, 1.0, report_mean=False)
     total_pred = Metric(f'prf_total_pred', total_pred, 1.0, report_mean=False)
-    return Metrics(exact_matches, total_correct, total_pred)
+    return Metrics(exact_matches, prefix_matches, total_correct, total_pred)
 
 
 # @deprecated
@@ -200,7 +206,6 @@ class SearchSolverEvaluator(BaseEvaluator):
                 ground_truth = segment.to_segmentation()
                 ground_truths.append(ground_truth)
 
-                segment = ''.join([x[0] for x in segment.segment_list])
                 best_value, best_state = self.solver.find_best(segment)
                 prediction = Segmentation(best_state.spans)
                 predictions.append(prediction)

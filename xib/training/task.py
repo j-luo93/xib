@@ -24,3 +24,8 @@ class TransferTask(DecipherTask):
 class MlmTask(DecipherTask):
     """This task is used for DecipherManager."""
     name = 'mlm'
+
+
+@task_class
+class ExtractTask(Task):
+    name = 'extract'

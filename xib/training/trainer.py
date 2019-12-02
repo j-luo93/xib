@@ -13,7 +13,7 @@ from dev_misc.utils import deprecated
 from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
 from xib.model.decipher_model import DecipherModel
 from xib.model.lm_model import LM
-from xib.training.analyzer import DecipherAnalyzer, LMAnalyzer
+from xib.training.analyzer import DecipherAnalyzer, ExtractAnalyzer, LMAnalyzer
 from xib.training.optim import AdamInverseSqrtWithWarmup
 
 
@@ -132,3 +132,35 @@ class DecipherTrainer(BaseTrainer):
             out_path = g.log_dir / f'saved.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
             self.save_to(out_path)
+
+
+class ExtractTrainer(BaseTrainer):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.analyzer = ExtractAnalyzer()
+
+    def add_trackables(self):
+        self.tracker.add_trackable('total_step', total=g.num_steps)
+        self.tracker.add_max_trackable('best_f1')
+
+    def save(self, eval_metrics: Metrics):
+        self.save_to(g.log_dir / 'saved.latest')
+        # self.tracker.update('best_loss', value=eval_metrics.dev_total_loss.mean)
+        if self.tracker.update('best_f1', value=eval_metrics.prf_f1.value):
+            out_path = g.log_dir / f'saved.best'
+            logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
+            self.save_to(out_path)
+
+    def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
+        self.model.train()
+        self.optimizer.zero_grad()
+        batch = dl.get_next_batch()
+        ret = self.model(batch)
+        metrics = self.analyzer.analyze(ret, batch)
+        (-metrics.score.mean).backward()
+        self.optimizer.step()
+        grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)
+        metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
+
+        return metrics

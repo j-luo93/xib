@@ -290,7 +290,7 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
     def get_data_loader(self, task: Task, data_path: Path):
         if task.name in ['lm', 'mlm']:
             dl = IpaDataLoader(data_path, task)
-        elif task.name in ['decipher', 'transfer']:
+        elif task.name in ['decipher', 'transfer', 'extract']:
             dl_cls = BrokenTextDataLoader if g.broken_words else UnbrokenTextDataLoader
             dl = dl_cls(data_path, task)
         else:

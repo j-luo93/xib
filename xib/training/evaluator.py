@@ -22,8 +22,9 @@ from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
 from xib.ipa.process import Segmentation, Span
 from xib.model.decipher_model import (DecipherModel, DecipherModelReturn,
                                       Segmentation, Span)
+from xib.model.extract_model import ExtractModel, ExtractModelReturn
 from xib.search.search_solver import SearchSolver
-from xib.training.analyzer import DecipherAnalyzer, LMAnalyzer
+from xib.training.analyzer import DecipherAnalyzer, ExtractAnalyzer, LMAnalyzer
 from xib.training.task import DecipherTask
 
 
@@ -55,30 +56,30 @@ class LMEvaluator(BaseEvaluator):
         return all_metrics
 
 
-@dataclass
-class PrfScores:
-    exact_matches: int
-    prefix_matches: int
-    total_correct: int
-    total_pred: int
+# @dataclass
+# class PrfScores:
+#     exact_matches: int
+#     prefix_matches: int
+#     total_correct: int
+#     total_pred: int
 
-    @property
-    def precision(self):
-        return self.exact_matches / (self.total_pred + 1e-8)
+#     @property
+#     def precision(self):
+#         return self.exact_matches / (self.total_pred + 1e-8)
 
-    @property
-    def recall(self):
-        return self.exact_matches / (self.total_correct + 1e-8)
+#     @property
+#     def recall(self):
+#         return self.exact_matches / (self.total_correct + 1e-8)
 
-    @property
-    def f1(self):
-        return 2 * self.precision * self.recall / (self.precision + self.recall + 1e-8)
+#     @property
+#     def f1(self):
+#         return 2 * self.precision * self.recall / (self.precision + self.recall + 1e-8)
 
-    def __add__(self, other: PrfScores) -> PrfScores:
-        return PrfScores(self.exact_matches + other.exact_matches, self.total_correct + other.total_correct, self.total_pred + other.total_pred)
+#     def __add__(self, other: PrfScores) -> PrfScores:
+#         return PrfScores(self.exact_matches + other.exact_matches, self.total_correct + other.total_correct, self.total_pred + other.total_pred)
 
 
-def get_prf_scores(predictions: List[Segmentation], ground_truths: List[Segmentation]) -> Metrics:
+def get_matching_stats(predictions: List[Segmentation], ground_truths: List[Segmentation]) -> Metrics:
     exact_matches = 0
     prefix_matches = 0
     for pred, gt in zip(predictions, ground_truths):
@@ -98,7 +99,23 @@ def get_prf_scores(predictions: List[Segmentation], ground_truths: List[Segmenta
     return Metrics(exact_matches, prefix_matches, total_correct, total_pred)
 
 
+def get_prf_scores(metrics: Metrics) -> Metrics:
+    prf_scores = Metrics()
+
+    exact_matches = getattr(metrics, f'prf_exact_matches').total
+    total_pred = getattr(metrics, f'prf_total_pred').total
+    total_correct = getattr(metrics, f'prf_total_correct').total
+    precision = exact_matches / (total_pred + 1e-8)
+    recall = exact_matches / (total_correct + 1e-8)
+    f1 = 2 * precision * recall / (precision + recall + 1e-8)
+    prf_scores += Metric(f'prf_precision', precision, report_mean=False)
+    prf_scores += Metric(f'prf_recall', recall, 1.0, report_mean=False)
+    prf_scores += Metric(f'prf_f1', f1, 1.0, report_mean=False)
+    return prf_scores
+
 # @deprecated
+
+
 class DecipherEvaluator(BaseEvaluator):
 
     add_argument('eval_max_num_samples', default=0, dtype=int, msg='Max number of samples to evaluate on.')
@@ -147,15 +164,7 @@ class DecipherEvaluator(BaseEvaluator):
         df.to_csv(out_path, index=None, sep='\t')
 
         # Compute P/R/F scores.
-        exact_matches = getattr(accum_metrics, f'prf_exact_matches').total
-        total_pred = getattr(accum_metrics, f'prf_total_pred').total
-        total_correct = getattr(accum_metrics, f'prf_total_correct').total
-        precision = exact_matches / (total_pred + 1e-8)
-        recall = exact_matches / (total_correct + 1e-8)
-        f1 = 2 * precision * recall / (precision + recall + 1e-8)
-        accum_metrics += Metric(f'prf_precision', precision, report_mean=False)
-        accum_metrics += Metric(f'prf_recall', recall, 1.0, report_mean=False)
-        accum_metrics += Metric(f'prf_f1', f1, 1.0, report_mean=False)
+        accum_metrics += get_prf_scores(accum_metrics)
         return accum_metrics
 
     def _get_predictions(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> List[Segmentation]:
@@ -177,8 +186,8 @@ class DecipherEvaluator(BaseEvaluator):
         metrics = Metrics()
         predictions = self._get_predictions(model_ret, batch)
         ground_truths = [segment.to_segmentation() for segment in batch.segments]
-        prf_scores = get_prf_scores(predictions, ground_truths)
-        metrics += prf_scores
+        matching_stats = get_matching_stats(predictions, ground_truths)
+        metrics += matching_stats
 
         df = _get_df(batch.segments, ground_truths, predictions)
 
@@ -214,50 +223,55 @@ class SearchSolverEvaluator(BaseEvaluator):
         out_path = g.log_dir / 'predictions' / 'search_solver.tsv'
         out_path.parent.mkdir(exist_ok=True, parents=True)
         df.to_csv(out_path, index=None, sep='\t')
-        return get_prf_scores(predictions, ground_truths)
+        matching_stats = get_matching_stats(predictions, ground_truths)
+        prf_scores = get_prf_scores(matching_stats)
+        return matching_stats + prf_scores
 
 
-# class DecipherEvaluator(OldDecipherEvaluator):
+class ExtractEvaluator(BaseEvaluator):
 
-#     def _predict_with_mode(self, ret, batch, mode):
-#         if g.search:
-#             search_result = self.searcher.search(batch)
-#             rs = search_result['readable_score']
-#             urs = search_result['unreadable_score']
-#             lms = search_result['lm_score']
-#             ivs = search_result['in_vocab_score']
-#             ds = search_result['diff_score']
-#             ts = search_result['tag_score']
-#             fv = torch.stack([rs, urs, lms, ivs, ds, ts], new_name='feature')
-#             score = self.model.wv(fv).squeeze('score')
-#             values, indices = score.max('sample')
+    def __init__(self, model: ExtractModel, dl: ContinuousTextDataLoader):
+        self.model = model
+        self.dl = dl
+        self.analyzer = ExtractAnalyzer()
 
-#             max_len = batch.gold_tag_seqs.size('length')
-#             length = batch.lengths.align_to('batch', 'length') - get_range(max_len, 2, 1) - 1
-#             radical = torch.full_like(length, 3).pow(length)
-#             _indices = indices.clone()
-#             vs = list()
-#             for l in range(max_len):
-#                 _rad = radical[:, l]
-#                 v = _indices // _rad
-#                 _indices = _indices % _rad
-#                 vs.append(v)
-#             samples = torch.stack(vs, new_name='length').cpu().numpy().tolist()
-#             predictions = list()
-#             for sample, segment in zip(samples, batch.segments):
-#                 seg = segment.get_segmentation_from_tags(sample)
-#                 predictions.append(seg)
-#             return predictions
-#             # gold_sample_idx = (radical * batch.gold_tag_seqs).sum(dim='length')
-#         if mode == 'risk':
-#             return super()._predict_with_mode(ret, batch, 'local')
-#         else:
-#             return super()._predict_with_mode(ret, batch, mode)
+    def evaluate(self, tracker: Tracker) -> Metrics:
+        segments = list()
+        predictions = list()
+        ground_truths = list()
+        total_num_samples = 0
+        for batch in tqdm(self.dl):
 
-#     @property
-#     def model_mode(self):
-#         return 'risk'
+            if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
+                logging.imp(
+                    f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
+                break
 
-#     @property
-#     def available_modes(self):
-#         return ['risk']
+            ret = self.model(batch)
+            segments.extend(list(batch.segments))
+            predictions.extend(self._get_segmentations(ret, batch))
+            ground_truths.extend([segment.to_segmentation() for segment in batch.segments])
+            total_num_samples += batch.batch_size
+
+        df = _get_df(segments, ground_truths, predictions)
+        out_path = g.log_dir / 'predictions' / f'extract.{tracker.total_step}.tsv'
+        out_path.parent.mkdir(exist_ok=True, parents=True)
+        df.to_csv(out_path, index=None, sep='\t')
+        matching_stats = get_matching_stats(predictions, ground_truths)
+        prf_scores = get_prf_scores(matching_stats)
+        return matching_stats + prf_scores
+
+    def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> List[Segmentation]:
+        starts = model_ret.start.cpu().numpy()
+        ends = model_ret.end.cpu().numpy()
+        matched = model_ret.matched.cpu().numpy()
+        segmentations = list()
+        # FIXME(j_luo) Need positions to deal with multi-unit strings.
+        for segment, start, end, m in zip(batch.segments, starts, ends, matched):
+            spans = list()
+            if m:
+                span = [segment[i] for i in range(start, end + 1)]
+                span = Span('-'.join(span), start, end)
+                spans.append(span)
+            segmentations.append(Segmentation(spans))
+        return segmentations

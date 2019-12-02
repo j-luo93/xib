@@ -13,6 +13,7 @@ from dev_misc.trainlib import Metric, Metrics
 from xib.data_loader import ContinuousTextIpaBatch
 from xib.ipa import should_include
 from xib.model.decipher_model import DecipherModel, DecipherModelReturn
+from xib.model.extract_model import ExtractModelReturn
 from xib.model.lm_model import Cat
 
 
@@ -83,4 +84,12 @@ class DecipherAnalyzer:
         total_loss = Metric('total_loss', -utility, batch.batch_size)
         metrics += total_loss
 
+        return metrics
+
+
+class ExtractAnalyzer:
+
+    def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> Metrics:
+        metrics = Metrics()
+        metrics += Metric('score', model_ret.score.sum(), batch.batch_size)
         return metrics

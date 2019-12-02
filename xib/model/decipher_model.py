@@ -237,10 +237,10 @@ class DecipherModel(nn.Module):
         ptb_segments = list()
         duplicates = list()
         for segment in batch.segments:
-            __ptb_segments, __duplicates = segment.perturb_n_times(g.n_times)
+            _ptb_segments, _duplicates = segment.perturb_n_times(g.n_times)
             # NOTE(j_luo) Ignore the first one.
-            ptb_segments.extend(__ptb_segments[1:])
-            duplicates.extend(__duplicates[1:])
+            ptb_segments.extend(_ptb_segments[1:])
+            duplicates.extend(_duplicates[1:])
         # ptb_segments = [segment.perturb_n_times(5) for segment in batch.segments]
         ptb_feat_matrix = [segment.feat_matrix for segment in ptb_segments]
         ptb_feat_matrix = torch.nn.utils.rnn.pad_sequence(ptb_feat_matrix, batch_first=True)

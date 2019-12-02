@@ -1,11 +1,10 @@
-from xib.training.evaluator import SearchSolverEvaluator
-from xib.search.search_solver import SearchSolver
 import logging
 import os
 import random
 
 import torch
 import torch.nn as nn
+from torch.optim import Adam
 
 from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
@@ -15,13 +14,17 @@ from dev_misc.utils import deprecated
 from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
                              DenseIpaDataLoader, IpaDataLoader)
 from xib.model.decipher_model import DecipherModel
+from xib.model.extract_model import ExtractModel
 from xib.model.lm_model import LM, AdaptedLM
+from xib.search.search_solver import SearchSolver
 from xib.search.searcher import BruteForceSearcher
-from xib.training.evaluator import DecipherEvaluator, LMEvaluator
-from xib.training.task import DecipherTask, LMTask, MlmTask, TransferTask
-from xib.training.trainer import DecipherTrainer, LMTrainer
+from xib.training.evaluator import (DecipherEvaluator, ExtractEvaluator,
+                                    LMEvaluator, SearchSolverEvaluator)
+from xib.training.task import (DecipherTask, ExtractTask, LMTask, MlmTask,
+                               TransferTask)
+from xib.training.trainer import DecipherTrainer, ExtractTrainer, LMTrainer
 
-add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'search'], msg='which task to run')
+add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'search', 'extract'], msg='which task to run')
 
 
 class LMManager:
@@ -149,3 +152,25 @@ class SearchSolverManager:
         evaluator = SearchSolverEvaluator(solver)
         prf_scores = evaluator.evaluate(dl)
         logging.info(prf_scores.get_table())
+
+
+class ExtractManager:
+
+    def __init__(self):
+        self.model = ExtractModel()
+        if has_gpus():
+            self.model.cuda()
+
+        task = ExtractTask()
+        self.dl_reg = DataLoaderRegistry()
+        self.dl_reg.register_data_loader(task, g.data_path)
+        self.evaluator = ExtractEvaluator(self.model, self.dl_reg[task])
+
+        self.trainer = ExtractTrainer(self.model, [task], [1.0], 'total_step',
+                                      evaluator=self.evaluator,
+                                      check_interval=g.check_interval,
+                                      eval_interval=g.eval_interval)
+        self.trainer.set_optimizer(Adam, lr=g.learning_rate)
+
+    def run(self):
+        self.trainer.train(self.dl_reg)

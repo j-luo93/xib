@@ -156,6 +156,7 @@ class ExtractModel(nn.Module):
         # Range from `min_word_length` to `max_word_length`.
         len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
         len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
+        len_s = len_candidates.size('len_s')
         len_e = len_candidates.size('len_e')
         # This is inclusive.
         end_candidates = start_candidates + len_candidates - 1
@@ -164,46 +165,93 @@ class ExtractModel(nn.Module):
         # monotonic = (end_candidates > extracted.last_end.align_as(end_candidates))
         # viable = in_bound & monotonic
         viable = (end_candidates < batch.lengths.align_as(end_candidates))
+        start_candidates = start_candidates.expand_as(viable)
+        len_candidates = len_candidates.expand_as(viable)
+        # end_candidates = end_candidates.expand_as(viable)
+        bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
+        with NoName(start_candidates, end_candidates, len_candidates, bi, viable):
+            viable_starts = start_candidates[viable].rename('viable')
+            # viable_ends = end_candidates[viable].rename('viable')
+            viable_lens = len_candidates[viable].rename('viable')
+            viable_bi = bi[viable].rename('viable')
 
+        viable_starts = viable_starts.align_to('viable', 'len_w')
+        word_pos_offsets = get_named_range(g.max_word_length, 'len_w').align_as(viable_starts)
+        word_pos = viable_starts + word_pos_offsets
+        word_pos = word_pos.clamp(max=batch.max_length - 1)
+
+        nh = NameHelper()
+        viable_bi = viable_bi.expand_as(word_pos)
+        word_pos = nh.flatten(word_pos, ['viable', 'len_w'], 'viable_X_len_w')
+        viable_bi = nh.flatten(viable_bi, ['viable', 'len_w'], 'viable_X_len_w')
+        # word_pos = word_pos.flatten([, 'len_w'], 'len_s_X_len_e_X_len_w')
         word_repr = word_repr.align_to('batch', 'length', 'char_emb')
-        start_candidates_4d = start_candidates.align_to(..., 'len_w')
-        word_pos_offsets = get_named_range(len_e, 'len_w').align_as(start_candidates_4d)
-        word_pos = start_candidates_4d + word_pos_offsets
-        word_pos = word_pos.clamp(max=batch.max_length - 1).expand(-1, -1, g.max_word_length, -1)
-        word_pos = word_pos.flatten(['len_s', 'len_e', 'len_w'], 'len_s_X_len_e_X_len_w')
-        extracted_word_repr = word_repr.gather('length', word_pos)
-        extracted_word_repr = extracted_word_repr.unflatten('len_s_X_len_e_X_len_w',
-                                                            [('len_s', batch.max_length), ('len_e', len_e), ('len_w', g.max_word_length)])
+        with NoName(word_repr, viable_bi, word_pos):
+            extracted_word_repr = word_repr[viable_bi, word_pos].rename('viable_X_len_w', 'char_emb')
+        extracted_word_repr = nh.unflatten(extracted_word_repr, 'viable_X_len_w', ['viable', 'len_w'])
+        # extracted_word_repr = extracted_word_repr.unflatten('len_s_X_len_e_X_len_w',
+        #                                                     [('len_s', batch.max_length), ('len_e', len_e), ('len_w', g.max_word_length)])
 
-        matches = self._get_matches(extracted_word_repr, unit_repr, len_candidates, viable)
+        # start_candidates_4d = start_candidates.align_to(..., 'len_w')
+        # word_pos_offsets = get_named_range(len_e, 'len_w').align_as(start_candidates_4d)
+        # word_pos = start_candidates_4d + word_pos_offsets
+        # word_pos = word_pos.clamp(max=batch.max_length - 1).expand(-1, -1, g.max_word_length, -1)
+        # word_pos = word_pos.flatten(['len_s', 'len_e', 'len_w'], 'len_s_X_len_e_X_len_w')
+        # extracted_word_repr = word_repr.gather('length', word_pos)
+        # extracted_word_repr = extracted_word_repr.unflatten('len_s_X_len_e_X_len_w',
+        #                                                     [('len_s', batch.max_length), ('len_e', len_e), ('len_w', g.max_word_length)])
+
+        matches = self._get_matches(extracted_word_repr, unit_repr, viable_lens)
+
+        # Revert to the old shape.
+        bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
+        lsi = get_named_range(len_s, 'len_s').expand_as(viable)
+        lei = get_named_range(len_e, 'len_e').expand_as(viable)
+        with NoName(bi, lsi, lei, viable, matches.score, matches.matched, matches.value):
+            v_bi = bi[viable]
+            v_lsi = lsi[viable]
+            v_lei = lei[viable]
+
+            def _unshape(tensor):
+                shape = (batch.batch_size, len_s, len_e)
+                if tensor.ndim > 1:
+                    shape += tensor.shape[1:]
+                ret = get_zeros(*shape).to(tensor.dtype)
+                ret[v_bi, v_lsi, v_lei] = tensor
+                return ret
+
+            matches.score = _unshape(matches.score).rename('batch', 'len_s', 'len_e')
+            matches.matched = _unshape(matches.matched).rename('batch', 'len_s', 'len_e')
+            matches.value = _unshape(matches.value).rename('batch', 'len_s', 'len_e', 'vocab')
 
         new_extracted = Extracted(batch.batch_size, matches)
         return new_extracted
 
     @profile
-    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, len_candidates: LT, viable: BT) -> Matches:
+    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT) -> Matches:
         # extracted_word_repr = extracted_word_repr.flatten(['len_w', 'char_emb'], 'len_w_X_char_emb')
         # vocab_repr = vocab_repr.flatten(['length', 'char_emb'], 'len_w_X_char_emb')
-        bs = extracted_word_repr.size('batch')
-        len_s = extracted_word_repr.size('len_s')
-        len_e = extracted_word_repr.size('len_e')
+        # breakpoint()  # DEBUG(j_luo)
+        # bs = extracted_word_repr.size('batch')
+        # len_s = extracted_word_repr.size('len_s')
+        # len_e = extracted_word_repr.size('len_e')
         d_char = extracted_word_repr.size('char_emb')
-        extracted_word_repr = extracted_word_repr.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
-
-        ns = extracted_word_repr.size('batch_X_len_s_X_len_e')
+        # extracted_word_repr = extracted_word_repr.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
+        ns = extracted_word_repr.size('viable')
+        # ns = extracted_word_repr.size('batch_X_len_s_X_len_e')
         nt = len(self.vocab_feat_matrix)
         msl = extracted_word_repr.size('len_w')
         mtl = self.vocab_feat_matrix.size('length')
 
-        not_viable = ~viable.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
+        # not_viable = ~viable.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
         # NOTE(j_luo) You need one extra position to keep 0-length outputs, and another one to dump invalid indices during DP.
         f = get_zeros(ns, nt, 2 + msl, 2 + mtl).fill_(99.9)
         for i in range(msl + 1):
             f[:, :, i, 0] = i
         for j in range(mtl + 1):
             f[:, :, 0, j] = j
-        with NoName(not_viable):
-            f[not_viable] = 99.9
+        # with NoName(not_viable):
+        #     f[not_viable] = 99.9
 
         def _get_cosine_matrix(x, y):
             # x = x.permute(1, 0, 2)
@@ -216,14 +264,10 @@ class ExtractModel(nn.Module):
             return (1.0 - cos) / 2
 
         nh = NameHelper()
-        _extracted_word_repr = nh.flatten(extracted_word_repr,
-                                          ['batch_X_len_s_X_len_e', 'len_w'],
-                                          'batch_X_len_s_X_len_e_X_len_w')
+        _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
         cos = _get_cosine_matrix(_extracted_word_repr, unit_repr)
         # Name: ? x len_w x unit
-        cos = nh.unflatten(cos,
-                           'batch_X_len_s_X_len_e_X_len_w',
-                           ['batch_X_len_s_X_len_e', 'len_w'])
+        cos = nh.unflatten(cos, 'viable_X_len_w', ['viable', 'len_w'])
 
         # with NoName(self.indexed_segments, cos):
         #     all_ls = get_range(msl, 1, 0) + 1
@@ -275,22 +319,32 @@ class ExtractModel(nn.Module):
                     f[:, :, ls, lt], _ = all_s.min(dim=-1)
 
         # scores, _ = f.view(ns, -1).min(dim=-1)
-        f.rename_('batch_X_len_s_X_len_e', 'vocab', 'len_w_src', 'len_w_tgt')
-        f = f.unflatten('batch_X_len_s_X_len_e', [('batch', bs), ('len_s', len_s), ('len_e', len_e)])
-        with NoName(f, len_candidates, self.vocab_length):
-            bi = get_range(bs, 4, 0)
-            si = get_range(len_s, 4, 1)
-            ei = get_range(len_e, 4, 2)
-            vi = get_range(len(self.vocab_length), 4, 3)
-            idx_src = len_candidates.expand(bs, len_s, len_e).unsqueeze(dim=-1)
+        f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
+        # f = f.unflatten('batch_X_len_s_X_len_e', [('batch', bs), ('len_s', len_s), ('len_e', len_e)])
+        with NoName(f, viable_lens, self.vocab_length):
+            idx_src = viable_lens.unsqueeze(dim=-1)
             idx_tgt = self.vocab_length
-            value = f[bi, si, ei, vi, idx_src, idx_tgt]
-            value.rename_('batch', 'len_s', 'len_e', 'vocab')
+            viable_i = get_range(ns, 2, 0)
+            vocab_i = get_range(len(self.vocab_length), 2, 1)
+
+            value = f[viable_i, vocab_i, idx_src, idx_tgt]
+            value.rename_('viable', 'vocab')
+
+            # idx_src = viabel.expand(bs, len_s, len_e).unsqueeze(dim=-1)
+
+            # bi = get_range(bs, 4, 0)
+            # si = get_range(len_s, 4, 1)
+            # ei = get_range(len_e, 4, 2)
+            # vi = get_range(len(self.vocab_length), 4, 3)
+            # idx_src = len_candidates.expand(bs, len_s, len_e).unsqueeze(dim=-1)
+            # idx_tgt = self.vocab_length
+            # value = f[bi, si, ei, vi, idx_src, idx_tgt]
+            # value.rename_('batch', 'len_s', 'len_e', 'vocab')
 
         best_value, matched_vocab = value.min(dim='vocab')
-        matched_vocab = matched_vocab.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
+        # matched_vocab = matched_vocab.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
         lengths = self.vocab_length.gather('vocab', matched_vocab)
-        lengths = lengths.unflatten('batch_X_len_s_X_len_e', [('batch', bs), ('len_s', len_s), ('len_e', len_e)])
+        # lengths = lengths.unflatten('batch_X_len_s_X_len_e', [('batch', bs), ('len_s', len_s), ('len_e', len_e)])
         matched = best_value < g.threshold
         # # DEBUG(j_luo)
         # try:

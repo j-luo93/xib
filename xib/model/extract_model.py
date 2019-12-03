@@ -282,14 +282,13 @@ class ExtractModel(nn.Module):
         best_value, matched_vocab = value.min(dim='vocab')
         lengths = self.vocab_length.gather('vocab', matched_vocab)
         matched = best_value < g.threshold
-        # # DEBUG(j_luo)
-        # try:
-        #     self._thresh -= 0.005
-        # except:
-        # self._thresh = g.threshold
-        # # self._thresh = max(self._thresh, 0.2)
-        # print(self._thresh)
-        self._thresh = g.threshold
+        # DEBUG(j_luo)
+        try:
+            self._thresh -= 0.005
+        except:
+            self._thresh = g.threshold
+        self._thresh = max(self._thresh, 0.2)
+        print(self._thresh)
         score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
         matches = Matches(None, score, value, matched, matched_vocab)
         return matches

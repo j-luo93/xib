@@ -170,6 +170,8 @@ class ExtractManager:
                                       evaluator=self.evaluator,
                                       check_interval=g.check_interval,
                                       eval_interval=g.eval_interval)
+        if g.saved_model_path:
+            self.trainer.load(g.saved_model_path)
         self.trainer.set_optimizer(Adam, lr=g.learning_rate)
 
     def run(self):

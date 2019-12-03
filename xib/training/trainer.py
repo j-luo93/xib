@@ -145,11 +145,17 @@ class ExtractTrainer(BaseTrainer):
         for p in self.model.parameters():
             if p.ndim == 2:
                 torch.nn.init.xavier_uniform_(p)
-        # freeze(self.model.embedding)
+        freeze(self.model.embedding)
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
         self.tracker.add_max_trackable('best_f1')
+
+    def load(self, path: Path):
+        saved = torch.load(path)
+        smsd = saved['model']
+        self.model.load_state_dict(smsd)
+        logging.imp(f'Loading model from {path}.')
 
     def save(self, eval_metrics: Metrics):
         self.save_to(g.log_dir / 'saved.latest')

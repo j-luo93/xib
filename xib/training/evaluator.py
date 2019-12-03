@@ -104,14 +104,19 @@ def get_prf_scores(metrics: Metrics) -> Metrics:
     prf_scores = Metrics()
 
     exact_matches = getattr(metrics, f'prf_exact_matches').total
+    prefix_matches = getattr(metrics, f'prf_prefix_matches').total
     total_pred = getattr(metrics, f'prf_total_pred').total
     total_correct = getattr(metrics, f'prf_total_correct').total
-    precision = exact_matches / (total_pred + 1e-8)
-    recall = exact_matches / (total_correct + 1e-8)
-    f1 = 2 * precision * recall / (precision + recall + 1e-8)
-    prf_scores += Metric(f'prf_precision', precision, report_mean=False)
-    prf_scores += Metric(f'prf_recall', recall, 1.0, report_mean=False)
-    prf_scores += Metric(f'prf_f1', f1, 1.0, report_mean=False)
+    exact_precision = exact_matches / (total_pred + 1e-8)
+    exact_recall = exact_matches / (total_correct + 1e-8)
+    exact_f1 = 2 * exact_precision * exact_recall / (exact_precision + exact_recall + 1e-8)
+    prefix_precision = prefix_matches / (total_pred + 1e-8)
+    prefix_recall = prefix_matches / (total_correct + 1e-8)
+    prefix_f1 = 2 * prefix_precision * prefix_recall / (prefix_precision + prefix_recall + 1e-8)
+    prf_scores += Metric(f'prf_precision', exact_precision, report_mean=False)
+    prf_scores += Metric(f'prf_recall', exact_recall, 1.0, report_mean=False)
+    prf_scores += Metric(f'prf_exact_f1', exact_f1, 1.0, report_mean=False)
+    prf_scores += Metric(f'prf_prefix_f1', prefix_f1, 1.0, report_mean=False)
     return prf_scores
 
 # @deprecated

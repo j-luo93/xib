@@ -182,7 +182,7 @@ class DenseIpaDataLoader(IpaDataLoader):
 
 add_argument('max_segment_length', default=10, dtype=int,
              msg='Max length for segments. Longer ones will be broken down into moving windows.')
-add_argument('broken_words', default=True, dtype=bool, msg='Flag to break words down.')
+add_argument('broken_words', default=False, dtype=bool, msg='Flag to break words down.')
 
 
 class UnbrokenTextIpaDataset(IpaDataset):

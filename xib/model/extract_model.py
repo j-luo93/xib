@@ -54,8 +54,8 @@ class ExtractModel(nn.Module):
     add_argument('max_num_words', default=3, dtype=int, msg='Max number of extracted words.')
     add_argument('max_word_length', default=10, dtype=int, msg='Max length of extracted words.')
     add_argument('max_extracted_candidates', default=200, dtype=int, msg='Max number of extracted candidates.')
-    add_argument('threshold', default=0.05, dtype=float,
-                 msg='Value of threshold to determine whether two words are matched.')
+    add_argument('init_threshold', default=0.05, dtype=float,
+                 msg='Initial value of threshold to determine whether two words are matched.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
 
     def __init__(self):
@@ -281,13 +281,14 @@ class ExtractModel(nn.Module):
         # Get the best spans.
         best_value, matched_vocab = value.min(dim='vocab')
         lengths = self.vocab_length.gather('vocab', matched_vocab)
-        matched = best_value < g.threshold
+        matched = best_value < g.init_threshold
         # DEBUG(j_luo)
         try:
-            self._thresh -= 0.005
+            if self.training:
+                self._thresh -= 0.005
         except:
-            self._thresh = g.threshold
-        self._thresh = max(self._thresh, 0.2)
+            self._thresh = g.init_threshold
+        self._thresh = max(self._thresh, 0.001)
         print(self._thresh)
         score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
         matches = Matches(None, score, value, matched, matched_vocab)

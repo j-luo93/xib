@@ -24,7 +24,8 @@ from xib.training.task import (DecipherTask, ExtractTask, LMTask, MlmTask,
                                TransferTask)
 from xib.training.trainer import DecipherTrainer, ExtractTrainer, LMTrainer
 
-add_argument('task', default='lm', dtype=str, choices=['lm', 'decipher', 'search', 'extract'], msg='which task to run')
+add_argument('task', default='lm', dtype=str, choices=[
+             'lm', 'adapt', 'decipher', 'search', 'extract'], msg='which task to run')
 
 
 class LMManager:
@@ -47,13 +48,12 @@ class LMManager:
         self.trainer.train(self.dl_reg)
 
 
-# class AdaptManager(Manager):
+class AdaptLMManager(LMManager):
 
-#     data_loader_cls = DenseIpaDataLoader
-#     trainer_cls = AdaptLMTrainer
+    data_loader_cls = DenseIpaDataLoader
 
-#     def _get_model(self):
-#         return AdaptedLM()
+    def _get_model(self):
+        return AdaptedLM()
 
 
 class DecipherManager:

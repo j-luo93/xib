@@ -6,6 +6,7 @@ import torch
 import torch.optim as optim
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
+from dev_misc import get_tensor
 from dev_misc.arglib import add_argument, g
 from dev_misc.trainlib import Metric, Metrics, freeze, get_grad_norm
 from dev_misc.trainlib.base_trainer import BaseTrainer as BaseTrainerDev
@@ -147,6 +148,12 @@ class ExtractTrainer(BaseTrainer):
                 torch.nn.init.xavier_uniform_(p)
         freeze(self.model.embedding)
 
+        # DEBUG(j_luo)
+        logging.warn('identity init')
+        for p in self.model.adapter.adapters.values():
+            lp = len(p)
+            p.data[range(lp), range(lp)] += 10.0
+
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
         self.tracker.add_max_trackable('best_f1')
@@ -160,7 +167,7 @@ class ExtractTrainer(BaseTrainer):
     def save(self, eval_metrics: Metrics):
         self.save_to(g.log_dir / 'saved.latest')
         # self.tracker.update('best_loss', value=eval_metrics.dev_total_loss.mean)
-        if self.tracker.update('best_f1', value=eval_metrics.prf_f1.value):
+        if self.tracker.update('best_f1', value=eval_metrics.prf_exact_f1.value):
             out_path = g.log_dir / f'saved.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
             self.save_to(out_path)

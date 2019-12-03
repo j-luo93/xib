@@ -2,14 +2,16 @@ from dev_misc.arglib import g, parse_args, show_args
 from dev_misc.devlib import initiate
 from dev_misc.devlib.named_tensor import patch_named_tensors
 from xib.cfg import reg
-from xib.training.manager import DecipherManager, LMManager, SearchSolverManager, ExtractManager
+from xib.training.manager import (AdaptLMManager, DecipherManager,
+                                  ExtractManager, LMManager,
+                                  SearchSolverManager)
 
 
 def train():
     if g.task == 'lm':
         manager = LMManager()
-    # elif g.task == 'adapt':
-    #     manager = AdaptManager()
+    elif g.task == 'adapt':
+        manager = AdaptLMManager()
     # elif g.task == 'transfer':
     #     manager = TransferManager()
     elif g.task == 'search':

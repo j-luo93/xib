@@ -9,7 +9,6 @@ from typing import Dict, List, Sequence, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from tqdm import tqdm
 
 from dev_misc import add_argument, g
 from dev_misc.arglib import g
@@ -17,7 +16,7 @@ from dev_misc.devlib import get_range
 from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from dev_misc.trainlib.tracker.tracker import Tracker
-from dev_misc.utils import deprecated
+from dev_misc.utils import deprecated, pbar
 from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
                              DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
@@ -113,9 +112,11 @@ def get_prf_scores(metrics: Metrics) -> Metrics:
     prefix_precision = prefix_matches / (total_pred + 1e-8)
     prefix_recall = prefix_matches / (total_correct + 1e-8)
     prefix_f1 = 2 * prefix_precision * prefix_recall / (prefix_precision + prefix_recall + 1e-8)
-    prf_scores += Metric(f'prf_precision', exact_precision, report_mean=False)
-    prf_scores += Metric(f'prf_recall', exact_recall, 1.0, report_mean=False)
+    prf_scores += Metric(f'prf_exact_precision', exact_precision, report_mean=False)
+    prf_scores += Metric(f'prf_exact_recall', exact_recall, 1.0, report_mean=False)
     prf_scores += Metric(f'prf_exact_f1', exact_f1, 1.0, report_mean=False)
+    prf_scores += Metric(f'prf_prefix_precision', prefix_precision, report_mean=False)
+    prf_scores += Metric(f'prf_prefix_recall', prefix_recall, 1.0, report_mean=False)
     prf_scores += Metric(f'prf_prefix_f1', prefix_f1, 1.0, report_mean=False)
     return prf_scores
 
@@ -215,7 +216,7 @@ class SearchSolverEvaluator(BaseEvaluator):
         segments = list()
         ground_truths = list()
         predictions = list()
-        for batch in tqdm(dl):
+        for batch in pbar(dl, desc='eval_batch'):
             for segment in batch.segments:
                 segments.append(segment)
                 ground_truth = segment.to_segmentation()
@@ -247,7 +248,7 @@ class ExtractEvaluator(BaseEvaluator):
         ground_truths = list()
         matched_segments = list()
         total_num_samples = 0
-        for batch in tqdm(self.dl):
+        for batch in pbar(self.dl, desc='eval_batch'):
 
             if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
                 logging.imp(

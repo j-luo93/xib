@@ -141,7 +141,8 @@ class ExtractModel(nn.Module):
         len_s = new_extracted.matches.score.size('len_s')
         len_e = new_extracted.matches.score.size('len_e')
         best_starts = best_inds // len_e
-        best_ends = best_inds % len_e + best_starts
+        # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
+        best_ends = best_inds % len_e + best_starts + g.min_word_length - 1
         matched = new_extracted.matches.matched.flatten(['len_s', 'len_e'], 'cand')
         with NoName(matched):
             matched = matched.any(dim=-1)
@@ -156,8 +157,6 @@ class ExtractModel(nn.Module):
         # Range from `min_word_length` to `max_word_length`.
         len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
         len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
-        len_s = len_candidates.size('len_s')
-        len_e = len_candidates.size('len_e')
         # This is inclusive.
         end_candidates = start_candidates + len_candidates - 1
 
@@ -167,6 +166,9 @@ class ExtractModel(nn.Module):
         viable = (end_candidates < batch.lengths.align_as(end_candidates))
         start_candidates = start_candidates.expand_as(viable)
         len_candidates = len_candidates.expand_as(viable)
+        # NOTE(j_luo) Use `viable` to get the lengths. `len_candidates` has dummy axes. # IDEA(j_luo) Any better way of handling this?
+        len_s = viable.size('len_s')
+        len_e = viable.size('len_e')
         # end_candidates = end_candidates.expand_as(viable)
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         with NoName(start_candidates, end_candidates, len_candidates, bi, viable):

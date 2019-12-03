@@ -135,7 +135,7 @@ class SearchSolverManager:
     F: 0.708421052625276
 
     Removing #words in the objective #chars - #words only marginally brings down the numbers. 556/665 matches for exact/prefix out of 928 predictions
-    compared with 559/673 out of 922.
+    compared with 559/673 out of 922. UPDATE: new run gives 567/680 out of 928, actually better without it.
     """
 
     def run(self):
@@ -147,7 +147,7 @@ class SearchSolverManager:
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
             vocab = set(line.strip() for line in fin)
 
-        solver = SearchSolver(vocab, 5)
+        solver = SearchSolver(vocab, g.max_num_words)
 
         evaluator = SearchSolverEvaluator(solver)
         prf_scores = evaluator.evaluate(dl)

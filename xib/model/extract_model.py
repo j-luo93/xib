@@ -46,6 +46,8 @@ class ExtractModel(nn.Module):
     add_argument('max_num_words', default=3, dtype=int, msg='Max number of extracted words.')
     add_argument('max_word_length', default=10, dtype=int, msg='Max length of extracted words.')
     add_argument('max_extracted_candidates', default=200, dtype=int, msg='Max number of extracted candidates.')
+    add_argument('threshold', default=0.05, dtype=float,
+                 msg='Value of threshold to determine whether two words are matched.')
 
     def __init__(self):
         super().__init__()
@@ -180,7 +182,7 @@ class ExtractModel(nn.Module):
         matched_vocab = matched_vocab.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
         lengths = self.vocab_length.gather('vocab', matched_vocab)
         lengths = lengths.unflatten('batch_X_len_s_X_len_e', [('batch', bs), ('len_s', len_s), ('len_e', len_e)])
-        matched = (best_value < 0.05)
+        matched = best_value < g.threshold
         score = lengths * matched * (1.0 - best_value)
         matches = Matches(None, score, value, matched)
         return matches

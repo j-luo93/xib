@@ -283,7 +283,7 @@ def convert_to_dense(feat_matrix: LT) -> DenseFeatureMatrix:
 @batch_class
 class ContinuousTextIpaBatch(BaseBatch):
     gold_tag_seqs: Optional[torch.LongTensor] = None
-    dense_feat_matrix: Optional[DenseFeatureMatrix] = field(init=False)
+    dense_feat_matrix: Optional[DenseFeatureMatrix] = field(init=False, default=None)
 
     def _post_init_helper(self):
         super()._post_init_helper()

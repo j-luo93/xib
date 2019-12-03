@@ -60,7 +60,7 @@ class FeatEmbedding(nn.Module):
     def _get_embeddings(self):
         return nn.Embedding(g.num_features, g.dim)
 
-    def forward(self, feat_matrix: LT, padding: BT, masked_positions: Optional[LT] = None) -> FT:
+    def forward(self, feat_matrix: LT, padding: Optional[BT] = None, masked_positions: Optional[LT] = None) -> FT:
         feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
         # Convert old style to new style ipa features.
         if g.new_style:
@@ -78,8 +78,9 @@ class FeatEmbedding(nn.Module):
         feat_emb = embed(self.embed_layer, feat_matrix, self.feat_emb_name)
         feat_emb = feat_emb.flatten([self.group_name, self.feat_emb_name], self.char_emb_name)
         feat_emb = feat_emb.align_to('batch', 'length', self.char_emb_name)
-        padding = padding.align_to('batch', 'length')
-        feat_emb.rename(None)[padding.rename(None)] = 0.0
+        if padding is not None:
+            padding = padding.align_to('batch', 'length')
+            feat_emb.rename(None)[padding.rename(None)] = 0.0
 
         if masked_positions is not None:
             batch_i = get_range(padding.size('batch'), 1, 0)
@@ -102,7 +103,10 @@ class DenseFeatEmbedding(FeatEmbedding):
                 emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, g.dim))
         return nn.ParameterDict(emb_dict)
 
-    def forward(self, dense_feat_matrices: Dict[Category, FT], padding: BT) -> FT:
+    def forward(self, dense_feat_matrices: Dict[Category, FT], padding: Optional[BT] = None) -> FT:
+        if padding is not None:
+            padding = padding.align_to('batch', 'length')
+
         embs = list()
         for cat in Category:
             if cat.name in self.embed_layer and cat in dense_feat_matrices:
@@ -110,6 +114,8 @@ class DenseFeatEmbedding(FeatEmbedding):
                 emb_param = self.embed_layer[cat.name]
                 sfm = sfm.align_to('batch', 'length', ...)
                 emb = sfm @ emb_param
+                if padding is not None:
+                    emb.rename(None)[padding.rename(None)] = 0.0
                 embs.append(emb)
         feat_emb = torch.cat(embs, dim=-1).refine_names('batch', 'length', self.char_emb_name)
         return feat_emb

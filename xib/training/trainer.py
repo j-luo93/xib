@@ -145,7 +145,7 @@ class ExtractTrainer(BaseTrainer):
         for p in self.model.parameters():
             if p.ndim == 2:
                 torch.nn.init.xavier_uniform_(p)
-        freeze(self.model.embedding)
+        # freeze(self.model.embedding)
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)

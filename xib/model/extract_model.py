@@ -122,8 +122,8 @@ class ExtractModel(nn.Module):
 
     @profile
     def forward(self, batch: ContinuousTextIpaBatch) -> ExtractModelReturn:
+        # Prepare representations.
         if g.dense_input:
-            # with Rename(self.vocab_source_padding, *self.vocab_dense_feat_matrix.values(), vocab='batch'):
             with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
                 word_repr = self.embedding(batch.dense_feat_matrix, batch.source_padding)
                 dfm = self.adapter(self.unit_dense_feat_matrix)
@@ -134,9 +134,12 @@ class ExtractModel(nn.Module):
                 unit_repr = self.embedding(self.unit_feat_matrix)
         unit_repr = unit_repr.squeeze('length')
         unit_repr.rename_(batch='unit')
+
+        # Main body: extract one span.
         extracted = Extracted(batch.batch_size)
-        # for i in range(g.max_num_words):
-        new_extracted = self._extract_one_round(batch, extracted, word_repr, unit_repr)
+        new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr)
+
+        # Get the best score and span.
         best_scores, best_inds = new_extracted.matches.score.flatten(['len_s', 'len_e'], 'cand').max(dim='cand')
         len_s = new_extracted.matches.score.size('len_s')
         len_e = new_extracted.matches.score.size('len_e')
@@ -152,7 +155,8 @@ class ExtractModel(nn.Module):
         return ret
 
     @profile
-    def _extract_one_round(self, batch: ContinuousTextIpaBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
+    def _extract_one_span(self, batch: ContinuousTextIpaBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
+        # Propose all span start/end positions.
         start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
         # Range from `min_word_length` to `max_word_length`.
         len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
@@ -160,52 +164,39 @@ class ExtractModel(nn.Module):
         # This is inclusive.
         end_candidates = start_candidates + len_candidates - 1
 
-        # in_bound = (end_candidates < batch.lengths.align_as(end_candidates))
-        # monotonic = (end_candidates > extracted.last_end.align_as(end_candidates))
-        # viable = in_bound & monotonic
+        # Only keep the viable/valid spans around.
         viable = (end_candidates < batch.lengths.align_as(end_candidates))
         start_candidates = start_candidates.expand_as(viable)
         len_candidates = len_candidates.expand_as(viable)
         # NOTE(j_luo) Use `viable` to get the lengths. `len_candidates` has dummy axes. # IDEA(j_luo) Any better way of handling this?
         len_s = viable.size('len_s')
         len_e = viable.size('len_e')
-        # end_candidates = end_candidates.expand_as(viable)
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         with NoName(start_candidates, end_candidates, len_candidates, bi, viable):
             viable_starts = start_candidates[viable].rename('viable')
-            # viable_ends = end_candidates[viable].rename('viable')
             viable_lens = len_candidates[viable].rename('viable')
             viable_bi = bi[viable].rename('viable')
 
+        # Get the word positions to get the corresponding representations.
         viable_starts = viable_starts.align_to('viable', 'len_w')
         word_pos_offsets = get_named_range(g.max_word_length, 'len_w').align_as(viable_starts)
         word_pos = viable_starts + word_pos_offsets
         word_pos = word_pos.clamp(max=batch.max_length - 1)
 
+        # Get the corresponding representations.
         nh = NameHelper()
         viable_bi = viable_bi.expand_as(word_pos)
         word_pos = nh.flatten(word_pos, ['viable', 'len_w'], 'viable_X_len_w')
         viable_bi = nh.flatten(viable_bi, ['viable', 'len_w'], 'viable_X_len_w')
-        # word_pos = word_pos.flatten([, 'len_w'], 'len_s_X_len_e_X_len_w')
         word_repr = word_repr.align_to('batch', 'length', 'char_emb')
         with NoName(word_repr, viable_bi, word_pos):
             extracted_word_repr = word_repr[viable_bi, word_pos].rename('viable_X_len_w', 'char_emb')
         extracted_word_repr = nh.unflatten(extracted_word_repr, 'viable_X_len_w', ['viable', 'len_w'])
-        # extracted_word_repr = extracted_word_repr.unflatten('len_s_X_len_e_X_len_w',
-        #                                                     [('len_s', batch.max_length), ('len_e', len_e), ('len_w', g.max_word_length)])
 
-        # start_candidates_4d = start_candidates.align_to(..., 'len_w')
-        # word_pos_offsets = get_named_range(len_e, 'len_w').align_as(start_candidates_4d)
-        # word_pos = start_candidates_4d + word_pos_offsets
-        # word_pos = word_pos.clamp(max=batch.max_length - 1).expand(-1, -1, g.max_word_length, -1)
-        # word_pos = word_pos.flatten(['len_s', 'len_e', 'len_w'], 'len_s_X_len_e_X_len_w')
-        # extracted_word_repr = word_repr.gather('length', word_pos)
-        # extracted_word_repr = extracted_word_repr.unflatten('len_s_X_len_e_X_len_w',
-        #                                                     [('len_s', batch.max_length), ('len_e', len_e), ('len_w', g.max_word_length)])
-
+        # Main body: Run DP to find the best matches.
         matches = self._get_matches(extracted_word_repr, unit_repr, viable_lens)
 
-        # Revert to the old shape.
+        # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
@@ -231,33 +222,22 @@ class ExtractModel(nn.Module):
 
     @profile
     def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT) -> Matches:
-        # extracted_word_repr = extracted_word_repr.flatten(['len_w', 'char_emb'], 'len_w_X_char_emb')
-        # vocab_repr = vocab_repr.flatten(['length', 'char_emb'], 'len_w_X_char_emb')
-        # breakpoint()  # DEBUG(j_luo)
-        # bs = extracted_word_repr.size('batch')
-        # len_s = extracted_word_repr.size('len_s')
-        # len_e = extracted_word_repr.size('len_e')
         d_char = extracted_word_repr.size('char_emb')
-        # extracted_word_repr = extracted_word_repr.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
         ns = extracted_word_repr.size('viable')
-        # ns = extracted_word_repr.size('batch_X_len_s_X_len_e')
         nt = len(self.vocab_feat_matrix)
         msl = extracted_word_repr.size('len_w')
         mtl = self.vocab_feat_matrix.size('length')
 
-        # not_viable = ~viable.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
+        # Initialize f scores.
         # NOTE(j_luo) You need one extra position to keep 0-length outputs, and another one to dump invalid indices during DP.
         f = get_zeros(ns, nt, 2 + msl, 2 + mtl).fill_(99.9)
         for i in range(msl + 1):
             f[:, :, i, 0] = i
         for j in range(mtl + 1):
             f[:, :, 0, j] = j
-        # with NoName(not_viable):
-        #     f[not_viable] = 99.9
 
+        # Compute cosine distance all at once: for each viable span, compare it against all units.
         def _get_cosine_matrix(x, y):
-            # x = x.permute(1, 0, 2)
-            # y = y.permute(1, 2, 0)
             dot = x @ y.t()
             with NoName(x, y):
                 norms_x = x.norm(dim=-1, keepdim=True) + 1e-8
@@ -268,48 +248,17 @@ class ExtractModel(nn.Module):
         nh = NameHelper()
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
         cos = _get_cosine_matrix(_extracted_word_repr, unit_repr)
-        # Name: ? x len_w x unit
+        # Name: viable x len_w x unit
         cos = nh.unflatten(cos, 'viable_X_len_w', ['viable', 'len_w'])
 
-        # with NoName(self.indexed_segments, cos):
-        #     all_ls = get_range(msl, 1, 0) + 1
-        #     for s in range(2, msl + mtl + 1):
-        #         all_lt = s - all_ls
-        #         # Ignore ls and lt that are too far apart.
-        #         close_to_diag = (all_ls - all_lt).abs() <= 2
-        #         ls = all_ls[close_to_diag]
-        #         lt = all_lt[close_to_diag]
+        # ------------------------ Main body: DP ----------------------- #
 
-        #         # NOTE(j_luo) Use one set of `lt` to write to invalid indices (the extra position at the end).
-        #         invalid = (lt < 1) | (lt > mtl)
-        #         lt[invalid] = mtl + 1
-        #         # NOTE(j_luo) Use another set of `lt` to get invalid indices (set to 1 so that lt_get - 1 == 0).
-        #         lt_get = lt.clone()
-        #         lt_get[invalid] = 1
-
-        #         # _extracted = extracted_word_repr[:, ls - 1].view(-1, msl, d_char)
-        #         # _vocab = vocab_repr[:, lt_repr - 1].view(-1, msl, d_char)
-        #         # diff = _get_cosine_matrix(_extracted, _vocab)
-        #         # diff = diff.permute(1, 2, 0)
-        #         vocab_inds = self.indexed_segments[:, lt_get - 1]
-        #         diff = cos[:, ls - 1, vocab_inds]
-
-        #         ins_s = f[:, :, ls - 1, lt] + 1
-        #         del_s = f[:, :, ls, lt - 1] + 1
-        #         sub_s = f[:, :, ls - 1, lt - 1] + diff
-        #         all_s = torch.stack([ins_s, del_s, sub_s], dim=-1)
-        #         f[:, :, ls, lt], _ = all_s.min(dim=-1)
-
+        # Transition.
         with NoName(self.indexed_segments, cos):
             for ls in range(1, msl + 1):
                 min_lt = max(ls - 2, 1)
                 max_lt = min(ls + 2, mtl + 1)
                 for lt in range(min_lt, max_lt):
-                    # # NOTE(j_luo) Off by 1 for these representation.
-                    # _extracted = extracted_word_repr[:, ls - 1]
-                    # _vocab = vocab_repr[:, lt - 1]
-
-                    # diff = _get_cosine_matrix(_extracted, _vocab).rename(None)
                     vocab_inds = self.indexed_segments[:, lt - 1]
                     diff = cos[:, ls - 1, vocab_inds]
 
@@ -317,12 +266,10 @@ class ExtractModel(nn.Module):
                     del_s = f[:, :, ls, lt - 1] + 1
                     sub_s = f[:, :, ls - 1, lt - 1] + diff
                     all_s = torch.stack([ins_s, del_s, sub_s], dim=-1)
-                    # f[:, :, i, j] = torch.min(ins_s, torch.min(del_s, sub_s))
                     f[:, :, ls, lt], _ = all_s.min(dim=-1)
 
-        # scores, _ = f.view(ns, -1).min(dim=-1)
+        # Get the values wanted.
         f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
-        # f = f.unflatten('batch_X_len_s_X_len_e', [('batch', bs), ('len_s', len_s), ('len_e', len_e)])
         with NoName(f, viable_lens, self.vocab_length):
             idx_src = viable_lens.unsqueeze(dim=-1)
             idx_tgt = self.vocab_length
@@ -332,21 +279,9 @@ class ExtractModel(nn.Module):
             value = f[viable_i, vocab_i, idx_src, idx_tgt]
             value.rename_('viable', 'vocab')
 
-            # idx_src = viabel.expand(bs, len_s, len_e).unsqueeze(dim=-1)
-
-            # bi = get_range(bs, 4, 0)
-            # si = get_range(len_s, 4, 1)
-            # ei = get_range(len_e, 4, 2)
-            # vi = get_range(len(self.vocab_length), 4, 3)
-            # idx_src = len_candidates.expand(bs, len_s, len_e).unsqueeze(dim=-1)
-            # idx_tgt = self.vocab_length
-            # value = f[bi, si, ei, vi, idx_src, idx_tgt]
-            # value.rename_('batch', 'len_s', 'len_e', 'vocab')
-
+        # Get the best spans.
         best_value, matched_vocab = value.min(dim='vocab')
-        # matched_vocab = matched_vocab.flatten(['batch', 'len_s', 'len_e'], 'batch_X_len_s_X_len_e')
         lengths = self.vocab_length.gather('vocab', matched_vocab)
-        # lengths = lengths.unflatten('batch_X_len_s_X_len_e', [('batch', bs), ('len_s', len_s), ('len_e', len_e)])
         matched = best_value < g.threshold
         # # DEBUG(j_luo)
         # try:
@@ -356,13 +291,6 @@ class ExtractModel(nn.Module):
         # # self._thresh = max(self._thresh, 0.2)
         # print(self._thresh)
         self._thresh = g.threshold
-
         score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
         matches = Matches(None, score, value, matched)
         return matches
-
-        # dot = extracted_word_repr @ vocab_repr.align_to('len_w_X_char_emb', 'vocab')
-        # with NoName(extracted_word_repr, vocab_repr):
-        #     norms1 = extracted_word_repr.norm(dim=-1, keepdim=True)
-        #     norms2 = vocab_repr.norm(dim=-1, keepdim=True)
-        # cos = dot / norms1 / norms2.t()

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -194,9 +195,9 @@ class DecipherEvaluator(BaseEvaluator):
         return metrics, df
 
 
-def _get_df(segments, ground_truths, predictions):
-    data = map(lambda x: map(str, x), zip(segments, ground_truths, predictions))
-    df = pd.DataFrame(data, columns=['segment', 'ground_truth', 'prediction'])
+def _get_df(*seqs: Sequence, columns=('segment', 'ground_truth', 'prediction')):
+    data = map(lambda x: map(str, x), zip(*seqs))
+    df = pd.DataFrame(data, columns=columns)
     return df
 
 
@@ -239,6 +240,7 @@ class ExtractEvaluator(BaseEvaluator):
         segments = list()
         predictions = list()
         ground_truths = list()
+        matched_segments = list()
         total_num_samples = 0
         for batch in tqdm(self.dl):
 
@@ -249,11 +251,14 @@ class ExtractEvaluator(BaseEvaluator):
 
             ret = self.model(batch)
             segments.extend(list(batch.segments))
-            predictions.extend(self._get_segmentations(ret, batch))
+            segmentations, _matched_segments = self._get_segmentations(ret, batch)
+            predictions.extend(segmentations)
+            matched_segments.extend(_matched_segments)
             ground_truths.extend([segment.to_segmentation() for segment in batch.segments])
             total_num_samples += batch.batch_size
 
-        df = _get_df(segments, ground_truths, predictions)
+        df = _get_df(segments, ground_truths, predictions, matched_segments,
+                     columns=('segment', 'ground_truth', 'prediction', 'matched_segment'))
         out_path = g.log_dir / 'predictions' / f'extract.{tracker.total_step}.tsv'
         out_path.parent.mkdir(exist_ok=True, parents=True)
         df.to_csv(out_path, index=None, sep='\t')
@@ -261,12 +266,13 @@ class ExtractEvaluator(BaseEvaluator):
         prf_scores = get_prf_scores(matching_stats)
         return matching_stats + prf_scores
 
-    def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> List[Segmentation]:
+    def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> Tuple[List[Segmentation], np.ndarray]:
         starts = model_ret.start.cpu().numpy()
         ends = model_ret.end.cpu().numpy()
         matched = model_ret.matched.cpu().numpy()
+        matched_vocab = model_ret.matched_vocab.cpu().numpy()
+        matched_segments = self.model.vocab[matched_vocab]
         segmentations = list()
-        # FIXME(j_luo) Need positions to deal with multi-unit strings.
         for segment, start, end, m in zip(batch.segments, starts, ends, matched):
             spans = list()
             if m:
@@ -274,4 +280,4 @@ class ExtractEvaluator(BaseEvaluator):
                 span = Span('-'.join(span), start, end)
                 spans.append(span)
             segmentations.append(Segmentation(spans))
-        return segmentations
+        return segmentations, matched_segments

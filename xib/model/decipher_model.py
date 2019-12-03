@@ -202,10 +202,6 @@ class DecipherModel(nn.Module):
         label_log_probs = logits.log_softmax(dim='label')
         label_probs = label_log_probs.exp()
 
-        # # DEBUG(j_luo)
-        # torch.set_printoptions(sci_mode=False)
-        # breakpoint()  # DEBUG(j_luo)
-
         # NOTE(j_luo) O is equivalent to None.
         mask = expand_as(batch.source_padding, label_probs)
         source = expand_as(get_tensor([0.0, 0.0, 1.0]).refine_names('label').float(), label_probs)

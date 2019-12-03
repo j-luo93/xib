@@ -3,10 +3,10 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
-# from pytorch_memlab import profile
 
 from dev_misc import BT, FT, LT, add_argument, g, get_zeros
-from dev_misc.devlib import BaseBatch, batch_class, get_length_mask, get_range
+from dev_misc.devlib import (BaseBatch, batch_class, get_array,
+                             get_length_mask, get_range)
 from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
                                           get_named_range)
 from xib.data_loader import ContinuousTextIpaBatch, convert_to_dense
@@ -15,10 +15,6 @@ from xib.model.modules import AdaptLayer, FeatEmbedding
 
 from .modules import DenseFeatEmbedding
 
-# DEBUG(j_luo)
-if 'profile' not in locals():
-    profile = lambda x: x
-
 
 @batch_class
 class Matches(BaseBatch):
@@ -26,6 +22,7 @@ class Matches(BaseBatch):
     score: FT
     value: FT
     matched: BT
+    matched_vocab: LT
 
 
 @batch_class
@@ -48,6 +45,8 @@ class ExtractModelReturn(BaseBatch):
     start: LT
     end: LT
     matched: BT
+    matched_vocab: LT
+    extracted: Extracted
 
 
 class ExtractModel(nn.Module):
@@ -71,9 +70,9 @@ class ExtractModel(nn.Module):
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
             vocab = set(line.strip() for line in fin)
             segments = [Segment(w) for w in vocab]
-            segments = [segment for segment in segments if _has_proper_length(segment)]
-            lengths = torch.LongTensor(list(map(len, segments)))
-            feat_matrix = [segment.feat_matrix for segment in segments]
+            self.vocab = get_array([segment for segment in segments if _has_proper_length(segment)])
+            lengths = torch.LongTensor(list(map(len, self.vocab)))
+            feat_matrix = [segment.feat_matrix for segment in self.vocab]
             feat_matrix = torch.nn.utils.rnn.pad_sequence(feat_matrix, batch_first=True)
             max_len = lengths.max().item()
             source_padding = ~get_length_mask(lengths, max_len)
@@ -90,14 +89,14 @@ class ExtractModel(nn.Module):
 
             # Get the entire set of units from vocab.
             units = set()
-            for segment in segments:
+            for segment in self.vocab:
                 units.update(segment.segment_list)
             self.id2unit = sorted(units)
             self.unit2id = {u: i for i, u in enumerate(self.id2unit)}
             # Now indexify the vocab. Gather feature matrices for units as well.
-            indexed_segments = np.zeros([len(segments), max_len], dtype='int64')
+            indexed_segments = np.zeros([len(self.vocab), max_len], dtype='int64')
             unit_feat_matrix = dict()
-            for i, segment in enumerate(segments):
+            for i, segment in enumerate(self.vocab):
                 indexed_segments[i, range(len(segment))] = [self.unit2id[u] for u in segment.segment_list]
                 for j, u in enumerate(segment.segment_list):
                     if u not in unit_feat_matrix:
@@ -120,7 +119,6 @@ class ExtractModel(nn.Module):
             assert g.dense_input
             self.adapter = AdaptLayer()
 
-    @profile
     def forward(self, batch: ContinuousTextIpaBatch) -> ExtractModelReturn:
         # Prepare representations.
         if g.dense_input:
@@ -143,18 +141,19 @@ class ExtractModel(nn.Module):
         best_scores, best_inds = new_extracted.matches.score.flatten(['len_s', 'len_e'], 'cand').max(dim='cand')
         len_s = new_extracted.matches.score.size('len_s')
         len_e = new_extracted.matches.score.size('len_e')
-        best_starts = best_inds // len_e
+        starts = best_inds // len_e
         # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
-        best_ends = best_inds % len_e + best_starts + g.min_word_length - 1
+        ends = best_inds % len_e + starts + g.min_word_length - 1
         matched = new_extracted.matches.matched.flatten(['len_s', 'len_e'], 'cand')
         with NoName(matched):
             matched = matched.any(dim=-1)
+        matched_vocab = new_extracted.matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
+        matched_vocab = matched_vocab.gather('cand', best_inds)
 
-        ret = ExtractModelReturn(best_scores, best_starts, best_ends, matched)
+        ret = ExtractModelReturn(best_scores, starts, ends, matched, matched_vocab, new_extracted)
 
         return ret
 
-    @profile
     def _extract_one_span(self, batch: ContinuousTextIpaBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
         # Propose all span start/end positions.
         start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
@@ -200,7 +199,7 @@ class ExtractModel(nn.Module):
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
-        with NoName(bi, lsi, lei, viable, matches.score, matches.matched, matches.value):
+        with NoName(bi, lsi, lei, viable, matches.score, matches.matched, matches.value, matches.matched_vocab):
             v_bi = bi[viable]
             v_lsi = lsi[viable]
             v_lei = lei[viable]
@@ -215,12 +214,12 @@ class ExtractModel(nn.Module):
 
             matches.score = _unshape(matches.score).rename('batch', 'len_s', 'len_e')
             matches.matched = _unshape(matches.matched).rename('batch', 'len_s', 'len_e')
+            matches.matched_vocab = _unshape(matches.matched_vocab).rename('batch', 'len_s', 'len_e')
             matches.value = _unshape(matches.value).rename('batch', 'len_s', 'len_e', 'vocab')
 
         new_extracted = Extracted(batch.batch_size, matches)
         return new_extracted
 
-    @profile
     def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT) -> Matches:
         d_char = extracted_word_repr.size('char_emb')
         ns = extracted_word_repr.size('viable')
@@ -292,5 +291,5 @@ class ExtractModel(nn.Module):
         # print(self._thresh)
         self._thresh = g.threshold
         score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
-        matches = Matches(None, score, value, matched)
+        matches = Matches(None, score, value, matched, matched_vocab)
         return matches

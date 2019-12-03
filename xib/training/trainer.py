@@ -7,11 +7,12 @@ import torch.optim as optim
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
 from dev_misc.arglib import add_argument, g
-from dev_misc.trainlib import Metric, Metrics, get_grad_norm
+from dev_misc.trainlib import Metric, Metrics, freeze, get_grad_norm
 from dev_misc.trainlib.base_trainer import BaseTrainer as BaseTrainerDev
 from dev_misc.utils import deprecated
 from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
 from xib.model.decipher_model import DecipherModel
+from xib.model.extract_model import ExtractModel
 from xib.model.lm_model import LM
 from xib.training.analyzer import DecipherAnalyzer, ExtractAnalyzer, LMAnalyzer
 from xib.training.optim import AdamInverseSqrtWithWarmup
@@ -136,9 +137,15 @@ class DecipherTrainer(BaseTrainer):
 
 class ExtractTrainer(BaseTrainer):
 
+    model: ExtractModel
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.analyzer = ExtractAnalyzer()
+        for p in self.model.parameters():
+            if p.ndim == 2:
+                torch.nn.init.xavier_uniform_(p)
+        freeze(self.model.embedding)
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)

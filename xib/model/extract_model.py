@@ -1,3 +1,5 @@
+from dev_misc.devlib.named_tensor import Rename
+from xib.data_loader import convert_to_dense
 from typing import Optional
 
 import torch
@@ -8,7 +10,9 @@ from dev_misc.devlib import BaseBatch, batch_class, get_length_mask, get_range
 from dev_misc.devlib.named_tensor import NoName, get_named_range
 from xib.data_loader import ContinuousTextIpaBatch
 from xib.ipa.process import Segment
-from xib.model.modules import FeatEmbedding
+from xib.model.modules import AdaptLayer, FeatEmbedding
+
+from .modules import DenseFeatEmbedding
 
 
 @batch_class
@@ -48,14 +52,16 @@ class ExtractModel(nn.Module):
     add_argument('max_extracted_candidates', default=200, dtype=int, msg='Max number of extracted candidates.')
     add_argument('threshold', default=0.05, dtype=float,
                  msg='Value of threshold to determine whether two words are matched.')
+    add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
 
     def __init__(self):
         super().__init__()
-        self.embedding = FeatEmbedding('feat_emb', 'chosen_feat_group', 'char_emb')
+        emb_cls = DenseFeatEmbedding if g.dense_input else FeatEmbedding
+        self.embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb')
 
         def _has_proper_length(segment):
             l = len(segment)
-            return l <= g.max_word_length and l >= g.min_word_length
+            return g.min_word_length <= l <= g.max_word_length
 
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
             vocab = set(line.strip() for line in fin)
@@ -72,10 +78,25 @@ class ExtractModel(nn.Module):
             self.vocab_source_padding.rename_('vocab', 'length')
             self.vocab_length.rename_('vocab')
 
+            if g.dense_input:
+                with Rename(self.vocab_feat_matrix, vocab='batch'):
+                    vocab_dense_feat_matrix = convert_to_dense(self.vocab_feat_matrix)
+                self.vocab_dense_feat_matrix = {k: v.rename(batch='vocab') for k, v in vocab_dense_feat_matrix.items()}
+
+        if g.use_adapt:
+            assert g.dense_input
+            self.adapter = AdaptLayer()
+
     def forward(self, batch: ContinuousTextIpaBatch) -> ExtractModelReturn:
-        word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
-        vocab_repr = self.embedding(self.vocab_feat_matrix.rename(vocab='batch'),
-                                    self.vocab_source_padding.rename(vocab='batch'))
+        if g.dense_input:
+            with Rename(self.vocab_source_padding, *self.vocab_dense_feat_matrix.values(), vocab='batch'):
+                word_repr = self.embedding(batch.dense_feat_matrix, batch.source_padding)
+                dfm = self.adapter(self.vocab_dense_feat_matrix)
+                vocab_repr = self.embedding(dfm, self.vocab_source_padding)
+        else:
+            with Rename(self.vocab_feat_matrix, self.vocab_source_padding, vocab='batch'):
+                word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
+                vocab_repr = self.embedding(self.vocab_feat_matrix, self.vocab_source_padding)
         vocab_repr.rename_(batch='vocab')
         extracted = Extracted(batch.batch_size)
         # for i in range(g.max_num_words):
@@ -161,7 +182,7 @@ class ExtractModel(nn.Module):
                 diff = _get_cosine_matrix(_extracted, _vocab).rename(None)
                 ins_s = f[:, :, i - 1, j] + 1
                 del_s = f[:, :, i, j - 1] + 1
-                sub_s = f[:, :, i - 1, j - 1] + diff
+                sub_s = f[:, :, i - 1, j - 1] + diff * 0.1
                 all_s = torch.stack([ins_s, del_s, sub_s], dim=-1)
                 f[:, :, i, j], _ = all_s.min(dim=-1)
 
@@ -183,7 +204,7 @@ class ExtractModel(nn.Module):
         lengths = self.vocab_length.gather('vocab', matched_vocab)
         lengths = lengths.unflatten('batch_X_len_s_X_len_e', [('batch', bs), ('len_s', len_s), ('len_e', len_e)])
         matched = best_value < g.threshold
-        score = lengths * matched * (1.0 - best_value)
+        score = lengths * (1.0 - best_value / g.threshold).clamp(min=0.0)
         matches = Matches(None, score, value, matched)
         return matches
 

@@ -9,10 +9,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from dev_misc import g
+from dev_misc import LT, g
 from dev_misc.arglib import add_argument, g, init_g_attr
 from dev_misc.devlib import (batch_class, get_array, get_length_mask,
                              get_range, get_zeros)
+from dev_misc.trainlib import has_gpus
 from dev_misc.trainlib.base_data_loader import (BaseDataLoader,
                                                 BaseDataLoaderRegistry)
 from dev_misc.trainlib.tracker.tracker import Task
@@ -252,13 +253,44 @@ class BrokenTextIpaDataset(IpaDataset):
         return ret
 
 
+total = Index.total_indices()
+_g2f = torch.LongTensor(total)
+indices = [Index.get_feature(i).value for i in range(total)]
+for index in indices:
+    _g2f[index.g_idx] = index.f_idx
+
+
+DenseFeatureMatrix = Dict[Category, torch.FloatTensor]
+
+
+def convert_to_dense(feat_matrix: LT) -> DenseFeatureMatrix:
+    names = feat_matrix.names
+    bs = feat_matrix.size('batch')
+    ml = feat_matrix.size('length')
+    fm = _g2f[feat_matrix.rename(None)].refine_names(*names)
+    dfms = dict()
+    for cat in Category:
+        e = get_enum_by_cat(cat)
+        dfm_idx = fm[..., cat.value]
+        dfm = get_zeros(bs, ml, len(e), cpu=True)
+        dfm = dfm.scatter(2, dfm_idx.rename(None).unsqueeze(dim=-1), 1.0)
+        dfms[cat] = dfm.refine_names('batch', 'length', f'{cat.name}_feat')
+    if has_gpus():
+        dfms = {k: v.cuda() for k, v in dfms.items()}
+    return dfms
+
+
 @batch_class
 class ContinuousTextIpaBatch(BaseBatch):
     gold_tag_seqs: Optional[torch.LongTensor] = None
+    dense_feat_matrix: Optional[DenseFeatureMatrix] = field(init=False)
 
     def _post_init_helper(self):
         super()._post_init_helper()
         self.gold_tag_seqs.rename_('batch', 'length')
+
+        if g.dense_input:
+            self.dense_feat_matrix = convert_to_dense(self.feat_matrix)
 
 
 class UnbrokenTextDataLoader(IpaDataLoader):

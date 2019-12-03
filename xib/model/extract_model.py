@@ -153,7 +153,10 @@ class ExtractModel(nn.Module):
     @profile
     def _extract_one_round(self, batch: ContinuousTextIpaBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
         start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
-        len_candidates = get_named_range(g.max_word_length, 'len_e').align_to('batch', 'len_s', 'len_e') + 1
+        # Range from `min_word_length` to `max_word_length`.
+        len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
+        len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
+        len_e = len_candidates.size('len_e')
         # This is inclusive.
         end_candidates = start_candidates + len_candidates - 1
 
@@ -164,13 +167,13 @@ class ExtractModel(nn.Module):
 
         word_repr = word_repr.align_to('batch', 'length', 'char_emb')
         start_candidates_4d = start_candidates.align_to(..., 'len_w')
-        word_pos_offsets = get_named_range(g.max_word_length, 'len_w').align_as(start_candidates_4d)
+        word_pos_offsets = get_named_range(len_e, 'len_w').align_as(start_candidates_4d)
         word_pos = start_candidates_4d + word_pos_offsets
         word_pos = word_pos.clamp(max=batch.max_length - 1).expand(-1, -1, g.max_word_length, -1)
         word_pos = word_pos.flatten(['len_s', 'len_e', 'len_w'], 'len_s_X_len_e_X_len_w')
         extracted_word_repr = word_repr.gather('length', word_pos)
         extracted_word_repr = extracted_word_repr.unflatten('len_s_X_len_e_X_len_w',
-                                                            [('len_s', batch.max_length), ('len_e', g.max_word_length), ('len_w', g.max_word_length)])
+                                                            [('len_s', batch.max_length), ('len_e', len_e), ('len_w', g.max_word_length)])
 
         matches = self._get_matches(extracted_word_repr, unit_repr, len_candidates, viable)
 

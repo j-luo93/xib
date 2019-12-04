@@ -103,7 +103,8 @@ class DenseFeatEmbedding(FeatEmbedding):
                 emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, g.dim))
         return nn.ParameterDict(emb_dict)
 
-    def forward(self, dense_feat_matrices: Dict[Category, FT], padding: Optional[BT] = None) -> FT:
+    # HACK(j_luo) Use kwargs to deal with masked_positions.
+    def forward(self, dense_feat_matrices: Dict[Category, FT], padding: Optional[BT] = None, **kwargs) -> FT:
         if padding is not None:
             padding = padding.align_to('batch', 'length')
 
@@ -143,6 +144,7 @@ class Encoder(nn.Module):
         l = source_padding.size('length')
         batch_i = get_range(bs, 1, 0)
         feat_emb = self.feat_embedding(feat_matrix, source_padding, masked_positions=pos_to_predict)
+        feat_emb = feat_emb.align_to('batch', 'char_emb', 'length')
         output = self.conv_layers(feat_emb.rename(None))
         output = output.refine_names('batch', 'char_conv_repr', 'length')  # size: bs x D x l
         output = self.linear(output.align_to(..., 'char_conv_repr'))  # size: bs x l x n_hid

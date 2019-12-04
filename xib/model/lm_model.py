@@ -101,7 +101,7 @@ class LM(nn.Module):
         return ret
 
 
-class AdaptedLM(LM):
+class AdaptLM(LM):
 
     @not_supported_argument_value('new_style', True)
     def __init__(self):

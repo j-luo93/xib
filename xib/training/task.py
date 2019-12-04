@@ -7,6 +7,11 @@ class LMTask(Task):
 
 
 @task_class
+class AdaptLMTask(Task):
+    name = 'adapt_lm'
+
+
+@task_class
 class DecipherTask(Task):
     name = 'decipher'
     split: str

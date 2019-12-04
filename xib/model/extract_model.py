@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 import numpy as np
@@ -281,15 +282,16 @@ class ExtractModel(nn.Module):
         # Get the best spans.
         best_value, matched_vocab = value.min(dim='vocab')
         lengths = self.vocab_length.gather('vocab', matched_vocab)
-        matched = best_value < g.init_threshold
         # DEBUG(j_luo)
         try:
             if self.training:
-                self._thresh -= 0.005
+                self._thresh *= 0.998
         except:
             self._thresh = g.init_threshold
         self._thresh = max(self._thresh, 0.001)
-        print(self._thresh)
+        matched = best_value < self._thresh
+        if self.training:
+            print(self._thresh)
         score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
         matches = Matches(None, score, value, matched, matched_vocab)
         return matches

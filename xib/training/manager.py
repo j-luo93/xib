@@ -15,14 +15,15 @@ from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
                              DenseIpaDataLoader, IpaDataLoader)
 from xib.model.decipher_model import DecipherModel
 from xib.model.extract_model import ExtractModel
-from xib.model.lm_model import LM, AdaptedLM
+from xib.model.lm_model import LM, AdaptLM
 from xib.search.search_solver import SearchSolver
 from xib.search.searcher import BruteForceSearcher
 from xib.training.evaluator import (DecipherEvaluator, ExtractEvaluator,
                                     LMEvaluator, SearchSolverEvaluator)
-from xib.training.task import (DecipherTask, ExtractTask, LMTask, MlmTask,
-                               TransferTask)
-from xib.training.trainer import DecipherTrainer, ExtractTrainer, LMTrainer
+from xib.training.task import (AdaptLMTask, DecipherTask, ExtractTask, LMTask,
+                               MlmTask, TransferTask)
+from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer,
+                                  ExtractTrainer, LMTrainer)
 
 add_argument('task', default='lm', dtype=str, choices=[
              'lm', 'adapt', 'decipher', 'search', 'extract'], msg='which task to run')
@@ -30,19 +31,23 @@ add_argument('task', default='lm', dtype=str, choices=[
 
 class LMManager:
 
+    model_cls = LM
+    trainer_cls = AdaptLMTrainer
+    task_cls = LMTask
+
     def __init__(self):
-        self.model = LM()
+        self.model = self.model_cls()
         if has_gpus():
             self.model.cuda()
 
-        task = LMTask()
+        task = self.task_cls()
         self.dl_reg = DataLoaderRegistry()
         self.dl_reg.register_data_loader(task, g.data_path)
         self.evaluator = LMEvaluator(self.model, self.dl_reg[task])
-        self.trainer = LMTrainer(self.model, [task], [1.0], 'total_step',
-                                 evaluator=self.evaluator,
-                                 check_interval=g.check_interval,
-                                 eval_interval=g.eval_interval)
+        self.trainer = self.trainer_cls(self.model, [task], [1.0], 'total_step',
+                                        evaluator=self.evaluator,
+                                        check_interval=g.check_interval,
+                                        eval_interval=g.eval_interval)
 
     def run(self):
         self.trainer.train(self.dl_reg)
@@ -50,10 +55,9 @@ class LMManager:
 
 class AdaptLMManager(LMManager):
 
-    data_loader_cls = DenseIpaDataLoader
-
-    def _get_model(self):
-        return AdaptedLM()
+    model_cls = AdaptLM
+    trainer_cls = AdaptLMTrainer
+    task_cls = AdaptLMTask
 
 
 class DecipherManager:

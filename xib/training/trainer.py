@@ -14,7 +14,7 @@ from dev_misc.utils import deprecated
 from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
 from xib.model.decipher_model import DecipherModel
 from xib.model.extract_model import ExtractModel
-from xib.model.lm_model import LM
+from xib.model.lm_model import LM, AdaptLM
 from xib.training.analyzer import DecipherAnalyzer, ExtractAnalyzer, LMAnalyzer
 from xib.training.optim import AdamInverseSqrtWithWarmup
 
@@ -73,6 +73,10 @@ class LMTrainer(BaseTrainer):
             out_path = g.log_dir / 'saved.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_loss:.3f}')
             self.save_to(out_path)
+
+
+class AdaptLMTrainer(LMTrainer):
+    model: AdaptLM
 
 
 class DecipherTrainer(BaseTrainer):
@@ -149,10 +153,10 @@ class ExtractTrainer(BaseTrainer):
         freeze(self.model.embedding)
 
         # DEBUG(j_luo)
-        logging.warn('identity init')
+        logging.warning('identity init')
         for p in self.model.adapter.adapters.values():
             lp = len(p)
-            p.data[range(lp), range(lp)] += 10.0
+            p.data[range(lp), range(lp)] += 2.0
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)

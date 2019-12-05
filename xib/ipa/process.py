@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import ClassVar
+import re
 import random
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from dev_misc import add_argument, g
 from dev_misc.devlib import BT, LT
-from dev_misc.utils import cached_property
+from dev_misc.utils import cached_property, deprecated
 from xib.ipa import Category
 
 B, I, O = 0, 1, 2
@@ -152,10 +152,17 @@ class Span:
     start: int
     end: int
 
-    def __eq__(self, other: 'Span'):
+    @deprecated
+    def __eq__(self, other: Span):
+        return self.is_same_span(other)
+
+    def is_same_span(self, other: Span) -> bool:
         if not isinstance(other, Span):
             return False
         return self.start == other.start and self.end == other.end
+
+    def is_same_word(self, other: Span) -> bool:
+        return self.is_same_span(other) and self.plain_value == other.plain_value
 
     def __str__(self):
         return f'{self.value}:{self.start}:{self.end}'
@@ -163,10 +170,21 @@ class Span:
     def __len__(self):
         return self.end - self.start + 1
 
-    def is_prefix_of(self, other: Span):
+    @cached_property
+    def plain_value(self) -> str:
+        return re.sub(r'[-\]\[#]', '', self.value)
+
+    @deprecated
+    def is_prefix_of(self, other: Span) -> bool:
+        return self.is_prefix_span_of(other)
+
+    def is_prefix_span_of(self, other: Span) -> bool:
         if not isinstance(other, Span):
             return False
         return self.start == other.start and self.end <= other.end and len(self) > len(other) * 0.5
+
+    def is_prefix_word_of(self, other: Span) -> bool:
+        return self.is_prefix_span_of(other) and other.plain_value.startswith(self.plain_value) and len(self) > len(other) * 0.5
 
 
 @dataclass
@@ -176,7 +194,7 @@ class Segmentation:
     def __len__(self):
         return len(self.spans)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Span]:
         yield from self.spans
 
     def __str__(self):

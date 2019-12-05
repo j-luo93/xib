@@ -175,19 +175,19 @@ class ExtractTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.analyzer = ExtractAnalyzer()
-        for p in self.model.parameters():
-            if p.ndim == 2:
-                torch.nn.init.xavier_uniform_(p)
+        # for p in self.model.parameters():
+        #     if p.ndim == 2:
+        #         torch.nn.init.xavier_uniform_(p)
 
         # DEBUG(j_luo)
         # logging.warning('embedding frozen')
         # freeze(self.model.embedding)
 
-        # DEBUG(j_luo)
+        # # DEBUG(j_luo)
         # logging.warning('identity init')
         # for p in self.model.adapter.adapters.values():
         #     lp = len(p)
-        #     p.data[range(lp), range(lp)] += 2.0
+        #     p.data[range(lp), range(lp)] += 200.0
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
@@ -202,7 +202,7 @@ class ExtractTrainer(BaseTrainer):
     def save(self, eval_metrics: Metrics):
         self.save_to(g.log_dir / 'saved.latest')
         # self.tracker.update('best_loss', value=eval_metrics.dev_total_loss.mean)
-        if self.tracker.update('best_f1', value=eval_metrics.prf_exact_f1.value):
+        if self.tracker.update('best_f1', value=eval_metrics.prf_exact_span_f1.value):
             out_path = g.log_dir / f'saved.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
             self.save_to(out_path)

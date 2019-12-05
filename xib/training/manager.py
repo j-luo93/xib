@@ -4,7 +4,7 @@ import random
 
 import torch
 import torch.nn as nn
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 
 from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
@@ -174,6 +174,9 @@ class SearchSolverManager:
 
 class ExtractManager:
 
+    # IDEA(j_luo) when to put this in manager/trainer?
+    add_argument('use_sgd', default=False, dtype=bool, msg='Flag to use SGD')
+
     def __init__(self):
         self.model = ExtractModel()
         if has_gpus():
@@ -190,7 +193,8 @@ class ExtractManager:
                                       eval_interval=g.eval_interval)
         if g.saved_model_path:
             self.trainer.load(g.saved_model_path)
-        self.trainer.set_optimizer(Adam, lr=g.learning_rate)
+        # self.trainer.set_optimizer(Adam, lr=g.learning_rate)
+        self.trainer.set_optimizer(SGD, lr=g.learning_rate)
 
     def run(self):
         self.trainer.train(self.dl_reg)

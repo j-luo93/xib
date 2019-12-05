@@ -63,6 +63,7 @@ class ExtractModel(nn.Module):
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
     add_argument('use_hamming', default=False, dtype=bool, msg='Flag to use hamming distance instead of cosine.')
+    add_argument('anneal_factor', default=0.999, dtype=float, msg='Mulplication value for annealing.')
 
     def __init__(self):
         super().__init__()
@@ -141,37 +142,44 @@ class ExtractModel(nn.Module):
     def load_state_dict(self, state_dict: Dict, **kwargs):
         with WithholdKeys(state_dict, *self._special_state_keys):
             super().load_state_dict(state_dict, **kwargs)
+        # HACK(j_luo)
         for key in self._special_state_keys:
             attr = getattr(self, key)
             setattr(self, key, state_dict[key])
-            try:
+            if torch.is_tensor(attr):
                 names = attr.names
                 getattr(self, key).rename_(*names)
-            except AttributeError:
-                pass
+            elif isinstance(attr, dict):
+                for k, v in getattr(self, key).items():
+                    if torch.is_tensor(v):
+                        v.rename_(*attr[k].names)
 
     # ------------------------ Debug section ----------------------- #
     # DEBUG(j_luo)
 
-    def get_vector(self, segment: SegmentWindow, adapt: bool = False):
-        fm = segment.feat_matrix.rename('length', 'feat_group').align_to('batch', ...)
+    def get_vector(self, c: str, adapt: bool = False):
+        c = self._str2sw(c)
+        fm = c.feat_matrix.rename('length', 'feat_group').align_to('batch', ...)
         dfm = convert_to_dense(fm)
         if adapt:
             dfm = self.adapter(dfm)
-        names = [name for name in dfm if should_include(g.groups, name)]
+        names = [name for name in dfm if should_include(g.feat_groups, name)]
         names = sorted(names, key=lambda name: name.value)
         with NoName(*dfm.values()):
             word_repr = torch.cat([dfm[name] for name in names], dim=-1)
-        word_repr.rename_('length', 'char_emb')
+        word_repr = word_repr.rename('batch', 'length', 'char_emb').squeeze(dim='batch').squeeze(dim='length')
         return word_repr
 
-    def get_char_sim(self, c1: str, c2: str):
-        v1 = self.get_vector(c1)
+    def _str2sw(self, c: str):
+        return SegmentWindow([Segment(c)])
+
+    def get_char_sim(self, c1: str, c2: str, adapt: bool = False):
+        v1 = self.get_vector(c1, adapt=adapt)
         v2 = self.get_vector(c2)
         return (v1 * v2).sum() / (v1 ** 2).sum().sqrt() / (v2 ** 2).sum().sqrt()
 
-    def get_char_hamming(self, c1: str, c2: str):
-        v1 = self.get_vector(c1)
+    def get_char_hamming(self, c1: str, c2: str, adapt: bool = False):
+        v1 = self.get_vector(c1, adapt=adapt)
         v2 = self.get_vector(c2)
         return (v1 - v2).abs().sum()
 
@@ -179,7 +187,11 @@ class ExtractModel(nn.Module):
     add_argument('debug', dtype=bool, default=False)
 
     def forward(self, batch: ContinuousTextIpaBatch) -> ExtractModelReturn:
+        self.get_char_hamming('a', 'a')
         if g.debug:
+            torch.set_printoptions(sci_mode=False, linewidth=200)
+            self._thresh = 0.5
+            self.eval()
             breakpoint()
 
         # Prepare representations.
@@ -341,7 +353,7 @@ class ExtractModel(nn.Module):
         def _get_hamming_matrix(x, y):
             with NoName(x, y):
                 hamming = (x.unsqueeze(dim=1) - y).abs().sum(dim=-1)
-            return hamming.rename_(x.names[0], y.names[0]) / 14
+            return hamming.rename_(x.names[0], y.names[0]) / 4
 
         nh = NameHelper()
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
@@ -364,10 +376,11 @@ class ExtractModel(nn.Module):
                 max_lt = min(ls + 2, mtl + 1)
                 for lt in range(min_lt, max_lt):
                     transitions = list()
+                    # DEBUG(j_luo) Ignore insertions/deletions for now.
                     if (ls - 1, lt) in fs:
-                        transitions.append(fs[(ls - 1, lt)] + 1)
+                        transitions.append(fs[(ls - 1, lt)] + 100)
                     if (ls, lt - 1) in fs:
-                        transitions.append(fs[(ls, lt - 1)] + 1)
+                        transitions.append(fs[(ls, lt - 1)] + 100)
                     if (ls - 1, lt - 1) in fs:
                         vocab_inds = self.indexed_segments[:, lt - 1]
                         sub_cost = costs[:, ls - 1, vocab_inds]
@@ -399,7 +412,7 @@ class ExtractModel(nn.Module):
                     fs[(i, j)] = get_zeros(ns, nt).fill_(99.9)
                 f_lst.append(fs[(i, j)])
         f = torch.stack(f_lst, dim=0).view(msl + 1, mtl + 1, -1, len(self.vocab))
-        f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
+        f.rename_('len_w_src', 'len_w_tgt', 'viable', 'vocab')
         # ls_idx, lt_idx = zip(*fs.keys())
 
         # Get the values wanted.
@@ -407,6 +420,8 @@ class ExtractModel(nn.Module):
         RELATIVE = False
 
         # f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
+        if g.debug:
+            breakpoint()  # DEBUG(j_luo)
         with NoName(f, viable_lens, self.vocab_length):
             idx_src = viable_lens.unsqueeze(dim=-1)
             idx_tgt = self.vocab_length
@@ -426,8 +441,7 @@ class ExtractModel(nn.Module):
         if self.training:
             # DEBUG(j_luo)
             try:
-                MUL = 0.999 if RELATIVE else 0.9985
-                self._thresh *= MUL
+                self._thresh *= g.anneal_factor
             except AttributeError:
                 self._thresh = g.init_threshold
             MIN_TH = 0.2 if RELATIVE else 0.001
@@ -439,7 +453,8 @@ class ExtractModel(nn.Module):
 
         if self.training:
             # DEBUG(j_luo)
-            TEMPERATURE = 0.05 if RELATIVE else 0.1
+            # TEMPERATURE = 0.05 if RELATIVE else 0.1
+            TEMPERATURE = 1.0
             softmin = nn.functional.softmin(value / TEMPERATURE, dim='vocab')
             best_value = (value * softmin).sum(dim='vocab')
 

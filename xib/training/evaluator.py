@@ -90,45 +90,63 @@ class LMEvaluator(BaseEvaluator):
 #         return PrfScores(self.exact_matches + other.exact_matches, self.total_correct + other.total_correct, self.total_pred + other.total_pred)
 
 
-def get_matching_stats(predictions: List[Segmentation], ground_truths: List[Segmentation]) -> Metrics:
-    exact_matches = 0
-    prefix_matches = 0
+def get_matching_stats(predictions: List[Segmentation], ground_truths: List[Segmentation], match_words: bool = False) -> Metrics:
+    exact_span_matches = 0
+    prefix_span_matches = 0
+    if match_words:
+        exact_word_matches = 0
+        prefix_word_matches = 0
     for pred, gt in zip(predictions, ground_truths):
         for p in pred:
             for g in gt:
-                if p == g:
-                    exact_matches += 1
-                    prefix_matches += 1
-                elif p.is_prefix_of(g) or g.is_prefix_of(p):
-                    prefix_matches += 1
+                if p.is_same_span(g):
+                    exact_span_matches += 1
+                    prefix_span_matches += 1
+                    if match_words and p.is_same_word(g):
+                        exact_word_matches += 1
+                        prefix_word_matches += 1
+                elif p.is_prefix_span_of(g) or g.is_prefix_span_of(p):
+                    prefix_span_matches += 1
+                    if match_words and (p.is_prefix_word_of(g) or g.is_prefix_word_of(p)):
+                        prefix_word_matches += 1
+
     total_correct = sum(map(len, ground_truths))
     total_pred = sum(map(len, predictions))
-    exact_matches = Metric(f'prf_exact_matches', exact_matches, 1.0, report_mean=False)
-    prefix_matches = Metric(f'prf_prefix_matches', prefix_matches, 1.0, report_mean=False)
+    exact_span_matches = Metric(f'prf_exact_span_matches', exact_span_matches, 1.0, report_mean=False)
+    prefix_span_matches = Metric(f'prf_prefix_span_matches', prefix_span_matches, 1.0, report_mean=False)
     total_correct = Metric(f'prf_total_correct', total_correct, 1.0, report_mean=False)
     total_pred = Metric(f'prf_total_pred', total_pred, 1.0, report_mean=False)
-    return Metrics(exact_matches, prefix_matches, total_correct, total_pred)
+    metrics = Metrics(exact_span_matches, prefix_span_matches, total_correct, total_pred)
+
+    if match_words:
+        exact_word_matches = Metric(f'prf_exact_word_matches', exact_word_matches, 1.0, report_mean=False)
+        prefix_word_matches = Metric(f'prf_prefix_word_matches', prefix_word_matches, 1.0, report_mean=False)
+        metrics += Metrics(exact_word_matches, prefix_word_matches)
+    return metrics
 
 
 def get_prf_scores(metrics: Metrics) -> Metrics:
     prf_scores = Metrics()
 
-    exact_matches = getattr(metrics, f'prf_exact_matches').total
-    prefix_matches = getattr(metrics, f'prf_prefix_matches').total
+    def _get_f1(p, r):
+        return 2 * p * r / (p + r + 1e-8)
+
+    exact_span_matches = getattr(metrics, f'prf_exact_span_matches').total
+    prefix_word_matches = getattr(metrics, f'prf_prefix_word_matches').total
     total_pred = getattr(metrics, f'prf_total_pred').total
     total_correct = getattr(metrics, f'prf_total_correct').total
-    exact_precision = exact_matches / (total_pred + 1e-8)
-    exact_recall = exact_matches / (total_correct + 1e-8)
-    exact_f1 = 2 * exact_precision * exact_recall / (exact_precision + exact_recall + 1e-8)
-    prefix_precision = prefix_matches / (total_pred + 1e-8)
-    prefix_recall = prefix_matches / (total_correct + 1e-8)
-    prefix_f1 = 2 * prefix_precision * prefix_recall / (prefix_precision + prefix_recall + 1e-8)
-    prf_scores += Metric(f'prf_exact_precision', exact_precision, report_mean=False)
-    prf_scores += Metric(f'prf_exact_recall', exact_recall, 1.0, report_mean=False)
-    prf_scores += Metric(f'prf_exact_f1', exact_f1, 1.0, report_mean=False)
-    prf_scores += Metric(f'prf_prefix_precision', prefix_precision, report_mean=False)
-    prf_scores += Metric(f'prf_prefix_recall', prefix_recall, 1.0, report_mean=False)
-    prf_scores += Metric(f'prf_prefix_f1', prefix_f1, 1.0, report_mean=False)
+    exact_span_precision = exact_span_matches / (total_pred + 1e-8)
+    exact_span_recall = exact_span_matches / (total_correct + 1e-8)
+    exact_span_f1 = _get_f1(exact_span_precision, exact_span_recall)
+    prefix_span_precision = prefix_word_matches / (total_pred + 1e-8)
+    prefix_span_recall = prefix_word_matches / (total_correct + 1e-8)
+    prefix_span_f1 = _get_f1(prefix_span_precision, prefix_span_recall)
+    prf_scores += Metric(f'prf_exact_span_precision', exact_span_precision, report_mean=False)
+    prf_scores += Metric(f'prf_exact_span_recall', exact_span_recall, 1.0, report_mean=False)
+    prf_scores += Metric(f'prf_exact_span_f1', exact_span_f1, 1.0, report_mean=False)
+    prf_scores += Metric(f'prf_prefix_span_precision', prefix_span_precision, report_mean=False)
+    prf_scores += Metric(f'prf_prefix_span_recall', prefix_span_recall, 1.0, report_mean=False)
+    prf_scores += Metric(f'prf_prefix_span_f1', prefix_span_f1, 1.0, report_mean=False)
     return prf_scores
 
 # @deprecated

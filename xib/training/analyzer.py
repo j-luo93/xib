@@ -2,11 +2,11 @@
 Analyzers package methods that are shared between evaluators and trainers.
 """
 
-from typing import Dict
+from typing import Dict, Tuple, Union
 
 import torch
 
-from dev_misc import FT, g
+from dev_misc import FT, g, get_tensor
 from dev_misc.devlib import get_length_mask
 from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metric, Metrics
@@ -14,12 +14,12 @@ from xib.data_loader import ContinuousTextIpaBatch
 from xib.ipa import should_include
 from xib.model.decipher_model import DecipherModel, DecipherModelReturn
 from xib.model.extract_model import ExtractModelReturn
-from xib.model.lm_model import Cat
+from xib.model.lm_model import AdaptLMReturn, Cat
 
 
 class LMAnalyzer:
 
-    def analyze(self, scores: Dict[Cat, FT]) -> Metrics:
+    def analyze(self, scores: Dict[Cat, FT], return_scores: bool = False) -> Union[Metrics, Tuple[Metrics, Dict[Cat, FT]]]:
         metrics = Metrics()
         total_loss = 0.0
         total_weight = 0.0
@@ -32,7 +32,104 @@ class LMAnalyzer:
                 loss = Metric(f'loss_{name.snake}', loss, weight)
                 metrics += loss
         metrics += Metric('loss', total_loss, total_weight)
-        return metrics
+        if return_scores:
+            return metrics, scores
+        else:
+            return metrics
+
+
+class AdaptLMAnalyzer(LMAnalyzer):
+
+    def analyze(self, ret: AdaptLMReturn) -> Metrics:
+        metrics, scores = super().analyze(ret.distr, return_scores=True)
+        # if g.use_moe:
+        #     # prior = get_tensor([g.prior_value, 1.0 - g.prior_value]).squeeze(dim=0)
+        #     # lp = ret.gate_log_probs
+        #     # kld = lp.exp() * (lp - prior.log())
+
+        #     # kld.
+        #     lp = ret.gate_log_probs
+        #     _p = lp.exp().sum(0) / lp.exp().sum()
+        #     prior = get_tensor([g.prior_value, 1.0 - g.prior_value]).squeeze(dim=0)
+        #     kld = _p * (_p.log() - prior.log())
+
+        #     bs = lp.size('batch')
+        #     kld = Metric('kld', kld.sum() * bs, bs)
+        #     metrics += kld
+
+        #     # sparsity.
+        #     _p = lp.exp()
+        #     with NoName(_p):
+        #         # sparsity = torch.nn.functional.softmin(torch.stack([_p, 1.0 - _p], dim=-1), dim=-1)
+        #         sparsity = torch.min(_p, 1.0 - _p)
+        #     sparsity = Metric('sparsity', sparsity.sum(), bs)
+        #     metrics += sparsity
+
+        #     metrics.rename('loss', 'ce_loss')
+        #     metrics += Metric('loss', metrics.ce_loss.total, bs)
+        #     # metrics += Metric('loss', metrics.ce_loss.total + kld.total, bs)
+        #     # metrics += Metric('loss', metrics.ce_loss.total + kld.total + sparsity.total, bs)
+
+        if g.use_moe:
+            metrics = Metrics()
+            metrics_noise, scores_noise = super().analyze(ret.distr_noise, return_scores=True)
+            total_loss = 0.0
+            total_weight = 0.0
+            # DEBUG(j_luo)
+            cnt = 0
+            prob_cnt = 0
+
+            # gate_log_probs = ret.gate_logits.log_softmax(dim=-1)
+
+            all_scores = [s for _, (s, _) in scores.items()]
+            all_weights = [w for _, (_, w) in scores.items()]
+            weight = all_weights[0]
+
+            sum_scores = torch.stack(all_scores, new_name='stacked').sum(dim='stacked')
+            batch_probs = ret.gate_logits.log_softmax(dim=-1).exp()[:, 0] * weight  # + (-999.9) * (1.0 - weight))
+            # batch_probs = (ret.gate_logits[:, 0] + (-999.9) * (1.0 - weight)).log_softmax(dim='batch').exp()
+            bs = batch_probs.size('batch')
+            total = int(g.prior_value * weight.sum())
+            diff_loss = ((batch_probs.sum() - total) ** 2).sum()
+            diff_loss = Metric('diff_loss', diff_loss, bs)
+            loss = (sum_scores * batch_probs).sum()
+            loss = Metric('loss', loss + diff_loss.total, bs)
+
+            metrics += diff_loss
+            metrics += loss
+
+            # for name in scores:
+            #     s, w = scores[name]
+            #     sn, _ = scores_noise[name]
+            #     all_score = torch.stack([s, sn], new_name='expert')
+            #     probs = gate_log_probs.exp()
+            #     loss = ((all_score * probs) * w.align_as(all_score)).sum()
+            #     cnt += ((all_score[:, 0] < all_score[:, 1]) * w).sum()
+            #     prob_cnt += ((probs[:, 0] > probs[:, 1]) * w).sum()
+            #     weight = w.sum()
+            #     total_loss += loss
+            #     total_weight += weight
+            #     loss = Metric(f'loss_{name.snake}', loss, weight)
+            #     metrics += loss
+
+            # # kld.
+            # lp = gate_log_probs
+            # _p = lp.exp().sum(0) / lp.exp().sum()
+            # prior = get_tensor([g.prior_value, 1.0 - g.prior_value]).squeeze(dim=0)
+            # kld = _p * (_p.log() - prior.log())
+
+            # bs = lp.size('batch')
+            # kld = Metric('kld', kld.sum() * bs, bs)
+            # metrics += kld
+
+            # metrics += Metric('loss', total_loss, total_weight)
+            # metrics += Metric('loss', total_loss + kld.total, total_weight)
+
+            # print('cnt', cnt / total_weight)
+            # print('prob', prob_cnt / total_weight)
+            return metrics
+        else:
+            return metrics
 
 
 def _compute_utility(logits: FT, sample_scores: FT) -> FT:

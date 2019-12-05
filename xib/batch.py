@@ -4,7 +4,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import torch
 
-from dev_misc import FT, LT
+from dev_misc import FT, LT, g
 from dev_misc.devlib import BaseBatch as BaseBatchDev
 from dev_misc.devlib import (batch_class, get_array, get_length_mask,
                              get_range, get_zeros)
@@ -143,6 +143,40 @@ class IpaBatch(BaseBatch):
 
     def __len__(self):
         return self.batch_size
+
+
+@batch_class
+class CbowIpaBatch(IpaBatch):
+
+    def _post_init_helper(self):
+        bs, ml, nfg = self.feat_matrix.shape
+
+        self.target_weight = get_zeros(bs, cpu=True).float().unsqueeze(dim=-1).repeat(1, nfg).fill_(1.0)
+        # self.target_weight = self.target_weight.unsqueeze(dim=-1).repeat(1, 1, nfg).float()
+        self.pos_to_predict = get_zeros(bs, cpu=True).long().fill_(g.window_size // 2)
+
+        # NOTE(j_luo) This is global index.
+        target_feat = self.feat_matrix[:, g.window_size // 2]
+
+        # Get conversion matrix.
+        if self._g2f is None:
+            total = Index.total_indices()
+            self._g2f = torch.LongTensor(total)
+            indices = [Index.get_feature(i).value for i in range(total)]
+            for index in indices:
+                self._g2f[index.g_idx] = index.f_idx
+        # NOTE(j_luo) This is feature index.
+        self.target_feat = self._g2f[target_feat]
+
+        # NOTE(j_luo) If the condition is not satisfied, the target weight should be set to 0.
+        mask_out_target_weight(self.target_weight, self.target_feat)
+
+        # NOTE(j_luo) Refine names.
+        self.pos_to_predict = self.pos_to_predict.refine_names(self.batch_name)
+        self.target_feat = self.target_feat.refine_names(self.batch_name, 'feat_group')
+        self.target_weight = self.target_weight.refine_names(self.batch_name, 'feat_group')
+
+        BaseBatch._post_init_helper(self)
 
 
 @batch_class

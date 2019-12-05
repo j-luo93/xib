@@ -2,14 +2,18 @@ from dev_misc.arglib import g, parse_args, show_args
 from dev_misc.devlib import initiate
 from dev_misc.devlib.named_tensor import patch_named_tensors
 from xib.cfg import reg
-from xib.training.manager import (AdaptLMManager, DecipherManager,
-                                  ExtractManager, LMManager,
-                                  SearchSolverManager)
+from xib.training.manager import (AdaptCbowManager, AdaptLMManager,
+                                  CbowManager, DecipherManager, ExtractManager,
+                                  LMManager, SearchSolverManager)
 
 
 def train():
     if g.task == 'lm':
         manager = LMManager()
+    elif g.task == 'cbow':
+        manager = CbowManager()
+    elif g.task == 'adapt_cbow':
+        manager = AdaptCbowManager()
     elif g.task == 'adapt':
         manager = AdaptLMManager()
     # elif g.task == 'transfer':

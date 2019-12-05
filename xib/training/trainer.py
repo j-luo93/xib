@@ -1,6 +1,8 @@
+from dev_misc.trainlib import get_trainable_params
 import logging
 from abc import ABCMeta
 from pathlib import Path
+from typing import ClassVar
 
 import torch
 import torch.optim as optim
@@ -15,7 +17,8 @@ from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
 from xib.model.decipher_model import DecipherModel
 from xib.model.extract_model import ExtractModel
 from xib.model.lm_model import LM, AdaptLM
-from xib.training.analyzer import DecipherAnalyzer, ExtractAnalyzer, LMAnalyzer
+from xib.training.analyzer import (AdaptLMAnalyzer, DecipherAnalyzer,
+                                   ExtractAnalyzer, LMAnalyzer)
 from xib.training.optim import AdamInverseSqrtWithWarmup
 
 
@@ -42,12 +45,26 @@ class LMTrainer(BaseTrainer):
                  msg='what to include during training: p(type), c(onstonant), v(vowel), d(iacritics), s(tress) and t(one).')
 
     model: LM
+    analyzer_cls: ClassVar = LMAnalyzer
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # IDEA(j_luo) Preparing the trainer should be handled by the manager, not by __init__ call.
+        logging.warning('Init model.')
+        for p in get_trainable_params(self.model, named=False):
+            if p.ndim == 2:
+                torch.nn.init.xavier_uniform_(p)
+
+        # # DEBUG(j_luo)
+        # logging.warning('identity init')
+        # for p in self.model.adapter.adapters.values():
+        #     lp = len(p)
+        #     p.data[range(lp), range(lp)] += 20.0
+
+        # freeze(self.model.adapter)
+
         self.set_optimizer(optim.Adam, lr=g.learning_rate)
-        self.analyzer = LMAnalyzer()
+        self.analyzer = self.analyzer_cls()
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
@@ -56,9 +73,18 @@ class LMTrainer(BaseTrainer):
     def train_one_step(self, dl: IpaDataLoader) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
+        if self.tracker.total_step == 500:
+            breakpoint()  # DEBUG(j_luo)
         batch = dl.get_next_batch()
-        scores = self.model.score(batch)
-        metrics = self.analyzer.analyze(scores)
+        ret = self.model.score(batch)
+        # for idx, segment in enumerate(batch.segments):
+        #     if str(segment).startswith('e-s-t-a-n'):
+        #         break
+        # from xib.ipa import Name
+        # name = Name('Ptype', 'camel')
+        # print(torch.stack([ret.distr[name][0], ret.distr_noise[name][0]], new_name='tmp')[idx])
+        # import time; time.sleep(1)
+        metrics = self.analyzer.analyze(ret)
         metrics.loss.mean.backward()
         grad_norm = get_grad_norm(self.model)
         grad_norm = Metric('grad_norm', grad_norm * len(batch), len(batch))
@@ -76,7 +102,9 @@ class LMTrainer(BaseTrainer):
 
 
 class AdaptLMTrainer(LMTrainer):
+
     model: AdaptLM
+    analyzer_cls: ClassVar = AdaptLMAnalyzer
 
 
 class DecipherTrainer(BaseTrainer):
@@ -153,10 +181,10 @@ class ExtractTrainer(BaseTrainer):
         freeze(self.model.embedding)
 
         # DEBUG(j_luo)
-        logging.warning('identity init')
-        for p in self.model.adapter.adapters.values():
-            lp = len(p)
-            p.data[range(lp), range(lp)] += 2.0
+        # logging.warning('identity init')
+        # for p in self.model.adapter.adapters.values():
+        #     lp = len(p)
+        #     p.data[range(lp), range(lp)] += 2.0
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)

@@ -1,19 +1,21 @@
 import logging
-from typing import Dict, Tuple, Union
+import math
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 
 from dev_misc.arglib import add_argument, g, not_supported_argument_value
-from dev_misc.devlib import get_tensor, get_zeros
+from dev_misc.devlib import BaseBatch, batch_class, get_tensor, get_zeros
+from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import freeze
 from xib.data_loader import DenseIpaBatch, IpaBatch
 from xib.ipa import Category, get_enum_by_cat, get_index, get_new_style_enum
 from xib.ipa.ipax import CategoryX
 
 from . import FT, LT
-from .modules import AdaptLayer, Encoder, Predictor
+from .modules import AdaptLayer, CbowEncoder, Encoder, Predictor
 
 Cat = Union[Category, CategoryX]
 
@@ -22,10 +24,18 @@ class LM(nn.Module):
 
     add_argument('weighted_loss', default='', dtype=str,
                  choices=['', 'mr', 'ot'], msg='what type of weighted loss to use')
+    add_argument('use_cbow_encoder', dtype=bool, default=True, msg='Flag to use cbow encoder.')
+
+    def _get_encoder(self, dropout: float = None, hidden_size: int = None, dim: int = None):
+        dropout = dropout or g.dropout
+        hidden_size = hidden_size or g.hidden_size
+        dim = dim or g.dim
+        encoder_cls = CbowEncoder if g.use_cbow_encoder else Encoder
+        return encoder_cls(dropout=dropout, hidden_size=hidden_size, dim=dim)
 
     def __init__(self):
         super().__init__()
-        self.encoder = Encoder()
+        self.encoder = self._get_encoder()
         self.predictor = Predictor()
         # if weighted_loss and not new_style:
         #     raise ValueError('Must use new_style if using weighted loss')
@@ -101,7 +111,18 @@ class LM(nn.Module):
         return ret
 
 
+@batch_class
+class AdaptLMReturn(BaseBatch):
+    distr: Dict[Category, FT]
+    gate_logits: Optional[FT] = None
+    distr_noise: Dict[Category, FT] = None
+
+
 class AdaptLM(LM):
+
+    add_argument('use_prior', dtype=bool, default=False, msg='Flag to use prior.')
+    add_argument('prior_value', dtype=float, default=0.5, msg='Value for prior.')
+    add_argument('use_moe', dtype=bool, default=False, msg='Flag to use MoE.')
 
     @not_supported_argument_value('new_style', True)
     def __init__(self):
@@ -128,8 +149,64 @@ class AdaptLM(LM):
 
         self.adapter = AdaptLayer()
 
-    def forward(self, batch: DenseIpaBatch) -> Dict[Category, FT]:
+        if g.use_prior or g.use_moe:
+            noise_hs = 10
+            noise_dim = 10
+            self.noise_encoder = self._get_encoder(hidden_size=noise_hs, dim=noise_dim)
+            self.noise_predictor = Predictor(hidden_size=noise_hs)
+            if g.use_moe:
+                self.moe_gate = nn.Linear(noise_hs + g.hidden_size, 2)
+
+    def forward(self, batch: DenseIpaBatch) -> AdaptLMReturn:
         sfm_adapted = self.adapter(batch.dense_feat_matrix)
         h = self.encoder(sfm_adapted, batch.pos_to_predict, batch.source_padding)
         distr = self.predictor(h)
-        return distr
+
+        if g.use_prior:
+            if g.use_moe:
+                h_noise = self.noise_encoder(batch.dense_feat_matrix, batch.pos_to_predict, batch.source_padding)
+                distr_noise = self.noise_predictor(h_noise)
+
+                # # DEBUG(j_luo)
+                # try:
+                #     if self.training:
+                #         self._temp *= 0.999
+                # except:
+                #     self._temp = 5.0
+                # self._temp = max(self._temp, 0.1)
+                # if self.training:
+                #     print(self._temp)
+
+                gate_logits = self.moe_gate(torch.cat([h, h_noise], dim=-1))  # / self._temp
+                gate_log_probs = gate_logits.log_softmax(dim=-1)
+
+
+                # # DEBUG(j_luo)
+                # gate_log_probs = (1e-8 + gate_log_probs.exp() * 0.1 + get_tensor([0.9, 0.1]) * 0.9).log()
+
+                # for cat in distr:
+                #     d = distr[cat]
+                #     d_noise = distr_noise[cat]
+                #     stacked = torch.stack([d + gate_log_probs[..., 0].align_as(d),
+                #                            d_noise + gate_log_probs[..., 1].align_as(d_noise)],
+                #                           new_name='gate')
+                #     new_d = stacked.logsumexp(dim='gate')
+                #     distr[cat] = new_d
+                return AdaptLMReturn(distr, gate_logits, distr_noise)
+            else:
+                h_noise = self.noise_encoder(batch.dense_feat_matrix, batch.pos_to_predict, batch.source_padding)
+                distr_noise = self.noise_predictor(h_noise)
+                for cat in distr:
+                    d = distr[cat]
+                    d_noise = distr_noise[cat]
+                    stacked = torch.stack([d + math.log(g.prior_value),
+                                           d_noise + math.log(1.0 - g.prior_value)],
+                                          new_name='prior')
+                    new_d = stacked.logsumexp(dim='prior')
+                    distr[cat] = new_d
+
+        return AdaptLMReturn(distr)
+
+    def score(self, batch) -> AdaptLMReturn:
+        ret = self(batch)
+        return AdaptLMReturn(self.score_distr(ret.distr, batch), ret.gate_logits, self.score_distr(ret.distr_noise, batch))

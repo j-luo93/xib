@@ -49,10 +49,21 @@ class LMEvaluator(BaseEvaluator):
         with torch.no_grad():
             self.model.eval()
             all_metrics = Metrics()
+            total_num_samples = 0
             for batch in self.data_loader:
+                if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
+                    logging.imp(
+                        f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples from.')
+                    break
+
                 scores = self.model.score(batch)
-                metrics = self.analyzer.analyze(scores)
+                try:
+                    metrics = self.analyzer.analyze(scores.distr)
+                except AttributeError:
+                    metrics = self.analyzer.analyze(scores)
                 all_metrics += metrics
+
+                total_num_samples += batch.batch_size
         return all_metrics
 
 

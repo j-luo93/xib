@@ -32,11 +32,12 @@ def get_effective_c_idx():
 
 class FeatEmbedding(nn.Module):
 
-    def __init__(self, feat_emb_name, group_name, char_emb_name):
+    def __init__(self, feat_emb_name, group_name, char_emb_name, dim: int = 10):
         super().__init__()
         self.feat_emb_name = feat_emb_name
         self.group_name = group_name
         self.char_emb_name = char_emb_name
+        self.dim = dim
 
         self.embed_layer = self._get_embeddings()
         self.register_buffer('c_idx', get_tensor(get_effective_c_idx()).refine_names('chosen_feat_group'))
@@ -58,7 +59,7 @@ class FeatEmbedding(nn.Module):
             self.effective_num_feature_groups = len(cat_enum_pairs)
 
     def _get_embeddings(self):
-        return nn.Embedding(g.num_features, g.dim)
+        return nn.Embedding(g.num_features, self.dim)
 
     def forward(self, feat_matrix: LT, padding: Optional[BT] = None, masked_positions: Optional[LT] = None) -> FT:
         feat_matrix = adv_index(feat_matrix, 'feat_group', self.c_idx)
@@ -86,8 +87,8 @@ class FeatEmbedding(nn.Module):
             batch_i = get_range(padding.size('batch'), 1, 0)
             feat_emb = feat_emb.align_to('batch', 'char_emb', 'length')
             # feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
-            # TODO(j_luo) ugly
-            feat_emb.rename(None)[batch_i, :, masked_positions.rename(None)] = 0.0
+            with NoName(feat_emb, masked_positions):
+                feat_emb[batch_i, :, masked_positions] = 0.0
         return feat_emb
 
 
@@ -100,11 +101,11 @@ class DenseFeatEmbedding(FeatEmbedding):
             if should_include(g.feat_groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
-                emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, g.dim))
+                emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, self.dim))
         return nn.ParameterDict(emb_dict)
 
     # HACK(j_luo) Use kwargs to deal with masked_positions.
-    def forward(self, dense_feat_matrices: Dict[Category, FT], padding: Optional[BT] = None, **kwargs) -> FT:
+    def forward(self, dense_feat_matrices: Dict[Category, FT], padding: Optional[BT] = None, masked_positions: Optional[LT] = None) -> FT:
         if padding is not None:
             padding = padding.align_to('batch', 'length')
 
@@ -119,6 +120,13 @@ class DenseFeatEmbedding(FeatEmbedding):
                     emb.rename(None)[padding.rename(None)] = 0.0
                 embs.append(emb)
         feat_emb = torch.cat(embs, dim=-1).refine_names('batch', 'length', self.char_emb_name)
+
+        if masked_positions is not None:
+            batch_i = get_range(padding.size('batch'), 1, 0)
+            feat_emb = feat_emb.align_to('batch', 'char_emb', 'length')
+            # feat_emb = self.feat_embeddings(feat_matrix).view(bs, l, -1).transpose(1, 2)  # size: bs x D x l
+            with NoName(feat_emb, masked_positions):
+                feat_emb[batch_i, :, masked_positions] = 0.0
         return feat_emb
 
 
@@ -127,17 +135,24 @@ class Encoder(nn.Module):
     add_argument('window_size', default=3, dtype=int, msg='window size for the cnn kernel')
     add_argument('dense_input', default=False, dtype=bool, msg='flag to dense input feature matrices')
 
-    def __init__(self):
+    def __init__(self, dropout: float = 0.0, hidden_size: int = 10, dim: int = 10):
         super().__init__()
+        self.dropout = dropout
+        self.hidden_size = hidden_size
+        self.dim = dim
 
         emb_cls = DenseFeatEmbedding if g.dense_input else FeatEmbedding
-        self.feat_embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb')
-        self.cat_dim = g.dim * self.feat_embedding.effective_num_feature_groups
+        self.feat_embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb', dim=dim)
+        self.cat_dim = self.dim * self.feat_embedding.effective_num_feature_groups
+
+        self._get_core_layers()
+
+    def _get_core_layers(self):
         # IDEA(j_luo) should I define a Rename layer?
         self.conv_layers = nn.Sequential(
             nn.Conv1d(self.cat_dim, self.cat_dim, g.window_size, padding=g.window_size // 2)
         )
-        self.linear = nn.Linear(self.cat_dim, g.hidden_size)
+        self.linear = nn.Linear(self.cat_dim, self.hidden_size)
 
     def forward(self, feat_matrix: LT, pos_to_predict: LT, source_padding: BT) -> FT:
         bs = source_padding.size('batch')
@@ -151,9 +166,34 @@ class Encoder(nn.Module):
         output = output.refine_names('batch', 'length', 'hidden_repr')
         output = nn.functional.leaky_relu(output, negative_slope=0.1)
         # NOTE(j_luo) This is actually quite wasteful because we are discarding all the irrelevant information, which is computed anyway. This is equivalent to training on ngrams.
-        # TODO(j_luo) ugly
-        h = output.rename(None)[batch_i, pos_to_predict.rename(None)]
+        with NoName(output, pos_to_predict):
+            h = output[batch_i, pos_to_predict]
         h = h.refine_names('batch', 'hidden_repr')  # size: bs x n_hid
+        return h
+
+
+class CbowEncoder(Encoder):
+
+    def _get_core_layers(self):
+        self.mlp = nn.Sequential(
+            nn.Dropout(self.dropout),
+            nn.Linear(g.window_size * self.cat_dim, self.hidden_size),
+            nn.LeakyReLU(negative_slope=0.1),
+            nn.Dropout(self.dropout),
+            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.LeakyReLU(negative_slope=0.1),
+            nn.Dropout(self.dropout),
+            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.LeakyReLU(negative_slope=0.1))
+        # self.mlp[0].refine_names('weight', ['hidden_repr_first', 'char_emb'])
+        # self.mlp[2].refine_names('weight', ['hidden_repr_second', 'hidden_repr_first'])
+        # self.mlp[4].refine_names('weight', ['hidden_repr', 'hidden_repr_second'])
+
+    def forward(self, feat_matrix: LT, pos_to_predict: LT, source_padding: BT) -> FT:
+        feat_emb = self.feat_embedding(feat_matrix, source_padding, masked_positions=pos_to_predict)
+        feat_emb = feat_emb.align_to('batch', 'length', 'char_emb').flatten(['length', 'char_emb'], 'mlp_input')
+        h = self.mlp(feat_emb)
+        h.rename_('batch', 'hidden_repr')
         return h
 
 
@@ -245,8 +285,20 @@ class AdaptLayer(nn.Module):
         self.adapters = nn.ParameterDict(param_dict)
 
     def alignment(self, cat_name: str) -> FT:
+        try:
+            if self.training:
+                self._temp *= 0.999
+                self._cnt += 1
+        except:
+            self._temp = 5.0
+            self._cnt = 0
+        self._temp = max(0.1, self._temp)
+        if self.training and self._cnt % 100 == 0:
+            print(self._temp)
+
         param = self.adapters[cat_name]
-        alignment = param.log_softmax(dim=0).exp()
+        # alignment = param.log_softmax(dim=0).exp()
+        alignment = (param.log_softmax(dim=0) / self._temp).exp()
         return alignment
 
     def forward(self, dense_feat_matrices: Dict[Category, FT]) -> Dict[Category, FT]:

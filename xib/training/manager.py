@@ -20,25 +20,27 @@ from xib.search.search_solver import SearchSolver
 from xib.search.searcher import BruteForceSearcher
 from xib.training.evaluator import (DecipherEvaluator, ExtractEvaluator,
                                     LMEvaluator, SearchSolverEvaluator)
-from xib.training.task import (AdaptLMTask, DecipherTask, ExtractTask, LMTask,
-                               MlmTask, TransferTask)
+from xib.training.task import (AdaptCbowTask, AdaptLMTask, CbowTask,
+                               DecipherTask, ExtractTask, LMTask, MlmTask,
+                               TransferTask)
 from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer,
                                   ExtractTrainer, LMTrainer)
 
 add_argument('task', default='lm', dtype=str, choices=[
-             'lm', 'adapt', 'decipher', 'search', 'extract'], msg='which task to run')
+             'lm', 'cbow', 'adapt_lm', 'adapt_cbow', 'decipher', 'search', 'extract'], msg='which task to run')
 
 
 class LMManager:
 
     model_cls = LM
-    trainer_cls = AdaptLMTrainer
+    trainer_cls = LMTrainer
     task_cls = LMTask
 
     def __init__(self):
         self.model = self.model_cls()
         if has_gpus():
             self.model.cuda()
+        logging.info(self.model)
 
         task = self.task_cls()
         self.dl_reg = DataLoaderRegistry()
@@ -53,11 +55,23 @@ class LMManager:
         self.trainer.train(self.dl_reg)
 
 
+class CbowManager(LMManager):
+
+    task_cls = CbowTask
+
+
 class AdaptLMManager(LMManager):
 
     model_cls = AdaptLM
     trainer_cls = AdaptLMTrainer
     task_cls = AdaptLMTask
+
+
+class AdaptCbowManager(CbowManager):
+
+    model_cls = AdaptLM
+    trainer_cls = AdaptLMTrainer
+    task_cls = AdaptCbowTask
 
 
 class DecipherManager:

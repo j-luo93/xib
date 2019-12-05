@@ -17,11 +17,14 @@ from dev_misc.trainlib import has_gpus
 from dev_misc.trainlib.base_data_loader import (BaseDataLoader,
                                                 BaseDataLoaderRegistry)
 from dev_misc.trainlib.tracker.tracker import Task
+from xib.batch import CbowIpaBatch
 from xib.ipa import Category, Index, conditions, get_enum_by_cat
 from xib.ipa.process import Segment, SegmentWindow
 from xib.training.task import Task
 
 from .batch import BaseBatch, DenseIpaBatch, IpaBatch
+
+import pickle
 
 
 class BaseDataset(Dataset, metaclass=ABCMeta):
@@ -31,11 +34,15 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
     def __init__(self, data_path: Path):
         cache_path = Path(str(data_path) + f'.{self.cache_suffix}')
         if cache_path.exists():
+            # with cache_path.open('rb') as fin:
+            #     self.data = pickle.load(fin)
             self.data = torch.load(cache_path)
             path = cache_path
         else:
             self.data = self.load_data(data_path)
             torch.save(self.data, cache_path)
+            # with cache_path.open('wb') as fout:
+            #     pickle.dump(self.data, fout, protocol=2)
             path = data_path
         logging.info(f'Loaded {len(self)} segments in total from {path}.')
 
@@ -225,6 +232,10 @@ class UnbrokenTextIpaDataset(IpaDataset):
 
 class BrokenTextIpaDataset(IpaDataset):
 
+    @property
+    def window_size(self):
+        return g.max_segment_length
+
     def load_data(self, data_path: Path):
         segment_dict = self._get_segment_dict(data_path)
         segment_windows = list()
@@ -235,7 +246,7 @@ class BrokenTextIpaDataset(IpaDataset):
                 sw = SegmentWindow(segments)
                 start = 0
                 while True:
-                    end = min(start + g.max_segment_length, len(sw))
+                    end = min(start + self.window_size, len(sw))
                     broken_sw = sw.break_segment(start, end - 1)
                     segment_windows.append(broken_sw)
                     if end >= len(sw):
@@ -251,6 +262,15 @@ class BrokenTextIpaDataset(IpaDataset):
         ret = super().__getitem__(idx)
         ret['gold_tag_seq'] = ret['segment'].gold_tag_seq
         return ret
+
+
+class CbowIpaDataset(BrokenTextIpaDataset):
+
+    cache_suffix = 'cbow.cache'
+
+    @property
+    def window_size(self):
+        return g.window_size
 
 
 total = Index.total_indices()
@@ -314,6 +334,34 @@ class BrokenTextDataLoader(UnbrokenTextDataLoader):
     dataset_cls = BrokenTextIpaDataset
 
 
+class CbowIpaDataLoader(BrokenTextDataLoader):
+
+    dataset_cls = CbowIpaDataset
+    batch_cls = CbowIpaBatch
+
+    def _prepare_batch(self, collate_return: CollateReturn) -> CbowIpaBatch:
+        cls = type(self)
+        batch_cls = cls.batch_cls
+        return batch_cls(
+            collate_return.segments,
+            collate_return.lengths,
+            collate_return.matrices,
+        )
+
+
+@batch_class
+class DenseCbowIpaBatch(CbowIpaBatch):
+    dense_feat_matrix: DenseFeatureMatrix = field(init=False)
+
+    def _post_init_helper(self):
+        super()._post_init_helper()
+        self.dense_feat_matrix = convert_to_dense(self.feat_matrix)
+
+
+class DenseCbowIpaDataLoader(CbowIpaDataLoader):
+    batch_cls = DenseCbowIpaBatch
+
+
 ContinuousTextDataLoader = Union[BrokenTextDataLoader, UnbrokenTextDataLoader]
 
 
@@ -322,6 +370,10 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
     def get_data_loader(self, task: Task, data_path: Path):
         if task.name in ['lm', 'mlm']:
             dl = IpaDataLoader(data_path, task)
+        elif task.name == 'cbow':
+            dl = CbowIpaDataLoader(data_path, task)
+        elif task.name == 'adapt_cbow':
+            dl = DenseCbowIpaDataLoader(data_path, task)
         elif task.name == 'adapt_lm':
             dl = DenseIpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer', 'extract']:

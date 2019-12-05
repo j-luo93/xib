@@ -7,8 +7,18 @@ class LMTask(Task):
 
 
 @task_class
+class CbowTask(Task):
+    name = 'cbow'
+
+
+@task_class
 class AdaptLMTask(Task):
     name = 'adapt_lm'
+
+
+@task_class
+class AdaptCbowTask(Task):
+    name = 'adapt_cbow'
 
 
 @task_class

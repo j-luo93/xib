@@ -46,24 +46,42 @@ _all_other_langs = {
     'xib', 'yue', 'eu', 'xaq'
 }
 
-for lang in _all_other_langs:
-    cap_lang = lang[0].upper() + lang[1:]
-    new_cls = type(f'LM{cap_lang}', (LMEn,), {'lang': lang})
-    reg(new_cls)
+
+def add_langs(cls_prefix, base_cls):
+    for lang in _all_other_langs:
+        cap_lang = lang[0].upper() + lang[1:]
+        new_cls = type(f'{cls_prefix}{cap_lang}', (base_cls,), {'lang': lang})
+        reg(new_cls)
+
+
+add_langs('LM', LMEn)
+
+
+@reg
+class CbowEn(LMEn):
+    task: str = 'cbow'
+
+
+add_langs('Cbow', CbowEn)
 
 
 @reg
 class AdaptLMEn(LMEn):
-    task: str = 'adapt'
+    task: str = 'adapt_lm'
     dense_input: bool = True
     learning_rate: float = 0.02
     num_steps: int = 1000
 
 
-for lang in _all_other_langs:
-    cap_lang = lang[0].upper() + lang[1:]
-    new_cls = type(f'AdaptLM{cap_lang}', (AdaptLMEn, ), {'lang': lang})
-    reg(new_cls)
+add_langs('AdaptLM', AdaptLMEn)
+
+
+@reg
+class AdaptCbowEn(AdaptLMEn):
+    task: str = 'adapt_cbow'
+
+
+add_langs('AdaptCbow', AdaptCbowEn)
 
 
 @reg

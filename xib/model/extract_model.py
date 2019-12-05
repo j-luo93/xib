@@ -285,7 +285,7 @@ class ExtractModel(nn.Module):
         # DEBUG(j_luo)
         try:
             if self.training:
-                self._thresh *= 0.998
+                self._thresh *= 0.9985
         except:
             self._thresh = g.init_threshold
         self._thresh = max(self._thresh, 0.001)

@@ -1,5 +1,6 @@
+import logging
 import math
-from typing import Optional
+from typing import Dict, Optional
 
 import numpy as np
 import torch
@@ -9,9 +10,11 @@ from dev_misc import BT, FT, LT, add_argument, g, get_zeros
 from dev_misc.devlib import (BaseBatch, batch_class, get_array,
                              get_length_mask, get_range)
 from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
-                                          get_named_range)
+                                          drop_names, get_named_range)
+from dev_misc.utils import WithholdKeys
 from xib.data_loader import ContinuousTextIpaBatch, convert_to_dense
-from xib.ipa.process import Segment
+from xib.ipa import should_include
+from xib.ipa.process import Segment, SegmentWindow
 from xib.model.modules import AdaptLayer, FeatEmbedding
 
 from .modules import DenseFeatEmbedding
@@ -58,19 +61,25 @@ class ExtractModel(nn.Module):
     add_argument('init_threshold', default=0.05, dtype=float,
                  msg='Initial value of threshold to determine whether two words are matched.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
+    add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
+    add_argument('use_hamming', default=False, dtype=bool, msg='Flag to use hamming distance instead of cosine.')
 
     def __init__(self):
         super().__init__()
-        emb_cls = DenseFeatEmbedding if g.dense_input else FeatEmbedding
-        self.embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb')
+
+        if g.use_embedding:
+            emb_cls = DenseFeatEmbedding if g.dense_input else FeatEmbedding
+            self.embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb')
+        elif not g.dense_input:
+            raise ValueError(f'Use embedding for sparse inputs.')
 
         def _has_proper_length(segment):
             l = len(segment)
             return g.min_word_length <= l <= g.max_word_length
 
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
-            vocab = set(line.strip() for line in fin)
-            segments = [Segment(w) for w in vocab]
+            _vocab = set(line.strip() for line in fin)
+            segments = [Segment(w) for w in _vocab]
             self.vocab = get_array([segment for segment in segments if _has_proper_length(segment)])
             lengths = torch.LongTensor(list(map(len, self.vocab)))
             feat_matrix = [segment.feat_matrix for segment in self.vocab]
@@ -120,13 +129,74 @@ class ExtractModel(nn.Module):
             assert g.dense_input
             self.adapter = AdaptLayer()
 
+    _special_state_keys = ['vocab', 'vocab_dense_feat_matrix', 'unit2id', 'id2unit', 'unit_dense_feat_matrix']
+
+    def state_dict(self, **kwargs):
+        state = super().state_dict(**kwargs)
+        for key in self._special_state_keys:
+            attr = drop_names(getattr(self, key))
+            state[key] = attr
+        return state
+
+    def load_state_dict(self, state_dict: Dict, **kwargs):
+        with WithholdKeys(state_dict, *self._special_state_keys):
+            super().load_state_dict(state_dict, **kwargs)
+        for key in self._special_state_keys:
+            attr = getattr(self, key)
+            setattr(self, key, state_dict[key])
+            try:
+                names = attr.names
+                getattr(self, key).rename_(*names)
+            except AttributeError:
+                pass
+
+    # ------------------------ Debug section ----------------------- #
+    # DEBUG(j_luo)
+
+    def get_vector(self, segment: SegmentWindow, adapt: bool = False):
+        fm = segment.feat_matrix.rename('length', 'feat_group').align_to('batch', ...)
+        dfm = convert_to_dense(fm)
+        if adapt:
+            dfm = self.adapter(dfm)
+        names = [name for name in dfm if should_include(g.groups, name)]
+        names = sorted(names, key=lambda name: name.value)
+        with NoName(*dfm.values()):
+            word_repr = torch.cat([dfm[name] for name in names], dim=-1)
+        word_repr.rename_('length', 'char_emb')
+        return word_repr
+
+    def get_char_sim(self, c1: str, c2: str):
+        v1 = self.get_vector(c1)
+        v2 = self.get_vector(c2)
+        return (v1 * v2).sum() / (v1 ** 2).sum().sqrt() / (v2 ** 2).sum().sqrt()
+
+    def get_char_hamming(self, c1: str, c2: str):
+        v1 = self.get_vector(c1)
+        v2 = self.get_vector(c2)
+        return (v1 - v2).abs().sum()
+
+    # DEBUG(j_luo)
+    add_argument('debug', dtype=bool, default=False)
+
     def forward(self, batch: ContinuousTextIpaBatch) -> ExtractModelReturn:
+        if g.debug:
+            breakpoint()
+
         # Prepare representations.
         if g.dense_input:
             with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
-                word_repr = self.embedding(batch.dense_feat_matrix, batch.source_padding)
-                dfm = self.adapter(self.unit_dense_feat_matrix)
-                unit_repr = self.embedding(dfm)
+                dfm = self.adapter(batch.dense_feat_matrix)
+            if g.use_embedding:
+                word_repr = self.embedding(dfm, batch.source_padding)
+                unit_repr = self.embedding(self.unit_dense_feat_matrix)
+            else:
+                names = sorted(dfm, key=lambda name: name.value)
+                # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
+                with NoName(*self.unit_dense_feat_matrix.values(), *dfm.values()):
+                    word_repr = torch.cat([dfm[name] for name in names], dim=-1)
+                    unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
+                word_repr.rename_('batch', 'length', 'char_emb')
+                unit_repr.rename_('batch', 'length', 'char_emb')
         else:
             with Rename(self.unit_feat_matrix, unit='batch'):
                 word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
@@ -139,7 +209,13 @@ class ExtractModel(nn.Module):
         new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr)
 
         # Get the best score and span.
-        best_scores, best_inds = new_extracted.matches.score.flatten(['len_s', 'len_e'], 'cand').max(dim='cand')
+        flat_scores = new_extracted.matches.score.flatten(['len_s', 'len_e'], 'cand')
+        if self.training:
+            best_scores, best_inds = flat_scores.max(dim='cand')
+            softmax = (flat_scores / 0.1).softmax(dim='cand')
+            best_scores = (flat_scores * softmax).sum(dim='cand')
+        else:
+            best_scores, best_inds = flat_scores.max(dim='cand')
         len_s = new_extracted.matches.score.size('len_s')
         len_e = new_extracted.matches.score.size('len_e')
         starts = best_inds // len_e
@@ -213,6 +289,10 @@ class ExtractModel(nn.Module):
                 ret[v_bi, v_lsi, v_lei] = tensor
                 return ret
 
+            # if self.training:
+            #     matches.score = _unshape(matches.score).rename('batch', 'len_s', 'len_e', 'vocab')
+            #     matches.matched = _unshape(matches.matched).rename('batch', 'len_s', 'len_e', 'vocab')
+            # else:
             matches.score = _unshape(matches.score).rename('batch', 'len_s', 'len_e')
             matches.matched = _unshape(matches.matched).rename('batch', 'len_s', 'len_e')
             matches.matched_vocab = _unshape(matches.matched_vocab).rename('batch', 'len_s', 'len_e')
@@ -228,13 +308,25 @@ class ExtractModel(nn.Module):
         msl = extracted_word_repr.size('len_w')
         mtl = self.vocab_feat_matrix.size('length')
 
-        # Initialize f scores.
-        # NOTE(j_luo) You need one extra position to keep 0-length outputs, and another one to dump invalid indices during DP.
-        f = get_zeros(ns, nt, 2 + msl, 2 + mtl).fill_(99.9)
+        # # NOTE(j_luo) Use dictionary save every state.
+        fs = dict()
         for i in range(msl + 1):
-            f[:, :, i, 0] = i
+            fs[(i, 0)] = get_zeros(ns, nt).fill_(i)
         for j in range(mtl + 1):
-            f[:, :, 0, j] = j
+            fs[(0, j)] = get_zeros(ns, nt).fill_(j)
+
+        # Initialize f scores.
+        # # NOTE(j_luo) You need one extra position to keep 0 - length outputs, and another one to dump invalid indices during DP.
+        # f = get_zeros(1 + msl, 1 + mtl, ns, nt).fill_(99.9)
+        # for i in range(msl + 1):
+        #     f[i, 0] = i
+        # for j in range(mtl + 1):
+        #     f[0, j] = j
+        # f = get_zeros(ns, nt, 1 + msl, 1 + mtl).fill_(99.9)
+        # for i in range(msl + 1):
+        #     f[:, :, i, 0] = i
+        # for j in range(mtl + 1):
+        #     f[:, :, 0, j] = j
 
         # Compute cosine distance all at once: for each viable span, compare it against all units.
         def _get_cosine_matrix(x, y):
@@ -245,53 +337,113 @@ class ExtractModel(nn.Module):
             cos = dot / norms_x / norms_y.t()
             return (1.0 - cos) / 2
 
+        # IDEA(j_luo) Add temp argument for break points.
+        def _get_hamming_matrix(x, y):
+            with NoName(x, y):
+                hamming = (x.unsqueeze(dim=1) - y).abs().sum(dim=-1)
+            return hamming.rename_(x.names[0], y.names[0]) / 14
+
         nh = NameHelper()
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
-        cos = _get_cosine_matrix(_extracted_word_repr, unit_repr)
+        dist_func = _get_hamming_matrix if g.use_hamming else _get_cosine_matrix
+        costs = dist_func(_extracted_word_repr, unit_repr)
+        # # Rescale the cosine distance.
+        # _max, _ = cos.max(dim='unit', keepdim=True)
+        # _min, _ = cos.min(dim='unit', keepdim=True)
+        # cos = (cos - _min) / (_max - _min + 1e-8)
+
         # Name: viable x len_w x unit
-        cos = nh.unflatten(cos, 'viable_X_len_w', ['viable', 'len_w'])
+        costs = nh.unflatten(costs, 'viable_X_len_w', ['viable', 'len_w'])
 
         # ------------------------ Main body: DP ----------------------- #
 
         # Transition.
-        with NoName(self.indexed_segments, cos):
+        with NoName(self.indexed_segments, costs):
             for ls in range(1, msl + 1):
                 min_lt = max(ls - 2, 1)
                 max_lt = min(ls + 2, mtl + 1)
                 for lt in range(min_lt, max_lt):
-                    vocab_inds = self.indexed_segments[:, lt - 1]
-                    diff = cos[:, ls - 1, vocab_inds]
+                    transitions = list()
+                    if (ls - 1, lt) in fs:
+                        transitions.append(fs[(ls - 1, lt)] + 1)
+                    if (ls, lt - 1) in fs:
+                        transitions.append(fs[(ls, lt - 1)] + 1)
+                    if (ls - 1, lt - 1) in fs:
+                        vocab_inds = self.indexed_segments[:, lt - 1]
+                        sub_cost = costs[:, ls - 1, vocab_inds]
+                        transitions.append(fs[(ls - 1, lt - 1)] + sub_cost)
+                    if transitions:
+                        all_s = torch.stack(transitions, dim=-1)
+                        new_s, _ = all_s.min(dim=-1)
+                        fs[(ls, lt)] = new_s
 
-                    ins_s = f[:, :, ls - 1, lt] + 1
-                    del_s = f[:, :, ls, lt - 1] + 1
-                    sub_s = f[:, :, ls - 1, lt - 1] + diff
-                    all_s = torch.stack([ins_s, del_s, sub_s], dim=-1)
-                    f[:, :, ls, lt], _ = all_s.min(dim=-1)
+                    # vocab_inds = self.indexed_segments[:, lt - 1]
+                    # sub_cost = costs[:, ls - 1, vocab_inds]
+
+                    # ins_s = f[ls - 1, lt] + 1
+                    # del_s = f[ls, lt - 1] + 1
+                    # sub_s = f[ls - 1, lt - 1] + sub_cost
+                    # all_s = torch.stack([ins_s, del_s, sub_s], dim=-1)
+                    # f[ls, lt], _ = all_s.min(dim=-1)
+
+                    # ins_s = f[:, :, ls - 1, lt] + 1
+                    # del_s = f[:, :, ls, lt - 1] + 1
+                    # sub_s = f[:, :, ls - 1, lt - 1] + sub_cost
+                    # all_s = torch.stack([ins_s, del_s, sub_s], dim=-1)
+                    # f[:, :, ls, lt], _ = all_s.min(dim=-1)
+
+        f_lst = list()
+        for i in range(msl + 1):
+            for j in range(mtl + 1):
+                if (i, j) not in fs:
+                    fs[(i, j)] = get_zeros(ns, nt).fill_(99.9)
+                f_lst.append(fs[(i, j)])
+        f = torch.stack(f_lst, dim=0).view(msl + 1, mtl + 1, -1, len(self.vocab))
+        f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
+        # ls_idx, lt_idx = zip(*fs.keys())
 
         # Get the values wanted.
-        f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
+        # DEBUG(j_luo)
+        RELATIVE = False
+
+        # f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
         with NoName(f, viable_lens, self.vocab_length):
             idx_src = viable_lens.unsqueeze(dim=-1)
             idx_tgt = self.vocab_length
             viable_i = get_range(ns, 2, 0)
             vocab_i = get_range(len(self.vocab_length), 2, 1)
 
-            value = f[viable_i, vocab_i, idx_src, idx_tgt]
+            value = f[idx_src, idx_tgt, viable_i, vocab_i]
+            # value = f[viable_i, vocab_i, idx_src, idx_tgt]
             value.rename_('viable', 'vocab')
 
+            # Normalize the values by length.
+            if RELATIVE:
+                min_len = torch.min(idx_src, self.vocab_length)
+                value = value / min_len
+
         # Get the best spans.
-        best_value, matched_vocab = value.min(dim='vocab')
-        lengths = self.vocab_length.gather('vocab', matched_vocab)
-        # DEBUG(j_luo)
-        try:
-            if self.training:
-                self._thresh *= 0.9985
-        except:
-            self._thresh = g.init_threshold
-        self._thresh = max(self._thresh, 0.001)
-        matched = best_value < self._thresh
         if self.training:
-            print(self._thresh)
+            # DEBUG(j_luo)
+            try:
+                MUL = 0.999 if RELATIVE else 0.9985
+                self._thresh *= MUL
+            except AttributeError:
+                self._thresh = g.init_threshold
+            MIN_TH = 0.2 if RELATIVE else 0.001
+            self._thresh = max(self._thresh, MIN_TH)
+            logging.debug(self._thresh)
+
+        best_value, matched_vocab = value.min(dim='vocab')
+        matched = best_value < self._thresh
+
+        if self.training:
+            # DEBUG(j_luo)
+            TEMPERATURE = 0.05 if RELATIVE else 0.1
+            softmin = nn.functional.softmin(value / TEMPERATURE, dim='vocab')
+            best_value = (value * softmin).sum(dim='vocab')
+
+        lengths = self.vocab_length.gather('vocab', matched_vocab)
         score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
         matches = Matches(None, score, value, matched, matched_vocab)
         return matches

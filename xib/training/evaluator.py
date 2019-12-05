@@ -287,14 +287,16 @@ class ExtractEvaluator(BaseEvaluator):
         starts = model_ret.start.cpu().numpy()
         ends = model_ret.end.cpu().numpy()
         matched = model_ret.matched.cpu().numpy()
-        matched_vocab = model_ret.matched_vocab.cpu().numpy()
-        matched_segments = self.model.vocab[matched_vocab]
+        best_vocab = model_ret.matched_vocab.cpu().numpy()
+        best_segments = self.model.vocab[best_vocab]
         segmentations = list()
-        for segment, start, end, m in zip(batch.segments, starts, ends, matched):
+        matched_segments = list()
+        for segment, start, end, m, seg in zip(batch.segments, starts, ends, matched, best_segments):
             spans = list()
             if m:
                 span = [segment[i] for i in range(start, end + 1)]
                 span = Span('-'.join(span), start, end)
                 spans.append(span)
+                matched_segments.append(seg)
             segmentations.append(Segmentation(spans))
         return segmentations, matched_segments

@@ -285,20 +285,21 @@ class AdaptLayer(nn.Module):
         self.adapters = nn.ParameterDict(param_dict)
 
     def alignment(self, cat_name: str) -> FT:
-        try:
-            if self.training:
-                self._temp *= 0.999
-                self._cnt += 1
-        except:
-            self._temp = 5.0
-            self._cnt = 0
-        self._temp = max(0.1, self._temp)
-        if self.training and self._cnt % 100 == 0:
-            print(self._temp)
+        # DEBUG(j_luo)
+        # try:
+        #     if self.training:
+        #         self._temp *= 0.999
+        #         self._cnt += 1
+        # except:
+        #     self._temp = 5.0
+        #     self._cnt = 0
+        # self._temp = max(0.1, self._temp)
+        # if self.training and self._cnt % 100 == 0:
+        #     print(self._temp)
 
         param = self.adapters[cat_name]
-        # alignment = param.log_softmax(dim=0).exp()
-        alignment = (param.log_softmax(dim=0) / self._temp).exp()
+        alignment = param.log_softmax(dim=0).exp()
+        # alignment = (param.log_softmax(dim=0) / self._temp).exp()
         return alignment
 
     def forward(self, dense_feat_matrices: Dict[Category, FT]) -> Dict[Category, FT]:

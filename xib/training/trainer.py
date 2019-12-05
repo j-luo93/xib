@@ -178,7 +178,10 @@ class ExtractTrainer(BaseTrainer):
         for p in self.model.parameters():
             if p.ndim == 2:
                 torch.nn.init.xavier_uniform_(p)
-        freeze(self.model.embedding)
+
+        # DEBUG(j_luo)
+        # logging.warning('embedding frozen')
+        # freeze(self.model.embedding)
 
         # DEBUG(j_luo)
         # logging.warning('identity init')

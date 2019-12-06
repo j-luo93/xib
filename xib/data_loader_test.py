@@ -40,7 +40,7 @@ class BaseDataLoaderTestCase(TestCase):
         mock_sampler.__iter__.return_value = iter([[0, 1]])
         mock_sampler_cls.return_value = mock_sampler
         test_with_arguments(data_path=data_path, char_per_batch=100, use_cached_pth=False,
-                            num_workers=0, feat_groups='pcv', _force=True)
+                            num_workers=0, min_word_length=1, dense_input=False, feat_groups='pcv', _force=True)
         dl = dl_cls(g.data_path, MagicMock())
         cnt = 0
         for batch in dl:

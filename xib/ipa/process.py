@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
 import random
+import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
@@ -226,7 +226,26 @@ class BaseSegment(ABC):
     @property
     @abstractmethod
     def segment_list(self) -> List[str]:
-        """Represent a list of IPAChar, as a list of units."""
+        """Represent a list of IPAString, as a list of units."""
+
+    @property
+    @abstractmethod
+    def merged_ipa(self) -> List[IPAString]:
+        """Return a list of IPAString."""
+
+    @cached_property
+    def cv_list(self) -> List[str]:
+        """Return a list of strings corresponding to the consonants and vowels."""
+        ret = list()
+        for ipa_unit in self.merged_ipa:
+            unit = list()
+            for c in ipa_unit:
+                if c.is_vowel or c.is_consonant:
+                    unit.append(str(c))
+            if not unit:
+                raise ValueError(f'There is no consonant/vowel in this unit.')
+            ret.append(''.join(unit))
+        return ret
 
     def __eq__(self, other: BaseSegment):
         if not isinstance(other, BaseSegment):
@@ -264,8 +283,12 @@ class Segment(BaseSegmentWithGoldTagSeq):
         self._merge()
         self._indexify()
 
+    @property
+    def merged_ipa(self):
+        return self._merged_ipa
+
     def __len__(self):
-        return len(self.merged_ipa)
+        return len(self._merged_ipa)
 
     @property
     def gold_tag_seq(self) -> LT:
@@ -276,7 +299,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
 
     @property
     def segment_list(self) -> List[str]:
-        return [''.join(map(str, unit)) for unit in self.merged_ipa]
+        return [''.join(map(str, unit)) for unit in self._merged_ipa]
 
     def permute(self) -> str:
         return ''.join(random.sample(self.segment_list, len(self)))
@@ -312,7 +335,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
         datum = merge_ipa(self, self.ipa, self.token)
         if not datum:
             raise ValueError('Invalid IPA string.')
-        self.merged_ipa = datum[2]
+        self._merged_ipa = datum[2]
         self.datum_cols = {
             feat: datum[3 + i]
             for i, feat in enumerate(normal_feats + feats_to_merge)
@@ -343,8 +366,9 @@ class Segment(BaseSegmentWithGoldTagSeq):
 
         new_feat_matrix = self.feat_matrix[start: end + 1]
         new_list_of_units = self.segment_list[start: end + 1]
+        new_list_of_ipas = self.merged_ipa[start: end + 1]
         new_gold_tag_seq = torch.LongTensor([O] * (end + 1 - start))
-        return BrokenSegment(new_list_of_units, new_feat_matrix, new_gold_tag_seq, self)
+        return BrokenSegment(new_list_of_units, new_list_of_ipas, new_feat_matrix, new_gold_tag_seq, self)
 
 
 class SegmentWindow(BaseSegmentWithGoldTagSeq):
@@ -355,6 +379,13 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
 
     def __len__(self):
         return sum(len(segment) for segment in self._segments)
+
+    @cached_property
+    def merged_ipa(self) -> List[IPAString]:
+        ret = list()
+        for segment in self._segments:
+            ret.extend(segment.merged_ipa)
+        return ret
 
     @property
     def gold_tag_seq(self) -> LT:
@@ -441,11 +472,16 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
         right = self.segment_list[pos + 2:]
         new_list_of_units = left + mid + right
 
+        left_ipa = self.merged_ipa[:pos]
+        mid_ipa = [self.merged_ipa[pos + 1], self.merged_ipa[pos]]
+        right_ipa = self.merged_ipa[pos + 2:]
+        new_list_of_ipas = left_ipa + mid_ipa + right_ipa
+
         left_m = self.feat_matrix[:pos]
         mid_m = [self.feat_matrix[pos + 1: pos + 2], self.feat_matrix[pos: pos + 1]]
         right_m = self.feat_matrix[pos + 2:]
         new_feat_matrix = torch.cat([left_m] + mid_m + [right_m], dim=0)
-        return PerturbedSegment(new_list_of_units, new_feat_matrix)
+        return PerturbedSegment(new_list_of_units, new_list_of_ipas, new_feat_matrix)
 
     def perturb_shift(self) -> PerturbedSegment:
         if len(self) <= 1:
@@ -456,10 +492,14 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
         right = self.segment_list[:mid_pt]
         new_list_of_units = left + right
 
+        left_ipa = self.merged_ipa[mid_pt:]
+        right_ipa = self.merged_ipa[:mid_pt]
+        new_list_of_ipas = left_ipa + right_ipa
+
         left_m = self.feat_matrix[mid_pt:]
         right_m = self.feat_matrix[:mid_pt]
         new_feat_matrix = torch.cat([left_m, right_m], dim=0)
-        return PerturbedSegment(new_list_of_units, new_feat_matrix)
+        return PerturbedSegment(new_list_of_units, new_list_of_ipas, new_feat_matrix)
 
     def perturb_n_times(self, times: int) -> Tuple[List[PerturbedSegment], List[bool]]:
         """This will return a list of perturbed segments, as well as the original segment."""
@@ -509,11 +549,16 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
 
 class BaseSpecialSegment(BaseSegment):
 
-    def __init__(self, list_of_units: List[str], feat_matrix: LT):
+    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feat_matrix: LT):
         self._list_of_units = list_of_units
+        self._list_of_ipas = list_of_ipas
         self._feat_matrix = feat_matrix
         if len(self._list_of_units) != len(self._feat_matrix):
             raise ValueError(f'Length mismatch.')
+
+    @property
+    def merged_ipa(self) -> List[IPAString]:
+        return self._list_of_ipas
 
     @property
     def feat_matrix(self):
@@ -540,8 +585,8 @@ class PerturbedSegment(BaseSpecialSegment):
 
 class BrokenSegment(BaseSpecialSegment, BaseSegmentWithGoldTagSeq):
 
-    def __init__(self, list_of_units: List[str], feat_matrix: LT, gold_tag_seq: LT, original: Segment):
-        super().__init__(list_of_units, feat_matrix)
+    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feat_matrix: LT, gold_tag_seq: LT, original: Segment):
+        super().__init__(list_of_units, list_of_ipas, feat_matrix)
         self._gold_tag_seq = gold_tag_seq
         if len(self._gold_tag_seq) != len(list_of_units):
             raise ValueError('Length mismatch.')

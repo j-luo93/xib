@@ -13,6 +13,7 @@ class TestSegment(TestCase):
     def setUp(self):
         super().setUp()
         self.seg = Segment('θɹiː')
+        test_with_arguments(min_word_length=1, _force=True)
 
     def test_basic(self):
         ans = torch.LongTensor(
@@ -55,6 +56,9 @@ class TestSegment(TestCase):
         new_seg = self.seg.break_segment(0, 2)
         self.assertIs(new_seg, self.seg)
 
+    def test_cv_list(self):
+        self.assertListEqual(self.seg.cv_list, ['θ', 'ɹ', 'i'])
+
 
 class TestSegmentWindow(TestCase):
 
@@ -63,6 +67,7 @@ class TestSegmentWindow(TestCase):
         seg1 = Segment('θɹiː')
         seg2 = Segment('θɹiː')
         self.sw = SegmentWindow([seg1, seg2])
+        test_with_arguments(min_word_length=1, _force=True)
 
     def test_basic(self):
         ans = torch.LongTensor(
@@ -178,3 +183,6 @@ class TestSegmentWindow(TestCase):
 
         self.assertListEqual(new_seg.segment_list, ['ɹ', 'iː', 'θ', 'ɹ', 'iː', 'θ', 'ɹ', 'iː'])
         self.assertArrayEqual(new_seg.gold_tag_seq, [O, O, B, I, I, B, I, I])
+
+    def test_cv_list(self):
+        self.assertListEqual(self.sw.cv_list, ['θ', 'ɹ', 'i', 'θ', 'ɹ', 'i'])

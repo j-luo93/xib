@@ -163,17 +163,17 @@ class DecipherEvaluator(BaseEvaluator):
         self.tasks = tasks
         self.analyzer = DecipherAnalyzer()
 
-    def evaluate(self, tracker: Tracker) -> Metrics:
+    def evaluate(self, stage: str) -> Metrics:
         metrics = Metrics()
         with torch.no_grad():
             self.model.eval()
             for task in self.tasks:
                 dl = self.dl_reg[task]
-                task_metrics = self._evaluate_one_data_loader(dl, tracker)
+                task_metrics = self._evaluate_one_data_loader(dl, stage)
                 metrics += task_metrics.with_prefix_(task)
         return metrics
 
-    def _evaluate_one_data_loader(self, dl: ContinuousTextDataLoader, tracker: Tracker) -> Metrics:
+    def _evaluate_one_data_loader(self, dl: ContinuousTextDataLoader, stage: stage) -> Metrics:
         task = dl.task
         accum_metrics = Metrics()
 
@@ -196,7 +196,7 @@ class DecipherEvaluator(BaseEvaluator):
 
         df = pd.concat(dfs, axis=0)
         # Write the predictions to file.
-        out_path = g.log_dir / 'predictions' / f'{task}.{tracker.total_step}.tsv'
+        out_path = g.log_dir / 'predictions' / f'{task}.{stage}.tsv'
         out_path.parent.mkdir(exist_ok=True, parents=True)
         df.to_csv(out_path, index=None, sep='\t')
 
@@ -275,7 +275,7 @@ class ExtractEvaluator(BaseEvaluator):
         self.dl = dl
         self.analyzer = ExtractAnalyzer()
 
-    def evaluate(self, tracker: Tracker) -> Metrics:
+    def evaluate(self, stage: str) -> Metrics:
         segments = list()
         predictions = list()
         ground_truths = list()
@@ -301,7 +301,7 @@ class ExtractEvaluator(BaseEvaluator):
 
         df = _get_df(segments, ground_truths, predictions, matched_segments,
                      columns=('segment', 'ground_truth', 'prediction', 'matched_segment'))
-        out_path = g.log_dir / 'predictions' / f'extract.{tracker.total_step}.tsv'
+        out_path = g.log_dir / 'predictions' / f'extract.{stage}.tsv'
         out_path.parent.mkdir(exist_ok=True, parents=True)
         df.to_csv(out_path, index=None, sep='\t')
         matching_stats = get_matching_stats(predictions, ground_truths)
@@ -336,5 +336,7 @@ class ExtractEvaluator(BaseEvaluator):
                 span = Span('-'.join(span), s, e)
                 spans.append(span)
                 matched_segments.append(w)
+            else:
+                matched_segments.append('')
             segmentations.append(Segmentation(spans))
         return segmentations, matched_segments

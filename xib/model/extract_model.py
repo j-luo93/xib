@@ -135,7 +135,8 @@ class ExtractModel(nn.Module):
                  msg='Initial value of threshold to determine whether two words are matched.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
-    add_argument('use_hamming', default=False, dtype=bool, msg='Flag to use hamming distance instead of cosine.')
+    add_argument('dist_func', default='hamming', dtype=str, choices=[
+                 'cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
@@ -279,7 +280,6 @@ class ExtractModel(nn.Module):
         self.get_char_hamming('a', 'a')
         if g.debug:
             torch.set_printoptions(sci_mode=False, linewidth=200)
-            self.threshold = 0.5
             self.eval()
             breakpoint()
 
@@ -442,9 +442,19 @@ class ExtractModel(nn.Module):
                 hamming = (x.unsqueeze(dim=1) - y).abs().sum(dim=-1)
             return hamming.rename_(x.names[0], y.names[0]) / 4
 
+        def _get_sos_matrix(x, y):
+            with NoName(x, y):
+                sos = ((x.unsqueeze(dim=1) - y) ** 2).sum(dim=-1)
+            return sos.rename_(x.names[0], y.names[0]) / 4
+
         nh = NameHelper()
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
-        dist_func = _get_hamming_matrix if g.use_hamming else _get_cosine_matrix
+        if g.dist_func == 'cos':
+            dist_func = _get_cosine_matrix
+        elif g.dist_func == 'hamming':
+            dist_func = _get_hamming_matrix
+        else:
+            dist_func = _get_sos_matrix
         costs = dist_func(_extracted_word_repr, unit_repr)
 
         # Name: viable x len_w x unit

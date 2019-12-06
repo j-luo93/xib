@@ -193,6 +193,8 @@ class ExtractManager:
     # IDEA(j_luo) when to put this in manager/trainer? what about scheduler? annealing? restarting? Probably all in trainer -- you need to track them with pbars.
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
+    add_argument('min_threshold', default=0.01, dtype=float, msg='Min value for threshold')
+    add_argument('use_dilute', default=True, dtype=bool, msg='Flag to dilute params after each round.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -207,6 +209,7 @@ class ExtractManager:
         self.evaluator = ExtractEvaluator(self.model, self.dl_reg[task])
 
         self.trainer = ExtractTrainer(self.model, [task], [1.0], 'total_step',
+                                      stage_tnames=['round', 'total_step'],
                                       evaluator=self.evaluator,
                                       check_interval=g.check_interval,
                                       eval_interval=g.eval_interval)
@@ -218,9 +221,14 @@ class ExtractManager:
         self.trainer.threshold = g.init_threshold
         optim_cls = self._name2cls[g.optim_cls]
 
-        while self.trainer.threshold > 0.01:
+        while self.trainer.threshold > g.min_threshold:
+            self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
             self.trainer.set_lr_scheduler(ReduceLR, factor=0.5)
             self.trainer.train(self.dl_reg)
-            self.trainer.threshold *= g.init_threshold
-            self.trainer.threshold = max(self.trainer.threshold, 0.01)
+            self.trainer.threshold *= g.anneal_factor
+            self.trainer.threshold = max(self.trainer.threshold, g.min_threshold)
+            logging.imp(f'threshold is now {self.trainer.threshold:.3f}.')
+            self.trainer.tracker.update('round')
+            if g.use_dilute:
+                self.trainer.dilute()

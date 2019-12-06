@@ -187,7 +187,7 @@ class ExtractEsWithP5GermanTest(DecipherEsWithP5GermanTest):
     use_adapt: bool = True
     check_interval: int = 50
     use_embedding: bool = False
-    use_hamming: bool = True
+    dist_func: str = 'sos'
 
     def __post_init__(self):
         super().__post_init__()

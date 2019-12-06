@@ -75,7 +75,6 @@ class AdaptLMAnalyzer(LMAnalyzer):
             metrics_noise, scores_noise = super().analyze(ret.distr_noise, return_scores=True)
             total_loss = 0.0
             total_weight = 0.0
-            # DEBUG(j_luo)
             cnt = 0
             prob_cnt = 0
 

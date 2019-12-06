@@ -167,31 +167,9 @@ class AdaptLM(LM):
                 h_noise = self.noise_encoder(batch.dense_feat_matrix, batch.pos_to_predict, batch.source_padding)
                 distr_noise = self.noise_predictor(h_noise)
 
-                # # DEBUG(j_luo)
-                # try:
-                #     if self.training:
-                #         self._temp *= 0.999
-                # except:
-                #     self._temp = 5.0
-                # self._temp = max(self._temp, 0.1)
-                # if self.training:
-                #     print(self._temp)
-
                 gate_logits = self.moe_gate(torch.cat([h, h_noise], dim=-1))  # / self._temp
                 gate_log_probs = gate_logits.log_softmax(dim=-1)
 
-
-                # # DEBUG(j_luo)
-                # gate_log_probs = (1e-8 + gate_log_probs.exp() * 0.1 + get_tensor([0.9, 0.1]) * 0.9).log()
-
-                # for cat in distr:
-                #     d = distr[cat]
-                #     d_noise = distr_noise[cat]
-                #     stacked = torch.stack([d + gate_log_probs[..., 0].align_as(d),
-                #                            d_noise + gate_log_probs[..., 1].align_as(d_noise)],
-                #                           new_name='gate')
-                #     new_d = stacked.logsumexp(dim='gate')
-                #     distr[cat] = new_d
                 return AdaptLMReturn(distr, gate_logits, distr_noise)
             else:
                 h_noise = self.noise_encoder(batch.dense_feat_matrix, batch.pos_to_predict, batch.source_padding)

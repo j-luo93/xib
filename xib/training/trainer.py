@@ -55,7 +55,7 @@ class LMTrainer(BaseTrainer):
             if p.ndim == 2:
                 torch.nn.init.xavier_uniform_(p)
 
-        # # DEBUG(j_luo)
+        # # DEBUG(j_luo) identity init
         # logging.warning('identity init')
         # for p in self.model.adapter.adapters.values():
         #     lp = len(p)
@@ -73,8 +73,6 @@ class LMTrainer(BaseTrainer):
     def train_one_step(self, dl: IpaDataLoader) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
-        if self.tracker.total_step == 500:
-            breakpoint()  # DEBUG(j_luo)
         batch = dl.get_next_batch()
         ret = self.model.score(batch)
         # for idx, segment in enumerate(batch.segments):
@@ -179,11 +177,7 @@ class ExtractTrainer(BaseTrainer):
         #     if p.ndim == 2:
         #         torch.nn.init.xavier_uniform_(p)
 
-        # DEBUG(j_luo)
-        # logging.warning('embedding frozen')
-        # freeze(self.model.embedding)
-
-        # # # DEBUG(j_luo)
+        # # # DEBUG(j_luo) identity init
         # logging.warning('identity init')
         # for p in self.model.adapter.adapters.values():
         #     lp = len(p)

@@ -138,6 +138,7 @@ class ExtractModel(nn.Module):
     add_argument('anneal_factor', default=0.999, dtype=float, msg='Mulplication value for annealing.')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
+    add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
 
     def __init__(self):
         super().__init__()
@@ -228,8 +229,7 @@ class ExtractModel(nn.Module):
                     if torch.is_tensor(v):
                         v.rename_(*attr[k].names)
 
-    # ------------------------ Debug section ----------------------- #
-    # DEBUG(j_luo)
+    # ------------------------ Useful methods for debugging ----------------------- #
 
     def get_vector(self, c: str, adapt: bool = False):
         c = self._str2sw(c)
@@ -256,9 +256,6 @@ class ExtractModel(nn.Module):
         v1 = self.get_vector(c1, adapt=adapt)
         v2 = self.get_vector(c2)
         return (v1 - v2).abs().sum()
-
-    # DEBUG(j_luo)
-    add_argument('debug', dtype=bool, default=False)
 
     def forward(self, batch: ContinuousTextIpaBatch) -> ExtractModelReturn:
         """
@@ -483,12 +480,8 @@ class ExtractModel(nn.Module):
         # ls_idx, lt_idx = zip(*fs.keys())
 
         # Get the values wanted.
-        # # DEBUG(j_luo)
-        # RELATIVE = False
-
-        # f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
         if g.debug:
-            breakpoint()  # DEBUG(j_luo)
+            breakpoint()  # DEBUG(j_luo) debug mode
         with NoName(f, viable_lens, self.vocab_length):
             idx_src = viable_lens.unsqueeze(dim=-1)
             idx_tgt = self.vocab_length
@@ -496,13 +489,7 @@ class ExtractModel(nn.Module):
             vocab_i = get_range(len(self.vocab_length), 2, 1)
 
             ed_dist = f[idx_src, idx_tgt, viable_i, vocab_i]
-            # value = f[viable_i, vocab_i, idx_src, idx_tgt]
             ed_dist.rename_('viable', 'vocab')
-
-            # # Normalize the values by length.
-            # if RELATIVE:
-            #     min_len = torch.min(idx_src, self.vocab_length)
-            #     value = value / min_len
 
         # Get the best spans.
         if self.training:
@@ -546,23 +533,4 @@ class ExtractModel(nn.Module):
             matches = MatchesLv0(ed_dist, matched_ed_dist, matched_vocab,
                                  matched_length, matched_thresh, matched_score)
 
-        # # Only use softmin for all vocab when relaxation_level == 3.
-        # if self.training and g.use_relaxation and g.relaxation_level == 3:
-        #     # DEBUG(j_luo)
-        #     # TEMPERATURE = 0.05 if RELATIVE else 0.1
-        #     softmin = nn.functional.softmin(value / TEMPERATURE, dim='vocab')
-        #     best_value = (value * softmin).sum(dim='vocab')
-
-        # lengths = self.vocab_length.gather('vocab', matched_vocab)
-        # if self.training and g.use_relaxation:
-        #     if g.relaxation_level == 1:
-        #         score = lengths * _soft_threshold(best_value / self._thresh)
-        #     elif g.relaxation_level == 2:
-        #         (_soft_threshold(value / self._thresh) / 0.1)
-        #         score = lengths * _soft_threshold(value / self._thresh)
-        #     else:
-        #         score = lengths *
-        # else:
-        #     score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
-        # matches = Matches(None, score, value, matched, matched_vocab)
         return matches

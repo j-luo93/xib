@@ -188,5 +188,5 @@ class ExtractAnalyzer:
 
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> Metrics:
         metrics = Metrics()
-        metrics += Metric('score', model_ret.score.sum(), batch.batch_size)
+        metrics += Metric('score', model_ret.best_matched_score.sum(), batch.batch_size)
         return metrics

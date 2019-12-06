@@ -13,6 +13,7 @@ import torch
 from dev_misc import add_argument, g
 from dev_misc.arglib import g
 from dev_misc.devlib import get_range
+from dev_misc.devlib.named_tensor import NoName, get_named_range
 from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from dev_misc.trainlib.tracker.tracker import Tracker
@@ -132,14 +133,14 @@ def get_prf_scores(metrics: Metrics) -> Metrics:
         return 2 * p * r / (p + r + 1e-8)
 
     exact_span_matches = getattr(metrics, f'prf_exact_span_matches').total
-    prefix_word_matches = getattr(metrics, f'prf_prefix_word_matches').total
+    prefix_span_matches = getattr(metrics, f'prf_prefix_span_matches').total
     total_pred = getattr(metrics, f'prf_total_pred').total
     total_correct = getattr(metrics, f'prf_total_correct').total
     exact_span_precision = exact_span_matches / (total_pred + 1e-8)
     exact_span_recall = exact_span_matches / (total_correct + 1e-8)
     exact_span_f1 = _get_f1(exact_span_precision, exact_span_recall)
-    prefix_span_precision = prefix_word_matches / (total_pred + 1e-8)
-    prefix_span_recall = prefix_word_matches / (total_correct + 1e-8)
+    prefix_span_precision = prefix_span_matches / (total_pred + 1e-8)
+    prefix_span_recall = prefix_span_matches / (total_correct + 1e-8)
     prefix_span_f1 = _get_f1(prefix_span_precision, prefix_span_recall)
     prf_scores += Metric(f'prf_exact_span_precision', exact_span_precision, report_mean=False)
     prf_scores += Metric(f'prf_exact_span_recall', exact_span_recall, 1.0, report_mean=False)
@@ -266,6 +267,9 @@ class SearchSolverEvaluator(BaseEvaluator):
 
 class ExtractEvaluator(BaseEvaluator):
 
+    add_argument('matched_threshold', default=0.99, dtype=float,
+                 msg='Value of threshold to determine whether two words are matched.')
+
     def __init__(self, model: ExtractModel, dl: ContinuousTextDataLoader):
         self.model = model
         self.dl = dl
@@ -302,19 +306,32 @@ class ExtractEvaluator(BaseEvaluator):
         return matching_stats + prf_scores
 
     def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> Tuple[List[Segmentation], np.ndarray]:
-        starts = model_ret.start.cpu().numpy()
-        ends = model_ret.end.cpu().numpy()
-        matched = model_ret.matched.cpu().numpy()
-        best_vocab = model_ret.matched_vocab.cpu().numpy()
-        best_segments = self.model.vocab[best_vocab]
+        matches = model_ret.extracted.matches
+        ed_dist = matches.ed_dist
+        # Get the best matched ed_dist scores.
+        bs = ed_dist.size('batch')
+        bi = get_named_range(bs, 'batch')
+        start = model_ret.start
+        end = model_ret.end
+        bmv = model_ret.best_matched_vocab
+        with NoName(bi, start, end, bmv, ed_dist):
+            bmed = ed_dist[bi, start, end - start - g.min_word_length + 1, bmv]  # Best matched edit distance
+        bmed.rename_('batch')
+        matched = bmed < g.matched_threshold
+
+        start = start.cpu().numpy()
+        end = end.cpu().numpy()
+        bmv = bmv.cpu().numpy()
+        bmw = self.model.vocab[bmv]  # Best matched word
+
         segmentations = list()
         matched_segments = list()
-        for segment, start, end, m, seg in zip(batch.segments, starts, ends, matched, best_segments):
+        for segment, s, e, m, w in zip(batch.segments, start, end, matched, bmw):
             spans = list()
             if m:
-                span = [segment[i] for i in range(start, end + 1)]
-                span = Span('-'.join(span), start, end)
+                span = [segment[i] for i in range(s, e + 1)]
+                span = Span('-'.join(span), s, e)
                 spans.append(span)
-                matched_segments.append(seg)
+                matched_segments.append(w)
             segmentations.append(Segmentation(spans))
         return segmentations, matched_segments

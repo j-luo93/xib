@@ -1,6 +1,7 @@
 import logging
 import math
-from typing import Dict, Optional
+from dataclasses import fields
+from typing import Dict, Optional, Union
 
 import numpy as np
 import torch
@@ -22,11 +23,43 @@ from .modules import DenseFeatEmbedding
 
 @batch_class
 class Matches(BaseBatch):
-    end: LT  # Inclusive
-    score: FT
-    value: FT
-    matched: BT
+    ed_dist: FT
+
+
+@batch_class
+class MatchesLv0(Matches):
+    matched_ed_dist: FT
     matched_vocab: LT
+    matched_length: LT
+    matched_thresh: FT
+    matched_score: FT
+
+
+@batch_class
+class MatchesLv1(MatchesLv0): ...
+
+
+@batch_class
+class MatchesLv2(Matches):
+    thresh: FT
+    matched_thresh: FT
+    matched_vocab: LT
+    matched_length: LT
+    matched_score: FT
+
+
+@batch_class
+class MatchesLv3(Matches):
+    thresh: FT
+    score: FT
+    matched_score: FT
+    matched_vocab: LT
+
+
+@batch_class
+class MatchesLv4(Matches):
+    thresh: FT
+    score: FT
 
 
 @batch_class
@@ -45,12 +78,51 @@ class Extracted(BaseBatch):
 
 @batch_class
 class ExtractModelReturn(BaseBatch):
-    score: FT
     start: LT
     end: LT
-    matched: BT
-    matched_vocab: LT
+    best_matched_score: FT
+    best_matched_vocab: LT
     extracted: Extracted
+
+
+def _soft_threshold(x):
+    return (nn.functional.celu(1 - 2 * x) + 1) / 2
+
+
+def _soft_max(x, dim):
+    w = (x / g.temperature).log_softmax(dim=dim).exp()
+    value = (x * w).sum(dim)
+    _, index = x.max(dim=dim)
+    return value, index
+
+
+def _soft_min(x, dim):
+    w = (-x / g.temperature).log_softmax(dim=dim).exp()
+    value = (x * w).sum(dim)
+    _, index = x.min(dim=dim)
+    return value, index
+
+
+def _restore_shape(tensor, bi, lsi, lei, viable):
+    bs = bi.size('batch')
+    len_s = lsi.size('len_s')
+    len_e = lei.size('len_e')
+
+    shape = (bs, len_s, len_e)
+    names = ('batch', 'len_s', 'len_e')
+    if tensor.ndim > 1:
+        shape += tensor.shape[1:]
+        names += tensor.names[1:]
+
+    with NoName(bi, lsi, lei, viable, tensor):
+        v_bi = bi[viable]
+        v_lsi = lsi[viable]
+        v_lei = lei[viable]
+        ret = get_zeros(*shape).to(tensor.dtype)
+        ret[v_bi, v_lsi, v_lei] = tensor
+
+    ret.rename_(*names)
+    return ret
 
 
 class ExtractModel(nn.Module):
@@ -64,6 +136,8 @@ class ExtractModel(nn.Module):
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
     add_argument('use_hamming', default=False, dtype=bool, msg='Flag to use hamming distance instead of cosine.')
     add_argument('anneal_factor', default=0.999, dtype=float, msg='Mulplication value for annealing.')
+    add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
+    add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
 
     def __init__(self):
         super().__init__()
@@ -187,6 +261,20 @@ class ExtractModel(nn.Module):
     add_argument('debug', dtype=bool, default=False)
 
     def forward(self, batch: ContinuousTextIpaBatch) -> ExtractModelReturn:
+        """
+        There are four ways of relaxing the original hard objective.
+        1. max_w |w| thresh(min_v d(v, w))
+        2. max_w |w| max_v thresh(d(v, w))
+        3. max_w max_v |w| thresh(d(v, w))
+        4. max_{w, v} thresh(d(v, w))
+
+        Terminologies:
+        ed_dist: d(v, w)
+        thresh: after thresholding
+        matched_: the prefix after selecting v
+        score: after multiplication with |w|
+        best_: the prefix after selecting w
+        """
         self.get_char_hamming('a', 'a')
         if g.debug:
             torch.set_printoptions(sci_mode=False, linewidth=200)
@@ -219,27 +307,55 @@ class ExtractModel(nn.Module):
         # Main body: extract one span.
         extracted = Extracted(batch.batch_size)
         new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr)
+        matches = new_extracted.matches
+        len_s = matches.ed_dist.size('len_s')
+        len_e = matches.ed_dist.size('len_e')
+        vs = len(self.vocab)
 
         # Get the best score and span.
-        flat_scores = new_extracted.matches.score.flatten(['len_s', 'len_e'], 'cand')
-        if self.training:
-            best_scores, best_inds = flat_scores.max(dim='cand')
-            softmax = (flat_scores / 0.1).softmax(dim='cand')
-            best_scores = (flat_scores * softmax).sum(dim='cand')
+        # Only lv4 needs special treatment.
+        if self.training and g.relaxation_level == 4:
+            flat_score = matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
+            best_matched_score, best_span_ind = _soft_max(flat_score, 'cand')
+            start = best_span_ind // (len_e * vs)
+            # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
+            end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
+            best_matched_vocab = best_span_ind % vs
         else:
-            best_scores, best_inds = flat_scores.max(dim='cand')
-        len_s = new_extracted.matches.score.size('len_s')
-        len_e = new_extracted.matches.score.size('len_e')
-        starts = best_inds // len_e
-        # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
-        ends = best_inds % len_e + starts + g.min_word_length - 1
-        matched = new_extracted.matches.matched.flatten(['len_s', 'len_e'], 'cand')
-        with NoName(matched):
-            matched = matched.any(dim=-1)
-        matched_vocab = new_extracted.matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
-        matched_vocab = matched_vocab.gather('cand', best_inds)
+            flat_matched_score = matches.matched_score.flatten(['len_s', 'len_e'], 'cand')
+            if self.training and g.relaxation_level in [1, 2, 3]:
+                best_matched_score, best_span_ind = _soft_max(flat_matched_score, 'cand')
+            else:
+                best_matched_score, best_span_ind = flat_matched_score.max(dim='cand')
+            start = best_span_ind // len_e
+            # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
+            end = best_span_ind % len_e + start + g.min_word_length - 1
 
-        ret = ExtractModelReturn(best_scores, starts, ends, matched, matched_vocab, new_extracted)
+            flat_matched_vocab = matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
+            best_matched_vocab = flat_matched_vocab.gather('cand', best_span_ind)
+
+            # # OLD stuff
+            # if self.training and g.use_relaxation:
+            #     best_scores, best_inds = flat_scores.max(dim='cand')
+            #     softmax = (flat_scores / 0.1).softmax(dim='cand')
+            #     best_scores = (flat_scores * softmax).sum(dim='cand')
+            # else:
+            #     best_scores, best_inds = flat_scores.max(dim='cand')
+
+            # len_s = new_extracted.matches.score.size('len_s')
+            # len_e = new_extracted.matches.score.size('len_e')
+            # starts = best_inds // len_e
+            # # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
+            # ends = best_inds % len_e + starts + g.min_word_length - 1
+            # matched = new_extracted.matches.matched.flatten(['len_s', 'len_e'], 'cand')
+            # with NoName(matched):
+            #     matched = matched.any(dim=-1)
+            # matched_vocab = new_extracted.matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
+            # matched_vocab = matched_vocab.gather('cand', best_inds)
+
+        ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted)
+
+        # ret = ExtractModelReturn(best_scores, starts, ends, matched, matched_vocab, new_extracted)
 
         return ret
 
@@ -283,32 +399,15 @@ class ExtractModel(nn.Module):
 
         # Main body: Run DP to find the best matches.
         matches = self._get_matches(extracted_word_repr, unit_repr, viable_lens)
-
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
-        with NoName(bi, lsi, lei, viable, matches.score, matches.matched, matches.value, matches.matched_vocab):
-            v_bi = bi[viable]
-            v_lsi = lsi[viable]
-            v_lei = lei[viable]
-
-            def _unshape(tensor):
-                shape = (batch.batch_size, len_s, len_e)
-                if tensor.ndim > 1:
-                    shape += tensor.shape[1:]
-                ret = get_zeros(*shape).to(tensor.dtype)
-                ret[v_bi, v_lsi, v_lei] = tensor
-                return ret
-
-            # if self.training:
-            #     matches.score = _unshape(matches.score).rename('batch', 'len_s', 'len_e', 'vocab')
-            #     matches.matched = _unshape(matches.matched).rename('batch', 'len_s', 'len_e', 'vocab')
-            # else:
-            matches.score = _unshape(matches.score).rename('batch', 'len_s', 'len_e')
-            matches.matched = _unshape(matches.matched).rename('batch', 'len_s', 'len_e')
-            matches.matched_vocab = _unshape(matches.matched_vocab).rename('batch', 'len_s', 'len_e')
-            matches.value = _unshape(matches.value).rename('batch', 'len_s', 'len_e', 'vocab')
+        field_names = [f.name for f in fields(matches)]
+        for fname in field_names:
+            attr = getattr(matches, fname)
+            restored = _restore_shape(attr, bi, lsi, lei, viable)
+            setattr(matches, fname, restored)
 
         new_extracted = Extracted(batch.batch_size, matches)
         return new_extracted
@@ -326,19 +425,6 @@ class ExtractModel(nn.Module):
             fs[(i, 0)] = get_zeros(ns, nt).fill_(i)
         for j in range(mtl + 1):
             fs[(0, j)] = get_zeros(ns, nt).fill_(j)
-
-        # Initialize f scores.
-        # # NOTE(j_luo) You need one extra position to keep 0 - length outputs, and another one to dump invalid indices during DP.
-        # f = get_zeros(1 + msl, 1 + mtl, ns, nt).fill_(99.9)
-        # for i in range(msl + 1):
-        #     f[i, 0] = i
-        # for j in range(mtl + 1):
-        #     f[0, j] = j
-        # f = get_zeros(ns, nt, 1 + msl, 1 + mtl).fill_(99.9)
-        # for i in range(msl + 1):
-        #     f[:, :, i, 0] = i
-        # for j in range(mtl + 1):
-        #     f[:, :, 0, j] = j
 
         # Compute cosine distance all at once: for each viable span, compare it against all units.
         def _get_cosine_matrix(x, y):
@@ -359,10 +445,6 @@ class ExtractModel(nn.Module):
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
         dist_func = _get_hamming_matrix if g.use_hamming else _get_cosine_matrix
         costs = dist_func(_extracted_word_repr, unit_repr)
-        # # Rescale the cosine distance.
-        # _max, _ = cos.max(dim='unit', keepdim=True)
-        # _min, _ = cos.min(dim='unit', keepdim=True)
-        # cos = (cos - _min) / (_max - _min + 1e-8)
 
         # Name: viable x len_w x unit
         costs = nh.unflatten(costs, 'viable_X_len_w', ['viable', 'len_w'])
@@ -390,21 +472,6 @@ class ExtractModel(nn.Module):
                         new_s, _ = all_s.min(dim=-1)
                         fs[(ls, lt)] = new_s
 
-                    # vocab_inds = self.indexed_segments[:, lt - 1]
-                    # sub_cost = costs[:, ls - 1, vocab_inds]
-
-                    # ins_s = f[ls - 1, lt] + 1
-                    # del_s = f[ls, lt - 1] + 1
-                    # sub_s = f[ls - 1, lt - 1] + sub_cost
-                    # all_s = torch.stack([ins_s, del_s, sub_s], dim=-1)
-                    # f[ls, lt], _ = all_s.min(dim=-1)
-
-                    # ins_s = f[:, :, ls - 1, lt] + 1
-                    # del_s = f[:, :, ls, lt - 1] + 1
-                    # sub_s = f[:, :, ls - 1, lt - 1] + sub_cost
-                    # all_s = torch.stack([ins_s, del_s, sub_s], dim=-1)
-                    # f[:, :, ls, lt], _ = all_s.min(dim=-1)
-
         f_lst = list()
         for i in range(msl + 1):
             for j in range(mtl + 1):
@@ -416,8 +483,8 @@ class ExtractModel(nn.Module):
         # ls_idx, lt_idx = zip(*fs.keys())
 
         # Get the values wanted.
-        # DEBUG(j_luo)
-        RELATIVE = False
+        # # DEBUG(j_luo)
+        # RELATIVE = False
 
         # f.rename_('viable', 'vocab', 'len_w_src', 'len_w_tgt')
         if g.debug:
@@ -428,14 +495,14 @@ class ExtractModel(nn.Module):
             viable_i = get_range(ns, 2, 0)
             vocab_i = get_range(len(self.vocab_length), 2, 1)
 
-            value = f[idx_src, idx_tgt, viable_i, vocab_i]
+            ed_dist = f[idx_src, idx_tgt, viable_i, vocab_i]
             # value = f[viable_i, vocab_i, idx_src, idx_tgt]
-            value.rename_('viable', 'vocab')
+            ed_dist.rename_('viable', 'vocab')
 
-            # Normalize the values by length.
-            if RELATIVE:
-                min_len = torch.min(idx_src, self.vocab_length)
-                value = value / min_len
+            # # Normalize the values by length.
+            # if RELATIVE:
+            #     min_len = torch.min(idx_src, self.vocab_length)
+            #     value = value / min_len
 
         # Get the best spans.
         if self.training:
@@ -444,21 +511,58 @@ class ExtractModel(nn.Module):
                 self._thresh *= g.anneal_factor
             except AttributeError:
                 self._thresh = g.init_threshold
-            MIN_TH = 0.2 if RELATIVE else 0.001
-            self._thresh = max(self._thresh, MIN_TH)
+            # MIN_TH = 0.2 if RELATIVE else 0.001
+            self._thresh = max(self._thresh, 0.001)
             logging.debug(self._thresh)
 
-        best_value, matched_vocab = value.min(dim='vocab')
-        matched = best_value < self._thresh
+        if self.training and g.relaxation_level > 0:
+            if g.relaxation_level == 1:
+                matched_ed_dist, matched_vocab = _soft_min(ed_dist, 'vocab')
+                matched_length = self.vocab_length.gather('vocab', matched_vocab)
+                matched_thresh = _soft_threshold(matched_ed_dist)
+                matched_score = matched_length * matched_thresh
+                matches = MatchesLv1(ed_dist, matched_ed_dist, matched_vocab,
+                                     matched_length, matched_thresh, matched_score)
+            elif g.relaxation_level == 2:
+                thresh = _soft_threshold(ed_dist)
+                matched_thresh, matched_vocab = _soft_max(thresh, 'vocab')
+                matched_length = self.vocab_length.gather('vocab', matched_vocab)
+                matched_score = matched_length * matched_thresh
+                matches = MatchesLv2(ed_dist, thresh, matched_thresh, matched_vocab, matched_length, matched_score)
+            elif g.relaxation_level == 3:
+                thresh = _soft_threshold(ed_dist)
+                score = self.vocab_length * thresh
+                matched_score, matched_vocab = _soft_max(score, 'vocab')
+                matches = MatchesLv3(ed_dist, thresh, score, matched_score, matched_vocab)
+            else:
+                thresh = _soft_threshold(ed_dist)
+                score = self.vocab_length * thresh
+                matches = MatchesLv4(ed_dist, thresh, score)
+        else:
+            matched_ed_dist, matched_vocab = ed_dist.min(dim='vocab')
+            matched_length = self.vocab_length.gather('vocab', matched_vocab)
+            matched_thresh = _soft_threshold(matched_ed_dist)
+            matched_score = matched_length * matched_thresh
+            matches = MatchesLv0(ed_dist, matched_ed_dist, matched_vocab,
+                                 matched_length, matched_thresh, matched_score)
 
-        if self.training:
-            # DEBUG(j_luo)
-            # TEMPERATURE = 0.05 if RELATIVE else 0.1
-            TEMPERATURE = 1.0
-            softmin = nn.functional.softmin(value / TEMPERATURE, dim='vocab')
-            best_value = (value * softmin).sum(dim='vocab')
+        # # Only use softmin for all vocab when relaxation_level == 3.
+        # if self.training and g.use_relaxation and g.relaxation_level == 3:
+        #     # DEBUG(j_luo)
+        #     # TEMPERATURE = 0.05 if RELATIVE else 0.1
+        #     softmin = nn.functional.softmin(value / TEMPERATURE, dim='vocab')
+        #     best_value = (value * softmin).sum(dim='vocab')
 
-        lengths = self.vocab_length.gather('vocab', matched_vocab)
-        score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
-        matches = Matches(None, score, value, matched, matched_vocab)
+        # lengths = self.vocab_length.gather('vocab', matched_vocab)
+        # if self.training and g.use_relaxation:
+        #     if g.relaxation_level == 1:
+        #         score = lengths * _soft_threshold(best_value / self._thresh)
+        #     elif g.relaxation_level == 2:
+        #         (_soft_threshold(value / self._thresh) / 0.1)
+        #         score = lengths * _soft_threshold(value / self._thresh)
+        #     else:
+        #         score = lengths *
+        # else:
+        #     score = lengths * (1.0 - best_value / self._thresh).clamp(min=0.0)
+        # matches = Matches(None, score, value, matched, matched_vocab)
         return matches

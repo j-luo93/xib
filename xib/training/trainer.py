@@ -183,11 +183,11 @@ class ExtractTrainer(BaseTrainer):
         # logging.warning('embedding frozen')
         # freeze(self.model.embedding)
 
-        # # DEBUG(j_luo)
-        logging.warning('identity init')
-        for p in self.model.adapter.adapters.values():
-            lp = len(p)
-            p.data[range(lp), range(lp)] += 200.0
+        # # # DEBUG(j_luo)
+        # logging.warning('identity init')
+        # for p in self.model.adapter.adapters.values():
+        #     lp = len(p)
+        #     p.data[range(lp), range(lp)] += 200.0
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)

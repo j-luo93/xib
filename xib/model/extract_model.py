@@ -519,29 +519,29 @@ class ExtractModel(nn.Module):
             if g.relaxation_level == 1:
                 matched_ed_dist, matched_vocab = _soft_min(ed_dist, 'vocab')
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
-                matched_thresh = _soft_threshold(matched_ed_dist)
+                matched_thresh = _soft_threshold(matched_ed_dist / self._thresh)
                 matched_score = matched_length * matched_thresh
                 matches = MatchesLv1(ed_dist, matched_ed_dist, matched_vocab,
                                      matched_length, matched_thresh, matched_score)
             elif g.relaxation_level == 2:
-                thresh = _soft_threshold(ed_dist)
+                thresh = _soft_threshold(ed_dist / self._thresh)
                 matched_thresh, matched_vocab = _soft_max(thresh, 'vocab')
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
                 matched_score = matched_length * matched_thresh
                 matches = MatchesLv2(ed_dist, thresh, matched_thresh, matched_vocab, matched_length, matched_score)
             elif g.relaxation_level == 3:
-                thresh = _soft_threshold(ed_dist)
+                thresh = _soft_threshold(ed_dist / self._thresh)
                 score = self.vocab_length * thresh
                 matched_score, matched_vocab = _soft_max(score, 'vocab')
                 matches = MatchesLv3(ed_dist, thresh, score, matched_score, matched_vocab)
             else:
-                thresh = _soft_threshold(ed_dist)
+                thresh = _soft_threshold(ed_dist / self._thresh)
                 score = self.vocab_length * thresh
                 matches = MatchesLv4(ed_dist, thresh, score)
         else:
             matched_ed_dist, matched_vocab = ed_dist.min(dim='vocab')
             matched_length = self.vocab_length.gather('vocab', matched_vocab)
-            matched_thresh = _soft_threshold(matched_ed_dist)
+            matched_thresh = _soft_threshold(matched_ed_dist / self._thresh)
             matched_score = matched_length * matched_thresh
             matches = MatchesLv0(ed_dist, matched_ed_dist, matched_vocab,
                                  matched_length, matched_thresh, matched_score)

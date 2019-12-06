@@ -172,52 +172,75 @@ class DecipherEsWithP5GermanTest(DecipherEsNoisyGermanP5Test):
 
 
 @reg
-class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):
-    task: str = 'transfer'
+class ExtractEsWithP5GermanTest(DecipherEsWithP5GermanTest):
+    dim: int = 30
+    num_heads: int = 6
+    vocab_path: str = 'data/Spanish.ipa.5000.words'
+    optim_cls: str = 'sgd'
+    learning_rate: float = 1.0
+    max_segment_length: int = 20
+    char_per_batch: int = 100
+    eval_interval: int = 500
+    task: str = 'extract'
+    init_threshold: float = 10.0
+    dense_input: bool = True
+    use_adapt: bool = True
+    check_interval: int = 50
+    use_embedding: bool = False
+    use_hamming: bool = True
 
     def __post_init__(self):
         super().__post_init__()
-        self.data_path = self.dev_data_path
+        self.data_path: str = 'data/tmp'
 
 
-@reg
-class TransferEsNoisyP5ToP5Test(DecipherEsTest):
-    task: str = 'transfer'
-    dev_data_path: str = 'data/Spanish.ipa.noise_12500.dev'
+# @reg
+# class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):
+#     task: str = 'transfer'
 
-    def __post_init__(self):
-        super().__post_init__()
-        self.data_path = 'data/Spanish.ipa.noise_12500.5000'
-
-
-@reg
-class TransferEsNoisyP5ToP7Test(DecipherEsTest):
-    task: str = 'transfer'
-    dev_data_path: str = 'data/Spanish.ipa.noise_17500.dev'
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.data_path = 'data/Spanish.ipa.noise_17500.5000'
+#     def __post_init__(self):
+#         super().__post_init__()
+#         self.data_path = self.dev_data_path
 
 
-@reg
-class TransferEsNoisyP5ToP9Test(DecipherEsTest):
-    task: str = 'transfer'
-    dev_data_path: str = 'data/Spanish.ipa.noise_22500.dev'
+# @reg
+# class TransferEsNoisyP5ToP5Test(DecipherEsTest):
+#     task: str = 'transfer'
+#     dev_data_path: str = 'data/Spanish.ipa.noise_12500.dev'
 
-    def __post_init__(self):
-        super().__post_init__()
-        self.data_path = 'data/Spanish.ipa.noise_22500.5000'
+#     def __post_init__(self):
+#         super().__post_init__()
+#         self.data_path = 'data/Spanish.ipa.noise_12500.5000'
 
 
-@reg
-class MetricPCV(SharedConfig):
-    num_epochs: int = 500
-    eval_interval: int = 10
-    check_interval: int = 10
-    task: str = 'metric'
-    family_file_path: str = 'data/families.txt'
-    data_path: str = 'data/direct_transfer.tsv'
-    num_lang_pairs: int = 100
-    learning_rate: float = 0.02
-    hidden_size: int = 50
+# @reg
+# class TransferEsNoisyP5ToP7Test(DecipherEsTest):
+#     task: str = 'transfer'
+#     dev_data_path: str = 'data/Spanish.ipa.noise_17500.dev'
+
+#     def __post_init__(self):
+#         super().__post_init__()
+#         self.data_path = 'data/Spanish.ipa.noise_17500.5000'
+
+
+# @reg
+# class TransferEsNoisyP5ToP9Test(DecipherEsTest):
+#     task: str = 'transfer'
+#     dev_data_path: str = 'data/Spanish.ipa.noise_22500.dev'
+
+#     def __post_init__(self):
+#         super().__post_init__()
+#         self.data_path = 'data/Spanish.ipa.noise_22500.5000'
+
+
+# @reg
+# class MetricPCV(SharedConfig):
+#     num_epochs: int = 500
+#     eval_interval: int = 10
+#     check_interval: int = 10
+#     task: str = 'metric'
+#     family_file_path: str = 'data/families.txt'
+#     data_path: str = 'data/direct_transfer.tsv'
+#     num_lang_pairs: int = 100
+#     learning_rate: float = 0.02
+#     hidden_size: int = 50

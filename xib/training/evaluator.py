@@ -317,7 +317,7 @@ class ExtractEvaluator(BaseEvaluator):
         with NoName(bi, start, end, bmv, ed_dist):
             bmed = ed_dist[bi, start, end - start - g.min_word_length + 1, bmv]  # Best matched edit distance
         bmed.rename_('batch')
-        matched = bmed < g.matched_threshold
+        matched = bmed < self.model._thresh  # HACK(j_luo)
 
         start = start.cpu().numpy()
         end = end.cpu().numpy()

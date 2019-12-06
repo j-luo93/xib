@@ -13,12 +13,15 @@ from dev_misc.devlib import (BaseBatch, batch_class, get_array,
 from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
                                           drop_names, get_named_range)
 from dev_misc.utils import WithholdKeys, global_property
-from xib.data_loader import ContinuousTextIpaBatch, convert_to_dense
-from xib.ipa import should_include
+from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
+                             convert_to_dense)
+from xib.ipa import Category, get_enum_by_cat, should_include
 from xib.ipa.process import Segment, SegmentWindow
 from xib.model.modules import AdaptLayer, FeatEmbedding
 
 from .modules import DenseFeatEmbedding
+
+ExtractBatch = Union[ContinuousIpaBatch, UnbrokenTextBatch]
 
 
 @batch_class
@@ -126,6 +129,39 @@ def _restore_shape(tensor, bi, lsi, lei, viable):
     return ret
 
 
+class G2PLayer(nn.Module):
+
+    add_argument('g2p_window_size', default=3, dtype=int, msg='Window size for g2p layer.')
+
+    def __init__(self, unit_vocab_size: int):
+        super().__init__()
+        self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
+        self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
+
+        module_dict = dict()
+        for cat in Category:
+            if should_include(g.feat_groups, cat):
+                e = get_enum_by_cat(cat)
+                nf = len(e)
+                module_dict[cat.name] = nn.Linear(g.dim, nf)
+        self.p_predictors = nn.ModuleDict(module_dict)
+
+    def forward(self, unit_id_seqs: LT) -> Dict[Category, FT]:
+        unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
+        unit_embeddings = unit_embeddings.align_to('batch', 'unit_emb', 'length')
+        with NoName(unit_embeddings):
+            output = self.conv(unit_embeddings).rename('batch', 'unit_conv_repr', 'length')
+        output = output.align_to(..., 'unit_conv_repr')
+
+        ret = dict()
+        for cat in Category:
+            if should_include(g.feat_groups, cat):
+                predictor = self.p_predictors[cat.name]
+                label = predictor(output).log_softmax(dim=-1).exp()
+                ret[cat] = label
+        return ret
+
+
 class ExtractModel(nn.Module):
 
     add_argument('max_num_words', default=3, dtype=int, msg='Max number of extracted words.')
@@ -135,13 +171,13 @@ class ExtractModel(nn.Module):
                  msg='Initial value of threshold to determine whether two words are matched.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
-    add_argument('dist_func', default='hamming', dtype=str, choices=[
-                 'cos', 'hamming', 'sos'], msg='Type of distance function to use')
+    add_argument('dist_func', default='hamming', dtype=str,
+                 choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
 
-    def __init__(self):
+    def __init__(self, unit_vocab_size: Optional[int] = None):
         super().__init__()
 
         if g.use_embedding:
@@ -206,6 +242,9 @@ class ExtractModel(nn.Module):
             assert g.dense_input
             self.adapter = AdaptLayer()
 
+        if g.input_format == 'text':
+            self.g2p = G2PLayer(unit_vocab_size)
+
     _special_state_keys = ['vocab', 'vocab_dense_feat_matrix', 'unit2id', 'id2unit', 'unit_dense_feat_matrix']
 
     def state_dict(self, **kwargs):
@@ -262,7 +301,7 @@ class ExtractModel(nn.Module):
         v2 = self.get_vector(c2)
         return (v1 - v2).abs().sum()
 
-    def forward(self, batch: ContinuousTextIpaBatch) -> ExtractModelReturn:
+    def forward(self, batch: ExtractBatch) -> ExtractModelReturn:
         """
         There are four ways of relaxing the original hard objective.
         1. max_w |w| thresh(min_v d(v, w))
@@ -284,17 +323,23 @@ class ExtractModel(nn.Module):
             breakpoint()
 
         # Prepare representations.
+        # If input_format is 'text', then we need to use g2p to induce ipa first.
+        if g.input_format == 'text':
+            dfm = self.g2p(batch.unit_id_seqs)
+        else:
+            dfm = batch.dense_feat_matrix
+
         if g.dense_input:
             with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
-                dfm = self.adapter(batch.dense_feat_matrix)
+                adapted_dfm = self.adapter(dfm)
             if g.use_embedding:
-                word_repr = self.embedding(dfm, batch.source_padding)
+                word_repr = self.embedding(adapted_dfm, batch.source_padding)
                 unit_repr = self.embedding(self.unit_dense_feat_matrix)
             else:
-                names = sorted(dfm, key=lambda name: name.value)
+                names = sorted(adapted_dfm, key=lambda name: name.value)
                 # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
-                with NoName(*self.unit_dense_feat_matrix.values(), *dfm.values()):
-                    word_repr = torch.cat([dfm[name] for name in names], dim=-1)
+                with NoName(*self.unit_dense_feat_matrix.values(), *adapted_dfm.values()):
+                    word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
                     unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
                 word_repr.rename_('batch', 'length', 'char_emb')
                 unit_repr.rename_('batch', 'length', 'char_emb')
@@ -335,32 +380,11 @@ class ExtractModel(nn.Module):
             flat_matched_vocab = matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
             best_matched_vocab = flat_matched_vocab.gather('cand', best_span_ind)
 
-            # # OLD stuff
-            # if self.training and g.use_relaxation:
-            #     best_scores, best_inds = flat_scores.max(dim='cand')
-            #     softmax = (flat_scores / 0.1).softmax(dim='cand')
-            #     best_scores = (flat_scores * softmax).sum(dim='cand')
-            # else:
-            #     best_scores, best_inds = flat_scores.max(dim='cand')
-
-            # len_s = new_extracted.matches.score.size('len_s')
-            # len_e = new_extracted.matches.score.size('len_e')
-            # starts = best_inds // len_e
-            # # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
-            # ends = best_inds % len_e + starts + g.min_word_length - 1
-            # matched = new_extracted.matches.matched.flatten(['len_s', 'len_e'], 'cand')
-            # with NoName(matched):
-            #     matched = matched.any(dim=-1)
-            # matched_vocab = new_extracted.matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
-            # matched_vocab = matched_vocab.gather('cand', best_inds)
-
         ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted)
-
-        # ret = ExtractModelReturn(best_scores, starts, ends, matched, matched_vocab, new_extracted)
 
         return ret
 
-    def _extract_one_span(self, batch: ContinuousTextIpaBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
+    def _extract_one_span(self, batch: ExtractBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
         # Propose all span start/end positions.
         start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
         # Range from `min_word_length` to `max_word_length`.

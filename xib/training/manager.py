@@ -199,13 +199,17 @@ class ExtractManager:
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
     def __init__(self):
-        self.model = ExtractModel()
-        if has_gpus():
-            self.model.cuda()
-
         task = ExtractTask()
         self.dl_reg = DataLoaderRegistry()
         self.dl_reg.register_data_loader(task, g.data_path)
+
+        unit_vocab_size = None
+        if g.input_format == 'text':
+            unit_vocab_size = self.dl_reg[task].dataset.unit_vocab_size
+        self.model = ExtractModel(unit_vocab_size)
+        if has_gpus():
+            self.model.cuda()
+
         self.evaluator = ExtractEvaluator(self.model, self.dl_reg[task])
 
         self.trainer = ExtractTrainer(self.model, [task], [1.0], 'total_step',

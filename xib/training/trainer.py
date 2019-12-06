@@ -183,7 +183,7 @@ class ExtractTrainer(BaseTrainer):
         #     lp = len(p)
         #     p.data[range(lp), range(lp)] += 200.0
 
-    # DEBUG(j_luo)
+    # DEBUG(j_luo) dilute
     def dilute(self):
         logging.imp('Diluting the weights.')
         for p in self.model.adapter.adapters.values():

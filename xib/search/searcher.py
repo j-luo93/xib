@@ -9,7 +9,7 @@ from dev_misc import BT, FT, LT, add_argument, g, get_tensor, get_zeros
 from dev_misc.devlib import BaseBatch, batch_class, get_length_mask
 from dev_misc.devlib.named_tensor import NoName, get_named_range
 from dev_misc.trainlib import Metric, Metrics, Tracker
-from xib.data_loader import ContinuousTextIpaBatch
+from xib.data_loader import ContinuousIpaBatch
 from xib.ipa.process import B, I, O
 
 

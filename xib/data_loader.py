@@ -1,4 +1,5 @@
 import logging
+import pickle
 import random
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass, field
@@ -17,14 +18,13 @@ from dev_misc.trainlib import has_gpus
 from dev_misc.trainlib.base_data_loader import (BaseDataLoader,
                                                 BaseDataLoaderRegistry)
 from dev_misc.trainlib.tracker.tracker import Task
+from dev_misc.utils import cached_property
 from xib.batch import CbowIpaBatch
 from xib.ipa import Category, Index, conditions, get_enum_by_cat
-from xib.ipa.process import Segment, SegmentWindow
+from xib.ipa.process import BaseSegment, Segment, SegmentWindow
 from xib.training.task import Task
 
 from .batch import BaseBatch, DenseIpaBatch, IpaBatch
-
-import pickle
 
 
 class BaseDataset(Dataset, metaclass=ABCMeta):
@@ -92,6 +92,7 @@ class CollateReturn:
     lengths: torch.LongTensor
     matrices: torch.LongTensor
     gold_tag_seqs: Optional[torch.LongTensor] = None
+    unit_id_seqs: Optional[torch.LongTensor] = None
 
 
 def collate_fn(batch) -> CollateReturn:
@@ -115,7 +116,10 @@ def collate_fn(batch) -> CollateReturn:
     gold_tag_seqs = None
     if 'gold_tag_seq' in batch[0]:
         gold_tag_seqs = collate_helper('gold_tag_seq', torch.Tensor, pad=True)
-    return CollateReturn(segments, lengths, matrices, gold_tag_seqs=gold_tag_seqs)
+    unit_id_seqs = None
+    if 'unit_id_seq' in batch[0]:
+        unit_id_seqs = collate_helper('unit_id_seq', torch.Tensor, pad=True)
+    return CollateReturn(segments, lengths, matrices, gold_tag_seqs=gold_tag_seqs, unit_id_seqs=unit_id_seqs)
 
 
 class BatchSampler(Sampler):
@@ -192,7 +196,7 @@ add_argument('max_segment_length', default=10, dtype=int,
 add_argument('broken_words', default=False, dtype=bool, msg='Flag to break words down.')
 
 
-class UnbrokenTextIpaDataset(IpaDataset):
+class UnbrokenIpaDataset(IpaDataset):
 
     cache_suffix = 'unbroken.cache'
 
@@ -230,7 +234,7 @@ class UnbrokenTextIpaDataset(IpaDataset):
         return ret
 
 
-class BrokenTextIpaDataset(IpaDataset):
+class BrokenIpaDataset(IpaDataset):
 
     @property
     def window_size(self):
@@ -264,13 +268,56 @@ class BrokenTextIpaDataset(IpaDataset):
         return ret
 
 
-class CbowIpaDataset(BrokenTextIpaDataset):
+class CbowIpaDataset(BrokenIpaDataset):
 
     cache_suffix = 'cbow.cache'
 
     @property
     def window_size(self):
         return g.window_size
+
+
+add_argument('input_format', default='ipa', dtype=str, choices=['ipa', 'text'], msg='Input format to use.')
+
+
+class UnbrokenTextDataset(UnbrokenIpaDataset):
+    """This only produces batches of texts, not ipas."""
+
+    cache_suffix = 'unbroken.text.cache'
+
+    def load_data(self, data_path: Path):
+        data = super().load_data(data_path)
+
+        self._set_unit_ids(data)
+
+        matrices = list()
+        for segment in data['segments']:
+            sw = SegmentWindow(segment)
+            unit_inds = torch.LongTensor([self.unit2id[cv] for cv in sw.cv_list])
+            matrices.append(unit_inds)
+        data['unit_id_seqs'] = matrices
+        return data
+
+    def _set_unit_ids(self, data=None):
+        # HACK(j_luo) Quite hacky.
+        data = data or self.data
+        if not hasattr(self, 'id2unit'):
+            units = set()
+            for segment in data['segments']:
+                sw = SegmentWindow(segment)
+                units.update(sw.cv_list)
+            self.id2unit = sorted(units)
+            self.unit2id = {u: i for i, u in enumerate(self.id2unit)}
+
+    @cached_property
+    def unit_vocab_size(self):
+        self._set_unit_ids()
+        return len(self.id2unit)
+
+    def __getitem__(self, idx):
+        ret = super().__getitem__(idx)
+        ret['unit_id_seq'] = self.data['unit_id_seqs'][idx]
+        return ret
 
 
 total = Index.total_indices()
@@ -301,7 +348,7 @@ def convert_to_dense(feat_matrix: LT) -> DenseFeatureMatrix:
 
 
 @batch_class
-class ContinuousTextIpaBatch(BaseBatch):
+class ContinuousIpaBatch(BaseBatch):
     gold_tag_seqs: Optional[torch.LongTensor] = None
     dense_feat_matrix: Optional[DenseFeatureMatrix] = field(init=False, default=None)
 
@@ -313,12 +360,22 @@ class ContinuousTextIpaBatch(BaseBatch):
             self.dense_feat_matrix = convert_to_dense(self.feat_matrix)
 
 
-class UnbrokenTextDataLoader(IpaDataLoader):
+@batch_class
+class UnbrokenTextBatch(ContinuousIpaBatch, BaseBatch):
+    # TODO(j_luo) This is actually not optional. Follow https://stackoverflow.com/questions/51575931/class-inheritance-in-python-3-7-dataclasses to rewrite it.
+    unit_id_seqs: Optional[LT] = None
 
-    batch_cls = ContinuousTextIpaBatch
-    dataset_cls = UnbrokenTextIpaDataset
+    def _post_init_helper(self):
+        super()._post_init_helper()
+        self.unit_id_seqs.rename_('batch', 'length')
 
-    def _prepare_batch(self, collate_return: CollateReturn) -> ContinuousTextIpaBatch:
+
+class UnbrokenIpaDataLoader(IpaDataLoader):
+
+    batch_cls = ContinuousIpaBatch
+    dataset_cls = UnbrokenIpaDataset
+
+    def _prepare_batch(self, collate_return: CollateReturn) -> ContinuousIpaBatch:
         cls = type(self)
         batch_cls = cls.batch_cls
         return batch_cls(
@@ -329,12 +386,29 @@ class UnbrokenTextDataLoader(IpaDataLoader):
         )
 
 
-class BrokenTextDataLoader(UnbrokenTextDataLoader):
+class UnbrokenTextDataLoader(UnbrokenIpaDataLoader):
 
-    dataset_cls = BrokenTextIpaDataset
+    batch_cls = UnbrokenTextBatch
+    dataset_cls = UnbrokenTextDataset
+
+    def _prepare_batch(self, collate_return: CollateReturn) -> UnbrokenTextBatch:
+        cls = type(self)
+        batch_cls = cls.batch_cls
+        return batch_cls(
+            collate_return.segments,
+            collate_return.lengths,
+            collate_return.matrices,
+            gold_tag_seqs=collate_return.gold_tag_seqs,
+            unit_id_seqs=collate_return.unit_id_seqs,
+        )
 
 
-class CbowIpaDataLoader(BrokenTextDataLoader):
+class BrokenIpaDataLoader(UnbrokenIpaDataLoader):
+
+    dataset_cls = BrokenIpaDataset
+
+
+class CbowIpaDataLoader(BrokenIpaDataLoader):
 
     dataset_cls = CbowIpaDataset
     batch_cls = CbowIpaBatch
@@ -362,7 +436,7 @@ class DenseCbowIpaDataLoader(CbowIpaDataLoader):
     batch_cls = DenseCbowIpaBatch
 
 
-ContinuousTextDataLoader = Union[BrokenTextDataLoader, UnbrokenTextDataLoader]
+ContinuousTextDataLoader = Union[BrokenIpaDataLoader, UnbrokenIpaDataLoader]
 
 
 class DataLoaderRegistry(BaseDataLoaderRegistry):
@@ -377,7 +451,10 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
         elif task.name == 'adapt_lm':
             dl = DenseIpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer', 'extract']:
-            dl_cls = BrokenTextDataLoader if g.broken_words else UnbrokenTextDataLoader
+            if g.input_format == 'text':
+                dl_cls = UnbrokenTextDataLoader
+            else:
+                dl_cls = BrokenIpaDataLoader if g.broken_words else UnbrokenIpaDataLoader
             dl = dl_cls(data_path, task)
         else:
             raise ValueError(f'Unsupported task {task.name}.')

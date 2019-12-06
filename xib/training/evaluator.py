@@ -18,7 +18,7 @@ from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from dev_misc.trainlib.tracker.tracker import Tracker
 from dev_misc.utils import deprecated, pbar
-from xib.data_loader import (ContinuousTextDataLoader, ContinuousTextIpaBatch,
+from xib.data_loader import (ContinuousIpaBatch, ContinuousTextDataLoader,
                              DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
 from xib.model.decipher_model import (DecipherModel, DecipherModelReturn,
@@ -204,7 +204,7 @@ class DecipherEvaluator(BaseEvaluator):
         accum_metrics += get_prf_scores(accum_metrics)
         return accum_metrics
 
-    def _get_predictions(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> List[Segmentation]:
+    def _get_predictions(self, model_ret: DecipherModelReturn, batch: ContinuousIpaBatch) -> List[Segmentation]:
         label_log_probs = model_ret.probs.label_log_probs.align_to('batch', 'length', 'label')
         _, tag_seqs = label_log_probs.max(dim='label')
         tag_seqs = tag_seqs.align_to('batch', 'sample', 'length').int()
@@ -219,7 +219,7 @@ class DecipherEvaluator(BaseEvaluator):
         predictions = [segments[0] for segments in segments_by_batch]
         return predictions
 
-    def predict(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> Tuple[Metrics, pd.DataFrame]:
+    def predict(self, model_ret: DecipherModelReturn, batch: ContinuousIpaBatch) -> Tuple[Metrics, pd.DataFrame]:
         metrics = Metrics()
         predictions = self._get_predictions(model_ret, batch)
         ground_truths = [segment.to_segmentation() for segment in batch.segments]
@@ -308,7 +308,7 @@ class ExtractEvaluator(BaseEvaluator):
         prf_scores = get_prf_scores(matching_stats)
         return analyzed_metrics + matching_stats + prf_scores
 
-    def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> Tuple[List[Segmentation], np.ndarray]:
+    def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Tuple[List[Segmentation], np.ndarray]:
         matches = model_ret.extracted.matches
         ed_dist = matches.ed_dist
         # Get the best matched ed_dist scores.

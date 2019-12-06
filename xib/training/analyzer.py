@@ -10,7 +10,7 @@ from dev_misc import FT, g, get_tensor
 from dev_misc.devlib import get_length_mask
 from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metric, Metrics
-from xib.data_loader import ContinuousTextIpaBatch
+from xib.data_loader import ContinuousIpaBatch
 from xib.ipa import should_include
 from xib.model.decipher_model import DecipherModel, DecipherModelReturn
 from xib.model.extract_model import ExtractModelReturn
@@ -139,13 +139,13 @@ def _compute_utility(logits: FT, sample_scores: FT) -> FT:
 
 class DecipherAnalyzer:
 
-    def analyze(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> Metrics:
+    def analyze(self, model_ret: DecipherModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         if g.supervised:
             return self._analyze_supervised(model_ret, batch)
         else:
             return self._analyze_unsupervised(model_ret, batch)
 
-    def _analyze_supervised(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> Metrics:
+    def _analyze_supervised(self, model_ret: DecipherModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
         if g.train_phi:
             sample_scores = model_ret.scores.phi_score
@@ -160,7 +160,7 @@ class DecipherAnalyzer:
         metrics += total_loss
         return metrics
 
-    def _analyze_unsupervised(self, model_ret: DecipherModelReturn, batch: ContinuousTextIpaBatch) -> Metrics:
+    def _analyze_unsupervised(self, model_ret: DecipherModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
         # TODO(j_luo) Check the sample scores for hyps that are dummies (i.e., the length of the segment is too small to get beam_size hyps).
         is_unique = model_ret.packed_words.is_unique
@@ -185,7 +185,7 @@ class DecipherAnalyzer:
 
 class ExtractAnalyzer:
 
-    def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> Metrics:
+    def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
         metrics += Metric('score', model_ret.best_matched_score.sum(), batch.batch_size)
         return metrics

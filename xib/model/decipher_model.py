@@ -17,7 +17,7 @@ from dev_misc.devlib.named_tensor import (NoName, expand_as, get_named_range,
 from dev_misc.trainlib import freeze
 from dev_misc.utils import cached_property, deprecated
 from xib.check_in_vocab_impl import check_in_vocab
-from xib.data_loader import ContinuousTextIpaBatch, IpaBatch
+from xib.data_loader import ContinuousIpaBatch, IpaBatch
 from xib.extract_words_impl import extract_words_v8 as extract_words
 from xib.gumbel import gumbel_softmax
 from xib.ipa import Category, should_include
@@ -186,7 +186,7 @@ class DecipherModel(nn.Module):
         else:
             raise NotImplementedError()
 
-    def forward(self, batch: Union[ContinuousTextIpaBatch, IpaBatch]) -> DecipherModelReturn:
+    def forward(self, batch: Union[ContinuousIpaBatch, IpaBatch]) -> DecipherModelReturn:
         # Get the samples of label sequences first.
         out = self.emb_for_label(batch.feat_matrix, batch.source_padding)
 

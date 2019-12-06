@@ -281,6 +281,7 @@ class ExtractEvaluator(BaseEvaluator):
         ground_truths = list()
         matched_segments = list()
         total_num_samples = 0
+        analyzed_metrics = Metrics()
         for batch in pbar(self.dl, desc='eval_batch'):
 
             if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
@@ -289,6 +290,8 @@ class ExtractEvaluator(BaseEvaluator):
                 break
 
             ret = self.model(batch)
+            analyzed_metrics += self.analyzer.analyze(ret, batch)
+
             segments.extend(list(batch.segments))
             segmentations, _matched_segments = self._get_segmentations(ret, batch)
             predictions.extend(segmentations)
@@ -303,7 +306,7 @@ class ExtractEvaluator(BaseEvaluator):
         df.to_csv(out_path, index=None, sep='\t')
         matching_stats = get_matching_stats(predictions, ground_truths)
         prf_scores = get_prf_scores(matching_stats)
-        return matching_stats + prf_scores
+        return analyzed_metrics + matching_stats + prf_scores
 
     def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousTextIpaBatch) -> Tuple[List[Segmentation], np.ndarray]:
         matches = model_ret.extracted.matches
@@ -317,7 +320,7 @@ class ExtractEvaluator(BaseEvaluator):
         with NoName(bi, start, end, bmv, ed_dist):
             bmed = ed_dist[bi, start, end - start - g.min_word_length + 1, bmv]  # Best matched edit distance
         bmed.rename_('batch')
-        matched = bmed < self.model._thresh  # HACK(j_luo)
+        matched = bmed < self.model.threshold
 
         start = start.cpu().numpy()
         end = end.cpu().numpy()

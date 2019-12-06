@@ -1,4 +1,3 @@
-from dev_misc.trainlib import get_trainable_params
 import logging
 from abc import ABCMeta
 from pathlib import Path
@@ -10,9 +9,10 @@ from torch.nn.utils.clip_grad import clip_grad_norm_
 
 from dev_misc import get_tensor
 from dev_misc.arglib import add_argument, g
-from dev_misc.trainlib import Metric, Metrics, freeze, get_grad_norm
+from dev_misc.trainlib import (Metric, Metrics, freeze, get_grad_norm,
+                               get_trainable_params)
 from dev_misc.trainlib.base_trainer import BaseTrainer as BaseTrainerDev
-from dev_misc.utils import deprecated
+from dev_misc.utils import deprecated, global_property
 from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
 from xib.model.decipher_model import DecipherModel
 from xib.model.extract_model import ExtractModel
@@ -183,9 +183,23 @@ class ExtractTrainer(BaseTrainer):
         #     lp = len(p)
         #     p.data[range(lp), range(lp)] += 200.0
 
+    @global_property
+    def threshold(self):
+        pass
+
+    @threshold.setter
+    def threshold(self, value):
+        pass
+
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
         self.tracker.add_max_trackable('best_f1')
+        self.tracker.add_max_trackable('best_score')
+        self.tracker.add_trackable('early_stop', total=3)
+
+    def reset(self):
+        """Reset the tracker. But keep the best_f1 since it's related to evaluation."""
+        self.tracker.reset('total_step', 'best_score', 'early_stop')
 
     def load(self, path: Path):
         saved = torch.load(path)
@@ -200,6 +214,13 @@ class ExtractTrainer(BaseTrainer):
             out_path = g.log_dir / f'saved.best'
             logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
             self.save_to(out_path)
+
+        if not self.tracker.update('best_score', value=eval_metrics.score.value, threshold=0.01):
+            self.tracker.update('early_stop')
+            self.lr_scheduler.step()
+
+    def should_terminate(self):
+        return self.tracker.is_finished('early_stop')
 
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
         self.model.train()

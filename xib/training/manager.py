@@ -172,10 +172,27 @@ class SearchSolverManager:
         logging.info(prf_scores.get_table())
 
 
+class ReduceLR:
+    # NOTE(j_luo) Seems that there is no such a thing as BaseLRScheduler.
+
+    def __init__(self, optimizer: torch.optim.Optimizer, factor: float):
+        self.optimizer = optimizer
+        self._factor = factor
+
+    def step(self):
+        """Copied from https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#ReduceLROnPlateau."""
+        for i, param_group in enumerate(self.optimizer.param_groups):
+            old_lr = float(param_group['lr'])
+            new_lr = old_lr * self._factor
+            param_group['lr'] = new_lr
+            logging.imp(f'Learning rate is now {new_lr:.4f}.')
+
+
 class ExtractManager:
 
-    # IDEA(j_luo) when to put this in manager/trainer?
+    # IDEA(j_luo) when to put this in manager/trainer? what about scheduler? annealing? restarting? Probably all in trainer -- you need to track them with pbars.
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
+    add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -196,8 +213,14 @@ class ExtractManager:
         if g.saved_model_path:
             self.trainer.load(g.saved_model_path)
         # self.trainer.set_optimizer(Adam, lr=g.learning_rate)
-        optim_cls = self._name2cls[g.optim_cls]
-        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
 
     def run(self):
-        self.trainer.train(self.dl_reg)
+        self.trainer.threshold = g.init_threshold
+        optim_cls = self._name2cls[g.optim_cls]
+
+        while self.trainer.threshold > 0.01:
+            self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
+            self.trainer.set_lr_scheduler(ReduceLR, factor=0.5)
+            self.trainer.train(self.dl_reg)
+            self.trainer.threshold *= g.init_threshold
+            self.trainer.threshold = max(self.trainer.threshold, 0.01)

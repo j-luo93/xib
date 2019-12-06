@@ -12,7 +12,7 @@ from dev_misc.devlib import (BaseBatch, batch_class, get_array,
                              get_length_mask, get_range)
 from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
                                           drop_names, get_named_range)
-from dev_misc.utils import WithholdKeys
+from dev_misc.utils import WithholdKeys, global_property
 from xib.data_loader import ContinuousTextIpaBatch, convert_to_dense
 from xib.ipa import should_include
 from xib.ipa.process import Segment, SegmentWindow
@@ -36,7 +36,8 @@ class MatchesLv0(Matches):
 
 
 @batch_class
-class MatchesLv1(MatchesLv0): ...
+class MatchesLv1(MatchesLv0):
+    pass
 
 
 @batch_class
@@ -135,7 +136,6 @@ class ExtractModel(nn.Module):
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
     add_argument('use_hamming', default=False, dtype=bool, msg='Flag to use hamming distance instead of cosine.')
-    add_argument('anneal_factor', default=0.999, dtype=float, msg='Mulplication value for annealing.')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
@@ -229,6 +229,10 @@ class ExtractModel(nn.Module):
                     if torch.is_tensor(v):
                         v.rename_(*attr[k].names)
 
+    @global_property
+    def threshold(self):
+        pass
+
     # ------------------------ Useful methods for debugging ----------------------- #
 
     def get_vector(self, c: str, adapt: bool = False):
@@ -275,7 +279,7 @@ class ExtractModel(nn.Module):
         self.get_char_hamming('a', 'a')
         if g.debug:
             torch.set_printoptions(sci_mode=False, linewidth=200)
-            self._thresh = 0.5
+            self.threshold = 0.5
             self.eval()
             breakpoint()
 
@@ -492,43 +496,33 @@ class ExtractModel(nn.Module):
             ed_dist.rename_('viable', 'vocab')
 
         # Get the best spans.
-        if self.training:
-            # DEBUG(j_luo)
-            try:
-                self._thresh *= g.anneal_factor
-            except AttributeError:
-                self._thresh = g.init_threshold
-            # MIN_TH = 0.2 if RELATIVE else 0.001
-            self._thresh = max(self._thresh, 0.001)
-            logging.debug(self._thresh)
-
         if self.training and g.relaxation_level > 0:
             if g.relaxation_level == 1:
                 matched_ed_dist, matched_vocab = _soft_min(ed_dist, 'vocab')
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
-                matched_thresh = _soft_threshold(matched_ed_dist / self._thresh)
+                matched_thresh = _soft_threshold(matched_ed_dist / self.threshold)
                 matched_score = matched_length * matched_thresh
                 matches = MatchesLv1(ed_dist, matched_ed_dist, matched_vocab,
                                      matched_length, matched_thresh, matched_score)
             elif g.relaxation_level == 2:
-                thresh = _soft_threshold(ed_dist / self._thresh)
+                thresh = _soft_threshold(ed_dist / self.threshold)
                 matched_thresh, matched_vocab = _soft_max(thresh, 'vocab')
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
                 matched_score = matched_length * matched_thresh
                 matches = MatchesLv2(ed_dist, thresh, matched_thresh, matched_vocab, matched_length, matched_score)
             elif g.relaxation_level == 3:
-                thresh = _soft_threshold(ed_dist / self._thresh)
+                thresh = _soft_threshold(ed_dist / self.threshold)
                 score = self.vocab_length * thresh
                 matched_score, matched_vocab = _soft_max(score, 'vocab')
                 matches = MatchesLv3(ed_dist, thresh, score, matched_score, matched_vocab)
             else:
-                thresh = _soft_threshold(ed_dist / self._thresh)
+                thresh = _soft_threshold(ed_dist / self.threshold)
                 score = self.vocab_length * thresh
                 matches = MatchesLv4(ed_dist, thresh, score)
         else:
             matched_ed_dist, matched_vocab = ed_dist.min(dim='vocab')
             matched_length = self.vocab_length.gather('vocab', matched_vocab)
-            matched_thresh = _soft_threshold(matched_ed_dist / self._thresh)
+            matched_thresh = _soft_threshold(matched_ed_dist / self.threshold)
             matched_score = matched_length * matched_thresh
             matches = MatchesLv0(ed_dist, matched_ed_dist, matched_vocab,
                                  matched_length, matched_thresh, matched_score)

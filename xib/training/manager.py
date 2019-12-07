@@ -1,3 +1,4 @@
+from torch.optim.lr_scheduler import CyclicLR
 import logging
 import os
 import random
@@ -194,7 +195,7 @@ class ExtractManager:
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
     add_argument('min_threshold', default=0.01, dtype=float, msg='Min value for threshold')
-    add_argument('use_dilute', default=True, dtype=bool, msg='Flag to dilute params after each round.')
+    add_argument('use_dilute', default=False, dtype=bool, msg='Flag to dilute params after each round.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -206,7 +207,8 @@ class ExtractManager:
         unit_vocab_size = None
         if g.input_format == 'text':
             unit_vocab_size = self.dl_reg[task].dataset.unit_vocab_size
-        self.model = ExtractModel(unit_vocab_size)
+        # DEBUG(j_luo)
+        self.model = ExtractModel(unit_vocab_size, self.dl_reg[task].dataset)
         if has_gpus():
             self.model.cuda()
 
@@ -225,10 +227,30 @@ class ExtractManager:
         self.trainer.threshold = g.init_threshold
         optim_cls = self._name2cls[g.optim_cls]
 
+        # # DEBUG(j_luo)
+        # thresh = g.init_threshold
+        # while thresh > g.min_threshold:
+        #     self.trainer.reset()
+        #     self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
+        #     self.trainer.set_lr_scheduler(ReduceLR, factor=0.5)
+        #     self.trainer.threshold = thresh
+        #     # HACK(j_luo)
+        #     self.trainer.min_threshold = thresh * 0.5
+
+        #     self.trainer.train(self.dl_reg)
+        #     thresh *= g.anneal_factor
+        #     logging.imp(f'threshold is now {thresh:.3f}.')
+        #     self.trainer.tracker.update('round')
+        #     if g.use_dilute:
+        #         self.trainer.dilute()
+
         while self.trainer.threshold > g.min_threshold:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
-            self.trainer.set_lr_scheduler(ReduceLR, factor=0.5)
+            # DEBUG(j_luo)
+            # self.trainer.set_lr_scheduler(CyclicLR, base_lr=0.01, max_lr=0.1, cycle_momentum=False, step_size_up=100)
+
+            # self.trainer.set_lr_scheduler(ReduceLR, factor=0.5)
             self.trainer.train(self.dl_reg)
             self.trainer.threshold *= g.anneal_factor
             self.trainer.threshold = max(self.trainer.threshold, g.min_threshold)

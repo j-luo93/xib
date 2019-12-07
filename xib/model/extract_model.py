@@ -87,10 +87,24 @@ class ExtractModelReturn(BaseBatch):
     best_matched_score: FT
     best_matched_vocab: LT
     extracted: Extracted
+    adapted_dfm: Dict[Category, FT]
 
 
-def _soft_threshold(x):
-    return (nn.functional.celu(1 - 2 * x) + 1) / 2
+def _soft_threshold(x, thresh):
+    return (nn.functional.celu(1 - 2 * x / thresh) + 1) / 2
+
+
+def _linear_threshold(x, thresh):
+    return 1 - x / thresh
+
+
+def _exp_linear_threshold(x, thresh):
+    pt = - thresh * math.log(thresh)
+    return torch.where(x > pt, -x / thresh, (-x / thresh).exp())
+
+
+def _exp_threshold(x, thresh):
+    return (-x / thresh).exp()
 
 
 def _soft_max(x, dim):
@@ -107,7 +121,7 @@ def _soft_min(x, dim):
     return value, index
 
 
-def _restore_shape(tensor, bi, lsi, lei, viable):
+def _restore_shape(tensor, bi, lsi, lei, viable, value: Optional[float] = None):
     bs = bi.size('batch')
     len_s = lsi.size('len_s')
     len_e = lei.size('len_e')
@@ -123,6 +137,8 @@ def _restore_shape(tensor, bi, lsi, lei, viable):
         v_lsi = lsi[viable]
         v_lei = lei[viable]
         ret = get_zeros(*shape).to(tensor.dtype)
+        if value is not None:
+            ret.fill_(value)
         ret[v_bi, v_lsi, v_lei] = tensor
 
     ret.rename_(*names)
@@ -133,9 +149,30 @@ class G2PLayer(nn.Module):
 
     add_argument('g2p_window_size', default=3, dtype=int, msg='Window size for g2p layer.')
 
-    def __init__(self, unit_vocab_size: int):
+    def __init__(self, unit_vocab_size: int, dataset):  # FIXME(j_luo) remove dataset
         super().__init__()
-        self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
+
+        # # DEBUG(j_luo)
+        # logging.warn('Hacking it right now.')
+        # units = torch.cat([Segment(u).feat_matrix for u in dataset.id2unit], dim=0)
+
+        # from xib.ipa import Index, get_enum_by_cat, Category
+        # xx = list()
+        # for unit in units:
+        #     x = list()
+        #     for u, cat in zip(unit[:7], Category):
+        #         if cat.name[0] in ['P', 'C', 'V']:
+        #             e = get_enum_by_cat(cat)
+        #             f_idx = Index.get_feature(int(u)).value.f_idx
+        #             x.extend([0] * (f_idx) + [1] + [0] * (len(e) - f_idx - 1))
+        #     assert len(x) == 60
+        #     xx.append(x)
+        # units = torch.LongTensor(xx)
+
+        self.unit_embedding = nn.Embedding(unit_vocab_size, 60)  # Vg.dim)
+        # self.unit_embedding.weight.data.copy_(units)
+
+        # self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
         self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
 
         module_dict = dict()
@@ -148,6 +185,19 @@ class G2PLayer(nn.Module):
 
     def forward(self, unit_id_seqs: LT) -> Dict[Category, FT]:
         unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
+        return unit_embeddings
+
+        # # DEBUG(j_luo)
+        # logging.warn('HACKING')
+        # output = unit_embeddings
+        # ret = dict()
+        # offset = 0
+        # for i, cat in enumerate(Category):
+        #     if should_include(g.feat_groups, cat):
+        #         l = len(get_enum_by_cat(cat))
+        #         ret[cat] = output[:, :, offset: offset + l]
+        #         offset += l
+
         unit_embeddings = unit_embeddings.align_to('batch', 'unit_emb', 'length')
         with NoName(unit_embeddings):
             output = self.conv(unit_embeddings).rename('batch', 'unit_conv_repr', 'length')
@@ -169,6 +219,8 @@ class ExtractModel(nn.Module):
     add_argument('max_extracted_candidates', default=200, dtype=int, msg='Max number of extracted candidates.')
     add_argument('init_threshold', default=0.05, dtype=float,
                  msg='Initial value of threshold to determine whether two words are matched.')
+    add_argument('thresh_func', default='soft', dtype=str,
+                 choices=['soft', 'linear', 'exp', 'exp_linear'], msg='Threshold function to use.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
     add_argument('dist_func', default='hamming', dtype=str,
@@ -178,7 +230,7 @@ class ExtractModel(nn.Module):
     add_argument('ins_del_cost', default=3.5, dtype=float, msg='Unit cost for insertions and deletions.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
 
-    def __init__(self, unit_vocab_size: Optional[int] = None):
+    def __init__(self, unit_vocab_size: Optional[int] = None, dataset=None):
         super().__init__()
 
         if g.use_embedding:
@@ -244,7 +296,7 @@ class ExtractModel(nn.Module):
             self.adapter = AdaptLayer()
 
         if g.input_format == 'text':
-            self.g2p = G2PLayer(unit_vocab_size)
+            self.g2p = G2PLayer(unit_vocab_size, dataset)
 
     _special_state_keys = ['vocab', 'vocab_dense_feat_matrix', 'unit2id', 'id2unit', 'unit_dense_feat_matrix']
 
@@ -331,21 +383,28 @@ class ExtractModel(nn.Module):
             dfm = batch.dense_feat_matrix
 
         if g.dense_input:
-            if g.input_format == 'ipa':
-                with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
-                    adapted_dfm = self.adapter(dfm)
-            else:
-                adapted_dfm = dfm
+            # DEBUG(j_luo)
+            # if g.input_format == 'ipa':
+            #     with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
+            #         adapted_dfm = self.adapter(dfm)
+            # else:
+            #     adapted_dfm = dfm
+
             if g.use_embedding:
                 word_repr = self.embedding(adapted_dfm, batch.source_padding)
                 unit_repr = self.embedding(self.unit_dense_feat_matrix)
             else:
-                names = sorted(adapted_dfm, key=lambda name: name.value)
+                # names = sorted(adapted_dfm, key=lambda name: name.value)
+                names = sorted([cat for cat in Category if should_include(
+                    g.feat_groups, cat)], key=lambda name: name.value)
                 # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
-                with NoName(*self.unit_dense_feat_matrix.values(), *adapted_dfm.values()):
-                    word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
+                # with NoName(*self.unit_dense_feat_matrix.values(), *adapted_dfm.values()):
+                with NoName(*self.unit_dense_feat_matrix.values()):
+                    # word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
                     unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
-                word_repr.rename_('batch', 'length', 'char_emb')
+                # DEBUG(j_luo)
+                word_repr = dfm.rename('batch', 'length', 'char_emb')
+                # word_repr.rename_('batch', 'length', 'char_emb')
                 unit_repr.rename_('batch', 'length', 'char_emb')
         else:
             with Rename(self.unit_feat_matrix, unit='batch'):
@@ -384,7 +443,8 @@ class ExtractModel(nn.Module):
             flat_matched_vocab = matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
             best_matched_vocab = flat_matched_vocab.gather('cand', best_span_ind)
 
-        ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted)
+        ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
+        # ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, adapted_dfm)
 
         return ret
 
@@ -435,7 +495,8 @@ class ExtractModel(nn.Module):
         field_names = [f.name for f in fields(matches)]
         for fname in field_names:
             attr = getattr(matches, fname)
-            restored = _restore_shape(attr, bi, lsi, lei, viable)
+            value = -999.9 if 'score' in fname else None
+            restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
             setattr(matches, fname, restored)
 
         new_extracted = Extracted(batch.batch_size, matches)
@@ -533,33 +594,41 @@ class ExtractModel(nn.Module):
             ed_dist.rename_('viable', 'vocab')
 
         # Get the best spans.
+        if g.thresh_func == 'soft':
+            thresh_func = _soft_threshold
+        elif g.thresh_func == 'linear':
+            thresh_func = _linear_threshold
+        elif g.thresh_func == 'exp':
+            thresh_func = _exp_threshold
+        else:
+            thresh_func = _exp_linear_threshold
         if self.training and g.relaxation_level > 0:
             if g.relaxation_level == 1:
                 matched_ed_dist, matched_vocab = _soft_min(ed_dist, 'vocab')
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
-                matched_thresh = _soft_threshold(matched_ed_dist / self.threshold)
+                matched_thresh = thresh_func(matched_ed_dist, self.threshold)
                 matched_score = matched_length * matched_thresh
                 matches = MatchesLv1(ed_dist, matched_ed_dist, matched_vocab,
                                      matched_length, matched_thresh, matched_score)
             elif g.relaxation_level == 2:
-                thresh = _soft_threshold(ed_dist / self.threshold)
+                thresh = thresh_func(ed_dist, self.threshold)
                 matched_thresh, matched_vocab = _soft_max(thresh, 'vocab')
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
                 matched_score = matched_length * matched_thresh
                 matches = MatchesLv2(ed_dist, thresh, matched_thresh, matched_vocab, matched_length, matched_score)
             elif g.relaxation_level == 3:
-                thresh = _soft_threshold(ed_dist / self.threshold)
+                thresh = thresh_func(ed_dist, self.threshold)
                 score = self.vocab_length * thresh
                 matched_score, matched_vocab = _soft_max(score, 'vocab')
                 matches = MatchesLv3(ed_dist, thresh, score, matched_score, matched_vocab)
             else:
-                thresh = _soft_threshold(ed_dist / self.threshold)
+                thresh = thresh_func(ed_dist, self.threshold)
                 score = self.vocab_length * thresh
                 matches = MatchesLv4(ed_dist, thresh, score)
         else:
             matched_ed_dist, matched_vocab = ed_dist.min(dim='vocab')
             matched_length = self.vocab_length.gather('vocab', matched_vocab)
-            matched_thresh = _soft_threshold(matched_ed_dist / self.threshold)
+            matched_thresh = thresh_func(matched_ed_dist, self.threshold)
             matched_score = matched_length * matched_thresh
             matches = MatchesLv0(ed_dist, matched_ed_dist, matched_vocab,
                                  matched_length, matched_thresh, matched_score)

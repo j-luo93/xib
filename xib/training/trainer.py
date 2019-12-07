@@ -242,10 +242,32 @@ class ExtractTrainer(BaseTrainer):
             batch = dl.get_next_batch()
             ret = self.model(batch)
             metrics = self.analyzer.analyze(ret, batch)
-            (-metrics.score.mean / g.accum_gradients).backward()
+
+            # # # DEBUG(j_luo)
+            # sparsity = 0.0
+            # for cat, dfm in ret.adapted_dfm.items():
+            #     sparsity += ((dfm ** 2) * ((1.0 - dfm) ** 2)).sum()
+            # sparsity = Metric('sparsity', sparsity, batch.batch_size)
+            # metrics += sparsity
+
+            # loss = -metrics.score.mean + sparsity.mean * 0.01
+
+            loss = -metrics.score.mean
+            (loss / g.accum_gradients).backward()
+
+            # (-metrics.score.mean / g.accum_gradients).backward()
             accum_metrics += metrics
-        self.optimizer.step()
+
+            # # DEBUG(j_luo)
+            # self.threshold *= 0.99
+            # self.threshold = max(self.min_threshold, self.threshold)
+            # if self.tracker.total_step % 10 == 0:
+            #     print(self.threshold)
+
         grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)
+        self.optimizer.step()
+        # DEBUG(j_luo)
+        # self.lr_scheduler.step()
         accum_metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
 
-        return metrics
+        return accum_metrics

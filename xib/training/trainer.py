@@ -12,7 +12,7 @@ from dev_misc.arglib import add_argument, g
 from dev_misc.trainlib import (Metric, Metrics, freeze, get_grad_norm,
                                get_trainable_params)
 from dev_misc.trainlib.base_trainer import BaseTrainer as BaseTrainerDev
-from dev_misc.utils import deprecated, global_property
+from dev_misc.utils import deprecated, global_property, pbar
 from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
 from xib.model.decipher_model import DecipherModel
 from xib.model.extract_model import ExtractModel
@@ -166,6 +166,9 @@ class DecipherTrainer(BaseTrainer):
             self.save_to(out_path)
 
 
+add_argument('accum_gradients', default=1, dtype=int, msg='Accumulate this many steps of gradients.')
+
+
 class ExtractTrainer(BaseTrainer):
 
     model: ExtractModel
@@ -234,12 +237,15 @@ class ExtractTrainer(BaseTrainer):
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
-        batch = dl.get_next_batch()
-        ret = self.model(batch)
-        metrics = self.analyzer.analyze(ret, batch)
-        (-metrics.score.mean).backward()
+        accum_metrics = Metrics()
+        for _ in pbar(range(g.accum_gradients), desc='accum_gradients'):
+            batch = dl.get_next_batch()
+            ret = self.model(batch)
+            metrics = self.analyzer.analyze(ret, batch)
+            (-metrics.score.mean / g.accum_gradients).backward()
+            accum_metrics += metrics
         self.optimizer.step()
         grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)
-        metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
+        accum_metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
 
         return metrics

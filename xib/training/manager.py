@@ -249,12 +249,14 @@ class ExtractManager:
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
             # DEBUG(j_luo)
             # self.trainer.set_lr_scheduler(CyclicLR, base_lr=0.01, max_lr=0.1, cycle_momentum=False, step_size_up=100)
-
             # self.trainer.set_lr_scheduler(ReduceLR, factor=0.5)
+
             self.trainer.train(self.dl_reg)
-            self.trainer.threshold *= g.anneal_factor
-            self.trainer.threshold = max(self.trainer.threshold, g.min_threshold)
+            # DEBUG(j_luo)
+            # self.trainer.threshold *= g.anneal_factor
+            # self.trainer.threshold = max(self.trainer.threshold, g.min_threshold)
             logging.imp(f'threshold is now {self.trainer.threshold:.3f}.')
             self.trainer.tracker.update('round')
             if g.use_dilute:
                 self.trainer.dilute()
+            break

@@ -27,6 +27,7 @@ ExtractBatch = Union[ContinuousIpaBatch, UnbrokenTextBatch]
 @batch_class
 class Matches(BaseBatch):
     ed_dist: FT
+    f: FT  # All these dp scores.
 
 
 @batch_class
@@ -169,9 +170,15 @@ class G2PLayer(nn.Module):
         #     xx.append(x)
         # units = torch.LongTensor(xx)
 
-        self.unit_embedding = nn.Embedding(unit_vocab_size, 60)  # Vg.dim)
+        # self.unit_embedding = nn.Embedding(unit_vocab_size, 60)  # Vg.dim)
         # self.unit_embedding.weight.data.copy_(units)
+        self.unit_embedding = nn.Embedding(unit_vocab_size, 60)
 
+        # DEBUG(j_luo)
+        noise = torch.rand_like(self.unit_embedding.weight) * 0.1
+        self.unit_embedding.weight.data.copy_(0.5 + noise)
+
+        # DEBUG(j_luo)
         # self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
         self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
 
@@ -185,6 +192,11 @@ class G2PLayer(nn.Module):
 
     def forward(self, unit_id_seqs: LT) -> Dict[Category, FT]:
         unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
+
+        # # DEBUG(j_luo)
+        # return nn.functional.dropout(unit_embeddings, p=g.dropout)
+
+        # DEBUG(j_luo)
         return unit_embeddings
 
         # # DEBUG(j_luo)
@@ -375,41 +387,48 @@ class ExtractModel(nn.Module):
             self.eval()
             breakpoint()
 
+        # DEBUG(j_luo)
         # Prepare representations.
         # If input_format is 'text', then we need to use g2p to induce ipa first.
-        if g.input_format == 'text':
-            dfm = self.g2p(batch.unit_id_seqs)
-        else:
-            dfm = batch.dense_feat_matrix
+        dfm = self.g2p(batch.unit_id_seqs)
 
-        if g.dense_input:
-            # DEBUG(j_luo)
-            # if g.input_format == 'ipa':
-            #     with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
-            #         adapted_dfm = self.adapter(dfm)
-            # else:
-            #     adapted_dfm = dfm
+        names = sorted([cat for cat in Category if should_include(g.feat_groups, cat)], key=lambda name: name.value)
+        # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
+        with NoName(*self.unit_dense_feat_matrix.values()):
+            # word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
+            unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
+        word_repr = dfm.rename('batch', 'length', 'char_emb')
+        unit_repr.rename_('batch', 'length', 'char_emb')
 
-            if g.use_embedding:
-                word_repr = self.embedding(adapted_dfm, batch.source_padding)
-                unit_repr = self.embedding(self.unit_dense_feat_matrix)
-            else:
-                # names = sorted(adapted_dfm, key=lambda name: name.value)
-                names = sorted([cat for cat in Category if should_include(
-                    g.feat_groups, cat)], key=lambda name: name.value)
-                # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
-                # with NoName(*self.unit_dense_feat_matrix.values(), *adapted_dfm.values()):
-                with NoName(*self.unit_dense_feat_matrix.values()):
-                    # word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
-                    unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
-                # DEBUG(j_luo)
-                word_repr = dfm.rename('batch', 'length', 'char_emb')
-                # word_repr.rename_('batch', 'length', 'char_emb')
-                unit_repr.rename_('batch', 'length', 'char_emb')
-        else:
-            with Rename(self.unit_feat_matrix, unit='batch'):
-                word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
-                unit_repr = self.embedding(self.unit_feat_matrix)
+        # DEBUG(j_luo)
+        # # Prepare representations.
+        # # If input_format is 'text', then we need to use g2p to induce ipa first.
+        # if g.input_format == 'text':
+        #     dfm = self.g2p(batch.unit_id_seqs)
+        # else:
+        #     dfm = batch.dense_feat_matrix
+
+        # if g.dense_input:
+        #     if g.input_format == 'ipa':
+        #         with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
+        #             adapted_dfm = self.adapter(dfm)
+        #     else:
+        #         adapted_dfm = dfm
+        #     if g.use_embedding:
+        #         word_repr = self.embedding(adapted_dfm, batch.source_padding)
+        #         unit_repr = self.embedding(self.unit_dense_feat_matrix)
+        #     else:
+        #         names = sorted(adapted_dfm, key=lambda name: name.value)
+        #         # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
+        #         with NoName(*self.unit_dense_feat_matrix.values(), *adapted_dfm.values()):
+        #             word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
+        #             unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
+        #         word_repr.rename_('batch', 'length', 'char_emb')
+        #         unit_repr.rename_('batch', 'length', 'char_emb')
+        # else:
+        #     with Rename(self.unit_feat_matrix, unit='batch'):
+        #         word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
+        #         unit_repr = self.embedding(self.unit_feat_matrix)
         unit_repr = unit_repr.squeeze('length')
         unit_repr.rename_(batch='unit')
 
@@ -443,6 +462,7 @@ class ExtractModel(nn.Module):
             flat_matched_vocab = matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
             best_matched_vocab = flat_matched_vocab.gather('cand', best_span_ind)
 
+        # DEBUG(j_luo)
         ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
         # ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, adapted_dfm)
 
@@ -494,8 +514,17 @@ class ExtractModel(nn.Module):
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
         field_names = [f.name for f in fields(matches)]
         for fname in field_names:
+            # Skip dp scores.
+            if fname == 'f':
+                continue
+
             attr = getattr(matches, fname)
-            value = -999.9 if 'score' in fname else None
+            value = None
+            if 'score' in fname or 'thresh' in fname:
+                value = -99999.9
+            elif 'ed_dist' in fname:
+                value = 99999.9
+            # value = -999.9 if 'score' in fname or 'ed_dist' in fname else None
             restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
             setattr(matches, fname, restored)
 
@@ -512,9 +541,9 @@ class ExtractModel(nn.Module):
         # # NOTE(j_luo) Use dictionary save every state.
         fs = dict()
         for i in range(msl + 1):
-            fs[(i, 0)] = get_zeros(ns, nt).fill_(i)
+            fs[(i, 0)] = get_zeros(ns, nt).fill_(i * g.ins_del_cost)
         for j in range(mtl + 1):
-            fs[(0, j)] = get_zeros(ns, nt).fill_(j)
+            fs[(0, j)] = get_zeros(ns, nt).fill_(j * g.ins_del_cost)
 
         # Compute cosine distance all at once: for each viable span, compare it against all units.
         def _get_cosine_matrix(x, y):
@@ -591,6 +620,10 @@ class ExtractModel(nn.Module):
             vocab_i = get_range(len(self.vocab_length), 2, 1)
 
             ed_dist = f[idx_src, idx_tgt, viable_i, vocab_i]
+
+            # min_len = torch.min(idx_src, self.vocab_length)
+            # ed_dist = ed_dist / min_len
+
             ed_dist.rename_('viable', 'vocab')
 
         # Get the best spans.
@@ -608,29 +641,29 @@ class ExtractModel(nn.Module):
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
                 matched_thresh = thresh_func(matched_ed_dist, self.threshold)
                 matched_score = matched_length * matched_thresh
-                matches = MatchesLv1(ed_dist, matched_ed_dist, matched_vocab,
+                matches = MatchesLv1(ed_dist, f, matched_ed_dist, matched_vocab,
                                      matched_length, matched_thresh, matched_score)
             elif g.relaxation_level == 2:
                 thresh = thresh_func(ed_dist, self.threshold)
                 matched_thresh, matched_vocab = _soft_max(thresh, 'vocab')
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
                 matched_score = matched_length * matched_thresh
-                matches = MatchesLv2(ed_dist, thresh, matched_thresh, matched_vocab, matched_length, matched_score)
+                matches = MatchesLv2(ed_dist, f, thresh, matched_thresh, matched_vocab, matched_length, matched_score)
             elif g.relaxation_level == 3:
                 thresh = thresh_func(ed_dist, self.threshold)
                 score = self.vocab_length * thresh
                 matched_score, matched_vocab = _soft_max(score, 'vocab')
-                matches = MatchesLv3(ed_dist, thresh, score, matched_score, matched_vocab)
+                matches = MatchesLv3(ed_dist, f, thresh, score, matched_score, matched_vocab)
             else:
                 thresh = thresh_func(ed_dist, self.threshold)
                 score = self.vocab_length * thresh
-                matches = MatchesLv4(ed_dist, thresh, score)
+                matches = MatchesLv4(ed_dist, f, thresh, score)
         else:
             matched_ed_dist, matched_vocab = ed_dist.min(dim='vocab')
             matched_length = self.vocab_length.gather('vocab', matched_vocab)
             matched_thresh = thresh_func(matched_ed_dist, self.threshold)
             matched_score = matched_length * matched_thresh
-            matches = MatchesLv0(ed_dist, matched_ed_dist, matched_vocab,
+            matches = MatchesLv0(ed_dist, f, matched_ed_dist, matched_vocab,
                                  matched_length, matched_thresh, matched_score)
 
         return matches

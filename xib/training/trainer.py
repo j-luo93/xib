@@ -229,7 +229,8 @@ class ExtractTrainer(BaseTrainer):
 
         if not self.tracker.update('best_score', value=eval_metrics.score.value, threshold=0.01):
             self.tracker.update('early_stop')
-            self.lr_scheduler.step()
+            # DEBUG(j_luo)
+            # self.lr_scheduler.step()
 
     def should_terminate(self):
         return self.tracker.is_finished('early_stop')

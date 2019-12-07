@@ -157,7 +157,7 @@ class G2PLayer(nn.Module):
         for cat in Category:
             if should_include(g.feat_groups, cat):
                 predictor = self.p_predictors[cat.name]
-                label = predictor(output).log_softmax(dim=-1).exp()
+                label = predictor(output)  # .log_softmax(dim=-1).exp()  # DEBUG(j_luo)
                 ret[cat] = label
         return ret
 
@@ -175,6 +175,7 @@ class ExtractModel(nn.Module):
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
+    add_argument('ins_del_cost', default=3.5, dtype=float, msg='Unit cost for insertions and deletions.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
 
     def __init__(self, unit_vocab_size: Optional[int] = None):
@@ -330,8 +331,11 @@ class ExtractModel(nn.Module):
             dfm = batch.dense_feat_matrix
 
         if g.dense_input:
-            with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
-                adapted_dfm = self.adapter(dfm)
+            if g.input_format == 'ipa':
+                with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
+                    adapted_dfm = self.adapter(dfm)
+            else:
+                adapted_dfm = dfm
             if g.use_embedding:
                 word_repr = self.embedding(adapted_dfm, batch.source_padding)
                 unit_repr = self.embedding(self.unit_dense_feat_matrix)
@@ -493,11 +497,10 @@ class ExtractModel(nn.Module):
                 max_lt = min(ls + 2, mtl + 1)
                 for lt in range(min_lt, max_lt):
                     transitions = list()
-                    # DEBUG(j_luo) Ignore insertions/deletions for now.
                     if (ls - 1, lt) in fs:
-                        transitions.append(fs[(ls - 1, lt)] + 100)
+                        transitions.append(fs[(ls - 1, lt)] + g.ins_del_cost)
                     if (ls, lt - 1) in fs:
-                        transitions.append(fs[(ls, lt - 1)] + 100)
+                        transitions.append(fs[(ls, lt - 1)] + g.ins_del_cost)
                     if (ls - 1, lt - 1) in fs:
                         vocab_inds = self.indexed_segments[:, lt - 1]
                         sub_cost = costs[:, ls - 1, vocab_inds]
@@ -511,7 +514,7 @@ class ExtractModel(nn.Module):
         for i in range(msl + 1):
             for j in range(mtl + 1):
                 if (i, j) not in fs:
-                    fs[(i, j)] = get_zeros(ns, nt).fill_(99.9)
+                    fs[(i, j)] = get_zeros(ns, nt).fill_(9999.9)
                 f_lst.append(fs[(i, j)])
         f = torch.stack(f_lst, dim=0).view(msl + 1, mtl + 1, -1, len(self.vocab))
         f.rename_('len_w_src', 'len_w_tgt', 'viable', 'vocab')

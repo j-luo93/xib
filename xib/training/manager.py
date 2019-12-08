@@ -244,6 +244,7 @@ class ExtractManager:
         #     if g.use_dilute:
         #         self.trainer.dilute()
 
+        self.trainer.temperature = g.temperature
         while self.trainer.threshold > g.min_threshold:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
@@ -259,4 +260,13 @@ class ExtractManager:
             self.trainer.tracker.update('round')
             if g.use_dilute:
                 self.trainer.dilute()
-            break
+
+            self.trainer.temperature *= 0.5
+            self.trainer.temperature = max(0.1, self.trainer.temperature)
+            logging.imp(f'temperature is now {self.trainer.temperature:.3f}.')
+
+            # import random
+            # idx = list(range(33))
+            # random.shuffle(idx)
+            # x = self.model.g2p.unit_embedding.weight
+            # x.data.copy_(x[idx])

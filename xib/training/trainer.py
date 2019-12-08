@@ -211,6 +211,14 @@ class ExtractTrainer(BaseTrainer):
     def threshold(self, value):
         pass
 
+    @global_property
+    def temperature(self):
+        pass
+
+    @temperature.setter
+    def temperature(self, value):
+        pass
+
     def add_trackables(self):
         self.tracker.add_trackable('round', endless=True)
         self.tracker.add_trackable('total_step', total=g.num_steps)
@@ -243,7 +251,7 @@ class ExtractTrainer(BaseTrainer):
             # self.lr_scheduler.step()
 
     def should_terminate(self):
-        return self.tracker.is_finished('early_stop')
+        return self.tracker.is_finished('early_stop') or self.tracker.is_finished('total_step')
 
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
         self.model.train()

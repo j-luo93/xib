@@ -186,12 +186,22 @@ class ExtractTrainer(BaseTrainer):
         #     lp = len(p)
         #     p.data[range(lp), range(lp)] += 200.0
 
+        self.ins_del_cost = g.init_ins_del_cost
+
     # DEBUG(j_luo) dilute
     def dilute(self):
         logging.imp('Diluting the weights.')
         for p in self.model.adapter.adapters.values():
             lp = len(p)
             p.data *= 0.5
+
+    @global_property
+    def ins_del_cost(self):
+        pass
+
+    @ins_del_cost.setter
+    def ins_del_cost(self, value):
+        pass
 
     @global_property
     def threshold(self):
@@ -239,6 +249,12 @@ class ExtractTrainer(BaseTrainer):
         self.model.train()
         self.optimizer.zero_grad()
         accum_metrics = Metrics()
+        if self.tracker.total_step == 50:
+            breakpoint()  # DEBUG(j_luo)
+        # self.ins_del_cost *= 0.9
+        # self.ins_del_cost = max(self.ins_del_cost, g.min_ins_del_cost)
+        # import time; time.sleep(0.2)
+        # print(self.ins_del_cost)
         for _ in pbar(range(g.accum_gradients), desc='accum_gradients'):
             batch = dl.get_next_batch()
             ret = self.model(batch)

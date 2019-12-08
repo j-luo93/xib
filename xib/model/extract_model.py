@@ -175,7 +175,7 @@ class G2PLayer(nn.Module):
         self.unit_embedding = nn.Embedding(unit_vocab_size, 60)
 
         # DEBUG(j_luo)
-        noise = torch.rand_like(self.unit_embedding.weight) * 0.1
+        noise = torch.randn_like(self.unit_embedding.weight) * 0.1
         self.unit_embedding.weight.data.copy_(0.5 + noise)
 
         # DEBUG(j_luo)
@@ -239,7 +239,8 @@ class ExtractModel(nn.Module):
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
-    add_argument('ins_del_cost', default=3.5, dtype=float, msg='Unit cost for insertions and deletions.')
+    add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
+    add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
 
     def __init__(self, unit_vocab_size: Optional[int] = None, dataset=None):
@@ -338,6 +339,10 @@ class ExtractModel(nn.Module):
     def threshold(self):
         pass
 
+    @global_property
+    def ins_del_cost(self):
+        pass
+
     # ------------------------ Useful methods for debugging ----------------------- #
 
     def get_vector(self, c: str, adapt: bool = False):
@@ -381,7 +386,6 @@ class ExtractModel(nn.Module):
         score: after multiplication with |w|
         best_: the prefix after selecting w
         """
-        self.get_char_hamming('a', 'a')
         if g.debug:
             torch.set_printoptions(sci_mode=False, linewidth=200)
             self.eval()
@@ -541,9 +545,9 @@ class ExtractModel(nn.Module):
         # # NOTE(j_luo) Use dictionary save every state.
         fs = dict()
         for i in range(msl + 1):
-            fs[(i, 0)] = get_zeros(ns, nt).fill_(i * g.ins_del_cost)
+            fs[(i, 0)] = get_zeros(ns, nt).fill_(i * self.ins_del_cost)
         for j in range(mtl + 1):
-            fs[(0, j)] = get_zeros(ns, nt).fill_(j * g.ins_del_cost)
+            fs[(0, j)] = get_zeros(ns, nt).fill_(j * self.ins_del_cost)
 
         # Compute cosine distance all at once: for each viable span, compare it against all units.
         def _get_cosine_matrix(x, y):
@@ -588,9 +592,9 @@ class ExtractModel(nn.Module):
                 for lt in range(min_lt, max_lt):
                     transitions = list()
                     if (ls - 1, lt) in fs:
-                        transitions.append(fs[(ls - 1, lt)] + g.ins_del_cost)
+                        transitions.append(fs[(ls - 1, lt)] + self.ins_del_cost)
                     if (ls, lt - 1) in fs:
-                        transitions.append(fs[(ls, lt - 1)] + g.ins_del_cost)
+                        transitions.append(fs[(ls, lt - 1)] + self.ins_del_cost)
                     if (ls - 1, lt - 1) in fs:
                         vocab_inds = self.indexed_segments[:, lt - 1]
                         sub_cost = costs[:, ls - 1, vocab_inds]

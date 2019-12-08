@@ -1,6 +1,7 @@
 from dev_misc.arglib import g, parse_args, show_args
 from dev_misc.devlib import initiate
 from dev_misc.devlib.named_tensor import patch_named_tensors
+from dev_misc.trainlib import set_random_seeds
 from xib.cfg import reg
 from xib.training.manager import (AdaptCbowManager, AdaptLMManager,
                                   CbowManager, DecipherManager, ExtractManager,
@@ -34,5 +35,6 @@ if __name__ == "__main__":
     # IDEA(j_luo) Set random seed here?
     parse_args()
     show_args()
+    set_random_seeds(g.random_seed)
 
     train()

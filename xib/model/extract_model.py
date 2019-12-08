@@ -1,3 +1,4 @@
+from dev_misc import get_tensor
 import logging
 import math
 from dataclasses import fields
@@ -71,6 +72,7 @@ class MatchesLv4(Matches):
 class Extracted(BaseBatch):
     batch_size: int
     matches: Optional[Matches] = None
+    viable: Optional[BT] = None
     # last_end: Optional[LT] = None  # The end positions (inclusive) of the last extracted words.
     # score: Optional[FT] = None
 
@@ -244,6 +246,8 @@ class ExtractModel(nn.Module):
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
+    add_argument('uniform_scheme', dtype=str, default='none',
+                 choices=['none', 'prior', 'topk'], msg='How to use uniformly-weighted scores.')
 
     def __init__(self, unit_vocab_size: Optional[int] = None, dataset=None):
         super().__init__()
@@ -337,6 +341,7 @@ class ExtractModel(nn.Module):
                     if torch.is_tensor(v):
                         v.rename_(*attr[k].names)
 
+    # IDEA(j_luo) The current api is worse than just declaring GlobalProperty(writeable=False) outright. And doesn't give proper type hints.
     @global_property
     def threshold(self):
         pass
@@ -347,6 +352,14 @@ class ExtractModel(nn.Module):
 
     @global_property
     def temperature(self):
+        pass
+
+    @global_property
+    def uniform_prior(self):
+        pass
+
+    @global_property
+    def topk_ratio(self):
         pass
 
     # ------------------------ Useful methods for debugging ----------------------- #
@@ -403,7 +416,6 @@ class ExtractModel(nn.Module):
         """
         if g.debug:
             torch.set_printoptions(sci_mode=False, linewidth=200)
-            self.eval()
             breakpoint()
 
         # DEBUG(j_luo)
@@ -468,12 +480,53 @@ class ExtractModel(nn.Module):
             # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
             end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
             best_matched_vocab = best_span_ind % vs
+
+            # DEBUG(j_luo)
+            if g.uniform_scheme in ['prior', 'topk']:
+                flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+                if g.uniform_scheme == 'prior':
+                    flat_viable = flat_viable & (flat_score > -50)  # DEBUG(j_luo)
+                    summed_score = (flat_viable * flat_score).sum(dim='cand')
+                    summed_weight = flat_viable.sum(dim='cand')
+                    uniform_matched_score = summed_score / summed_weight
+                    best_matched_score = self.uniform_prior * uniform_matched_score + \
+                        (1.0 - self.uniform_prior) * best_matched_score
+                else:
+                    # This is the upper boundary of k.
+                    k = int(flat_viable.sum('cand').max() * self.topk_ratio)
+                    k = max(1, k)
+                    # k = 20  # DEBUG(j_luo)
+                    # Get the top k candidates.
+                    flat_viable_score = flat_score + (-99999.9) * (~flat_viable).float()
+                    top_score, top_ind = torch.topk(flat_viable_score, k, 'cand')
+                    # Each batch has a different k.
+                    batch_k = torch.min(get_tensor([k]).long(), flat_viable.sum('cand'))
+                    # Get the actual top indices for each batch
+                    batch_k_mask = get_length_mask(batch_k, k)
+                    summed_score = (batch_k_mask * top_score).sum('cand')
+                    best_matched_score = summed_score / batch_k
         else:
             flat_matched_score = matches.matched_score.flatten(['len_s', 'len_e'], 'cand')
             if self.training and g.relaxation_level in [1, 2, 3]:
                 best_matched_score, best_span_ind = _soft_max(flat_matched_score, 'cand', self.temperature)
                 # DEBUG(j_luo)
-                # best_matched_score = flat_matched_score[:, 0] + flat_matched_score[:, 7]
+                if g.uniform_scheme in ['prior', 'topk']:
+                    flat_viable = new_extracted.viable.flatten(['len_s', 'len_e'], 'cand')
+                    if g.uniform_scheme == 'prior':
+                        flat_viable = flat_viable & (flat_matched_score > -50)  # DEBUG(j_luo)
+                        summed_score = (flat_viable * flat_matched_score).sum(dim='cand')
+                        summed_weight = flat_viable.sum(dim='cand')
+                        uniform_matched_score = summed_score / summed_weight
+                        best_matched_score = self.uniform_prior * uniform_matched_score + \
+                            (1.0 - self.uniform_prior) * best_matched_score
+                    else:
+                        assert False, 'not updated'  # FIXME(j_luo)
+                        k = int(flat_viable.size('cand') * self.topk_ratio)
+                        k = max(1, k)
+                        flat_viable_matched_score = flat_viable * flat_matched_score
+                        top_score, top_ind = torch.topk(flat_viable_matched_score, k, 'cand')
+                        summed_score = top_score.sum('cand')
+                        uniform_matched_score = summed_score / k
             else:
                 best_matched_score, best_span_ind = flat_matched_score.max(dim='cand')
             start = best_span_ind // len_e
@@ -549,7 +602,7 @@ class ExtractModel(nn.Module):
             restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
             setattr(matches, fname, restored)
 
-        new_extracted = Extracted(batch.batch_size, matches)
+        new_extracted = Extracted(batch.batch_size, matches, viable)
         return new_extracted
 
     def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT) -> Matches:
@@ -635,8 +688,6 @@ class ExtractModel(nn.Module):
         # ls_idx, lt_idx = zip(*fs.keys())
 
         # Get the values wanted.
-        if g.debug:
-            breakpoint()  # DEBUG(j_luo) debug mode
         with NoName(f, viable_lens, self.vocab_length):
             idx_src = viable_lens.unsqueeze(dim=-1)
             idx_tgt = self.vocab_length

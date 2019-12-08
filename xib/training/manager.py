@@ -1,4 +1,3 @@
-from torch.optim.lr_scheduler import CyclicLR
 import logging
 import os
 import random
@@ -6,6 +5,7 @@ import random
 import torch
 import torch.nn as nn
 from torch.optim import SGD, Adagrad, Adam
+from torch.optim.lr_scheduler import CyclicLR
 
 from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
@@ -245,6 +245,8 @@ class ExtractManager:
         #         self.trainer.dilute()
 
         self.trainer.temperature = g.temperature
+        self.trainer.uniform_prior = 1.0
+        self.trainer.topk_ratio = 1.0
         while self.trainer.threshold > g.min_threshold:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
@@ -261,12 +263,24 @@ class ExtractManager:
             if g.use_dilute:
                 self.trainer.dilute()
 
-            self.trainer.temperature *= 0.5
-            self.trainer.temperature = max(0.1, self.trainer.temperature)
-            logging.imp(f'temperature is now {self.trainer.temperature:.3f}.')
+            # DEBUG(j_luo)
+            # self.trainer.temperature *= 0.5
+            # self.trainer.temperature = max(0.1, self.trainer.temperature)
+            # logging.imp(f'temperature is now {self.trainer.temperature:.3f}.')
 
+            # DEBUG(j_luo)
             # import random
             # idx = list(range(33))
             # random.shuffle(idx)
             # x = self.model.g2p.unit_embedding.weight
             # x.data.copy_(x[idx])
+
+            # # DEBUG(j_luo)
+            if g.uniform_scheme == 'prior':
+                self.trainer.uniform_prior *= 0.9
+                self.trainer.uniform_prior = max(0.1, self.trainer.uniform_prior)
+                logging.imp(f'uniform_prior is now {self.trainer.uniform_prior:.3f}.')
+            elif g.uniform_scheme == 'topk':
+                self.trainer.topk_ratio *= g.anneal_factor
+                self.trainer.topk_ratio = max(0.0, self.trainer.topk_ratio)
+                logging.imp(f'topk_ratio is now {self.trainer.topk_ratio:.3f}.')

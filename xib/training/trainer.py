@@ -204,6 +204,22 @@ class ExtractTrainer(BaseTrainer):
         pass
 
     @global_property
+    def topk_ratio(self):
+        pass
+
+    @topk_ratio.setter
+    def topk_ratio(self, value):
+        pass
+
+    @global_property
+    def uniform_prior(self):
+        pass
+
+    @uniform_prior.setter
+    def uniform_prior(self, value):
+        pass
+
+    @global_property
     def threshold(self):
         pass
 
@@ -257,8 +273,6 @@ class ExtractTrainer(BaseTrainer):
         self.model.train()
         self.optimizer.zero_grad()
         accum_metrics = Metrics()
-        if self.tracker.total_step == 50:
-            breakpoint()  # DEBUG(j_luo)
         # self.ins_del_cost *= 0.9
         # self.ins_del_cost = max(self.ins_del_cost, g.min_ins_del_cost)
         # import time; time.sleep(0.2)

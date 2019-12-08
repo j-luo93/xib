@@ -173,6 +173,9 @@ class BaseIpaDataLoader(BaseDataLoader, metaclass=ABCMeta):
     def __iter__(self):
         for collate_return in super().__iter__():
             batch = self._prepare_batch(collate_return)
+            # DEBUG(j_luo)
+            if all('s-o-m-o-s' not in x for x in list(map(str, batch.segments))):
+                continue
             yield batch.cuda()
 
 

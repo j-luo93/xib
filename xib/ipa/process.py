@@ -292,7 +292,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
 
     @property
     def gold_tag_seq(self) -> LT:
-        if self.is_noise or len(self) < g.min_word_length:
+        if self.is_noise or len(self) < g.min_word_length or len(self) > g.max_word_length:
             return torch.LongTensor([O] * len(self))
         else:
             return torch.LongTensor([B] + [I] * (len(self) - 1))
@@ -356,7 +356,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
         return ret
 
     def to_span(self) -> Optional[Span]:
-        if not self.is_noise and len(self) >= g.min_word_length:
+        if not self.is_noise and len(self) >= g.min_word_length and len(self) <= g.max_word_length:
             span = Span(str(self), 0, len(self) - 1)
             return span
 

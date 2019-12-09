@@ -247,6 +247,7 @@ class ExtractManager:
         self.trainer.temperature = g.temperature
         self.trainer.uniform_prior = 1.0
         self.trainer.topk_ratio = 1.0
+        self.trainer.inverse_ratio = 0.0
         while self.trainer.threshold > g.min_threshold:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
@@ -268,7 +269,7 @@ class ExtractManager:
             # self.trainer.temperature = max(0.1, self.trainer.temperature)
             # logging.imp(f'temperature is now {self.trainer.temperature:.3f}.')
 
-            # DEBUG(j_luo)
+            # # DEBUG(j_luo)
             # import random
             # idx = list(range(33))
             # random.shuffle(idx)
@@ -276,11 +277,24 @@ class ExtractManager:
             # x.data.copy_(x[idx])
 
             # # DEBUG(j_luo)
-            if g.uniform_scheme == 'prior':
-                self.trainer.uniform_prior *= 0.9
-                self.trainer.uniform_prior = max(0.1, self.trainer.uniform_prior)
-                logging.imp(f'uniform_prior is now {self.trainer.uniform_prior:.3f}.')
-            elif g.uniform_scheme == 'topk':
-                self.trainer.topk_ratio *= g.anneal_factor
-                self.trainer.topk_ratio = max(0.0, self.trainer.topk_ratio)
-                logging.imp(f'topk_ratio is now {self.trainer.topk_ratio:.3f}.')
+            import random
+            logging.warning('shuffling c_manner')
+            idx = list(range(22, 43))
+            random.shuffle(idx)
+            x = self.model.g2p.unit_embedding.weight
+            x.data[:, list(range(22, 43))].copy_(x[:, idx])
+
+            # # # DEBUG(j_luo)
+            # if g.uniform_scheme == 'prior':
+            #     self.trainer.uniform_prior *= 0.9
+            #     self.trainer.uniform_prior = max(0.1, self.trainer.uniform_prior)
+            #     logging.imp(f'uniform_prior is now {self.trainer.uniform_prior:.3f}.')
+            # elif g.uniform_scheme == 'topk':
+            #     self.trainer.topk_ratio *= g.anneal_factor
+            #     self.trainer.topk_ratio = max(0.0, self.trainer.topk_ratio)
+            #     logging.imp(f'topk_ratio is now {self.trainer.topk_ratio:.3f}.')
+
+            # # DEBUG(j_luo)
+            # self.trainer.inverse_ratio += 0.1
+            # self.trainer.inverse_ratio = min(0.5, self.trainer.inverse_ratio)
+            # logging.imp(f'inverse_ratio is now {self.trainer.inverse_ratio:.3f}.')

@@ -1,7 +1,7 @@
 import logging
 import math
 from dataclasses import fields
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -15,7 +15,7 @@ from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
 from dev_misc.utils import WithholdKeys, global_property
 from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
                              convert_to_dense)
-from xib.ipa import Category, get_enum_by_cat, should_include
+from xib.ipa import Category, Index, get_enum_by_cat, should_include
 from xib.ipa.process import Segment, SegmentWindow
 from xib.model.modules import AdaptLayer, FeatEmbedding
 
@@ -72,6 +72,7 @@ class Extracted(BaseBatch):
     batch_size: int
     matches: Optional[Matches] = None
     viable: Optional[BT] = None
+    inverse_unit_costs: Optional[FT] = None
     # last_end: Optional[LT] = None  # The end positions (inclusive) of the last extracted words.
     # score: Optional[FT] = None
 
@@ -150,6 +151,8 @@ def _restore_shape(tensor, bi, lsi, lei, viable, value: Optional[float] = None):
 class G2PLayer(nn.Module):
 
     add_argument('g2p_window_size', default=3, dtype=int, msg='Window size for g2p layer.')
+    # DEBUG(j_luo)
+    add_argument('oracle', default=False, dtype=bool)
 
     def __init__(self, unit_vocab_size: int, dataset):  # FIXME(j_luo) remove dataset
         super().__init__()
@@ -157,32 +160,36 @@ class G2PLayer(nn.Module):
         self.dataset = dataset
 
         # # DEBUG(j_luo)
-        # logging.warn('Hacking it right now.')
-        # units = torch.cat([Segment(u).feat_matrix for u in dataset.id2unit], dim=0)
+        if g.oracle:
+            logging.warn('Hacking it right now.')
+            units = torch.cat([Segment(u).feat_matrix for u in dataset.id2unit], dim=0)
+            xx = list()
+            for unit in units:
+                x = list()
+                for u, cat in zip(unit[:7], Category):
+                    if cat.name[0] in ['P', 'C', 'V']:
+                        e = get_enum_by_cat(cat)
+                        f_idx = Index.get_feature(int(u)).value.f_idx
+                        x.extend([0] * (f_idx) + [1] + [0] * (len(e) - f_idx - 1))
+                assert len(x) == 60
+                xx.append(x)
+            units = torch.LongTensor(xx)
+            self.unit_embedding = nn.Embedding(unit_vocab_size, 60)  # Vg.dim)
+            self.unit_embedding.weight.data.copy_(units * 10)
+            # self.unit_embedding = nn.Embedding(unit_vocab_size, 60)
 
-        # from xib.ipa import Index, get_enum_by_cat, Category
-        # xx = list()
-        # for unit in units:
-        #     x = list()
-        #     for u, cat in zip(unit[:7], Category):
-        #         if cat.name[0] in ['P', 'C', 'V']:
-        #             e = get_enum_by_cat(cat)
-        #             f_idx = Index.get_feature(int(u)).value.f_idx
-        #             x.extend([0] * (f_idx) + [1] + [0] * (len(e) - f_idx - 1))
-        #     assert len(x) == 60
-        #     xx.append(x)
-        # units = torch.LongTensor(xx)
+            # # DEBUG(j_luo)
+            # noise = torch.randn_like(self.unit_embedding.weight) * 0.1
+            # self.unit_embedding.weight.data.copy_(0.5 + noise)
 
-        # self.unit_embedding = nn.Embedding(unit_vocab_size, 60)  # Vg.dim)
-        # self.unit_embedding.weight.data.copy_(units)
-        # self.unit_embedding = nn.Embedding(unit_vocab_size, 60)
+            # DEBUG(j_luo)
+            # self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
+            # self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
 
-        # # DEBUG(j_luo)
-        # noise = torch.randn_like(self.unit_embedding.weight) * 0.1
-        # self.unit_embedding.weight.data.copy_(0.5 + noise)
-
-        # DEBUG(j_luo)
-        self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
+            # DEBUG(j_luo)
+        else:
+            self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
+            nn.init.uniform_(self.unit_embedding.weight, 0.4, 0.6)
         self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
 
         module_dict = dict()
@@ -190,11 +197,20 @@ class G2PLayer(nn.Module):
             if should_include(g.feat_groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
+                # DEBUG(j_luo)
+                # module_dict[cat.name] = nn.Linear(g.dim, nf)
                 module_dict[cat.name] = nn.Linear(g.dim, nf)
         self.p_predictors = nn.ModuleDict(module_dict)
 
-    def forward(self, unit_id_seqs: LT) -> Dict[Category, FT]:
+        # DEBUG(j_luo)
+        self.aligner = nn.Linear(g.dim, 60)
+
+    def forward(self, unit_id_seqs: LT) -> Tuple[Dict[Category, FT], FT]:
         unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
+        # DEBUG(j_luo)
+        aligned_unit_emb = unit_embeddings
+        # unit_embeddings = nn.functional.dropout(unit_embeddings, p=g.dropout)
+        # aligned_unit_emb = self.aligner(unit_embeddings).rename(..., 'unit_emb')
 
         # # DEBUG(j_luo)
         # return nn.functional.dropout(unit_embeddings, p=g.dropout)
@@ -218,13 +234,17 @@ class G2PLayer(nn.Module):
             output = self.conv(unit_embeddings).rename('batch', 'unit_conv_repr', 'length')
         output = output.align_to(..., 'unit_conv_repr')
 
+        # DEBUG(j_luo)
+        output = nn.functional.dropout(output, g.dropout)
+
         ret = dict()
         for cat in Category:
             if should_include(g.feat_groups, cat):
                 predictor = self.p_predictors[cat.name]
                 label = predictor(output)  # .log_softmax(dim=-1).exp()  # DEBUG(j_luo)
                 ret[cat] = label
-        return ret
+
+        return ret, aligned_unit_emb
 
 
 class ExtractModel(nn.Module):
@@ -239,6 +259,7 @@ class ExtractModel(nn.Module):
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
     add_argument('use_probs', default=True, dtype=bool, msg='Flag to use probabilities instead of distances.')
+    add_argument('use_residual', default=True, dtype=bool, msg='Flag to use residual.')
     add_argument('dist_func', default='hamming', dtype=str,
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
@@ -414,10 +435,6 @@ class ExtractModel(nn.Module):
         score: after multiplication with |w|
         best_: the prefix after selecting w
         """
-        if g.debug:
-            torch.set_printoptions(sci_mode=False, linewidth=200)
-            breakpoint()
-
         # DEBUG(j_luo)
         # Prepare representations.
         # If input_format is 'text', then we need to use g2p to induce ipa first.
@@ -435,7 +452,7 @@ class ExtractModel(nn.Module):
         # Prepare representations.
         # If input_format is 'text', then we need to use g2p to induce ipa first.
         if g.input_format == 'text':
-            dfm = self.g2p(batch.unit_id_seqs)
+            dfm, unit_emb = self.g2p(batch.unit_id_seqs)
         else:
             dfm = batch.dense_feat_matrix
 
@@ -455,6 +472,9 @@ class ExtractModel(nn.Module):
                     word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
                     unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
                 word_repr.rename_('batch', 'length', 'char_emb')
+                # DEBUG(j_luo)
+                if g.use_residual:
+                    word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
                 unit_repr.rename_('batch', 'length', 'char_emb')
         else:
             with Rename(self.unit_feat_matrix, unit='batch'):
@@ -488,7 +508,11 @@ class ExtractModel(nn.Module):
                 viable_count = flat_viable.sum('cand').float()
                 # combined_logits = (1.0 / viable_count + 1e-8).log().align_as(flat_score) + flat_score
                 # best_matched_score = combined_logits.logsumexp(dim='cand').exp()
+
                 best_matched_score = flat_score.logsumexp(dim='cand').exp()
+                # best_matched_score = flat_score.logsumexp(dim='cand')
+                # DEBUG(j_luo)
+                # best_matched_score = flat_score.max(dim='cand')[0].exp()
                 ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
 
             # DEBUG(j_luo)
@@ -546,11 +570,19 @@ class ExtractModel(nn.Module):
             flat_matched_vocab = matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
             best_matched_vocab = flat_matched_vocab.gather('cand', best_span_ind)
 
+        if g.debug:
+            torch.set_printoptions(sci_mode=False, linewidth=200)
+            breakpoint()
+
         # DEBUG(j_luo)
         ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
         # ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, adapted_dfm)
 
         return ret
+
+    @global_property
+    def inverse_ratio(self):
+        pass
 
     def _extract_one_span(self, batch: ExtractBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
         # Propose all span start/end positions.
@@ -586,12 +618,19 @@ class ExtractModel(nn.Module):
         word_pos = nh.flatten(word_pos, ['viable', 'len_w'], 'viable_X_len_w')
         viable_bi = nh.flatten(viable_bi, ['viable', 'len_w'], 'viable_X_len_w')
         word_repr = word_repr.align_to('batch', 'length', 'char_emb')
-        with NoName(word_repr, viable_bi, word_pos):
+        with NoName(word_repr, viable_bi, word_pos, batch.unit_id_seqs):
             extracted_word_repr = word_repr[viable_bi, word_pos].rename('viable_X_len_w', 'char_emb')
+            extracted_unit_ids = batch.unit_id_seqs[viable_bi, word_pos].rename('viable_X_len_w')
         extracted_word_repr = nh.unflatten(extracted_word_repr, 'viable_X_len_w', ['viable', 'len_w'])
 
+        # DEBUG(j_luo)
+        unit_counts = get_zeros(extracted_unit_ids.max().item() + 1).rename('extracted_unit')
+        with NoName(extracted_unit_ids, unit_counts):
+            unit_counts.scatter_add_(0, extracted_unit_ids, torch.full_like(extracted_unit_ids, 1).float())
+
         # Main body: Run DP to find the best matches.
-        matches = self._get_matches(extracted_word_repr, unit_repr, viable_lens)
+        matches, inverse_unit_costs = self._get_matches(
+            extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids, unit_counts)
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
@@ -609,18 +648,20 @@ class ExtractModel(nn.Module):
                     value = -99999.9
                 elif 'ed_dist' in fname:
                     value = 99999.9
+                    if g.use_probs:
+                        value = -value
                 # DEBUG(j_luo)
                 # NOTE(j_luo) Reverse signs if g.use_probs is True
                 # if g.use_probs:
                 #     value = -value
                 # value = -999.9 if 'score' in fname or 'ed_dist' in fname else None
                 restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
-            setattr(matches, fname, restored)
+                setattr(matches, fname, restored)
 
-        new_extracted = Extracted(batch.batch_size, matches, viable)
+        new_extracted = Extracted(batch.batch_size, matches, viable, inverse_unit_costs)
         return new_extracted
 
-    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT) -> Matches:
+    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT, extracted_unit_ids: LT, unit_counts: FT) -> Tuple[Matches, FT]:
         d_char = extracted_word_repr.size('char_emb')
         ns = extracted_word_repr.size('viable')
         nt = len(self.vocab_feat_matrix)
@@ -658,11 +699,48 @@ class ExtractModel(nn.Module):
             dist_func = _get_hamming_matrix
         else:
             dist_func = _get_sos_matrix
+        # DEBUG(j_luo)
+        # from IPython import embed; embed()
         costs = dist_func(_extracted_word_repr, unit_repr)
+
+        # # DEBUG(j_luo) This is wrong
+        # partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(..., 'unit').expand(-1, costs.size('unit'))
+        # with NoName(partial_counts, extracted_unit_ids, costs):
+        #     # NOTE(j_luo) There seems to be a bug with the in-place `scatter_add_`.
+        #     _partial_counts = partial_counts.scatter_add(
+        #         0, extracted_unit_ids.unsqueeze(dim=-1).expand_as(costs), costs)
+        # partial_counts = _partial_counts.rename(*partial_counts.names)
+        # wi2vi_logits = partial_counts / (1e-8 + unit_counts.align_as(partial_counts))
+        # inverse_unit_costs = wi2vi_logits.log_softmax('extracted_unit')
+        # with NoName(inverse_unit_costs, extracted_unit_ids):
+        #     inverse_costs = inverse_unit_costs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+
         ins_del_cost = self.ins_del_cost
         if g.use_probs:
-            costs = (-costs).log_softmax(dim='unit')
+            costs = costs.log_softmax(dim='unit')
             ins_del_cost = -ins_del_cost
+
+        # DEBUG(j_luo)
+        partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(..., 'unit').expand(-1, costs.size('unit'))
+        with NoName(partial_counts, extracted_unit_ids, costs):
+            # NOTE(j_luo) There seems to be a bug with the in-place `scatter_add_`.
+            _partial_counts = partial_counts.scatter_add(
+                0, extracted_unit_ids.unsqueeze(dim=-1).expand_as(costs), costs)
+        partial_counts = _partial_counts.rename(*partial_counts.names)
+        wi2vi_logits = partial_counts / (1e-8 + unit_counts.align_as(partial_counts))
+        log_p_v_g_w = wi2vi_logits.log_softmax('unit')
+        log_p_w = (unit_counts / (1e-8 + unit_counts.sum()) + 1e-8).log().align_as(log_p_v_g_w)
+        log_p_v = (log_p_w + log_p_v_g_w).logsumexp('extracted_unit', keepdim=True)
+        inverse_unit_costs = log_p_w_g_v = log_p_v_g_w + log_p_w - log_p_v + (-9999.9) * (wi2vi_logits < -9999)
+        with NoName(inverse_unit_costs, extracted_unit_ids):
+            inverse_costs = inverse_unit_costs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+
+        # # DEBUG(j_luo)
+        # costs = (1.0 - self.inverse_ratio) * costs + self.inverse_ratio * inverse_costs
+
+        # DEBUG(j_luo)
+        _tmp = 0.0
+        costs = (1.0 - _tmp) * costs + _tmp * inverse_costs
 
         # Name: viable x len_w x unit
         costs = nh.unflatten(costs, 'viable_X_len_w', ['viable', 'len_w'])
@@ -704,6 +782,7 @@ class ExtractModel(nn.Module):
 
         f_lst = list()
         value = -9999.9 if g.use_probs else 9999.9
+        # value = 9999.9
         for i in range(msl + 1):
             for j in range(mtl + 1):
                 if (i, j) not in fs:
@@ -737,9 +816,16 @@ class ExtractModel(nn.Module):
         else:
             thresh_func = _exp_linear_threshold
         if g.use_probs:
+            # DEBUG(j_luo)
+            # thresh = (ed_dist / 5.0).exp()
             thresh = None
+            # logging.warning('not weighted by length.')
+            # score = self.vocab_length.float().log() + ed_dist
+            # score = ed_dist
+
             score = self.vocab_length.float().log() + ed_dist
-            matches = MatchesLv4(ed_dist, f, None, score)
+            # score = ed_dist
+            matches = MatchesLv4(ed_dist, f, thresh, score)
 
         elif self.training:
             if g.relaxation_level == 1:
@@ -772,4 +858,4 @@ class ExtractModel(nn.Module):
             matches = MatchesLv0(ed_dist, f, matched_ed_dist, matched_vocab,
                                  matched_length, matched_thresh, matched_score)
 
-        return matches
+        return matches, inverse_unit_costs

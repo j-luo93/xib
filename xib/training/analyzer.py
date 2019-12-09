@@ -188,4 +188,8 @@ class ExtractAnalyzer:
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
         metrics += Metric('score', model_ret.best_matched_score.sum(), batch.batch_size)
+
+        iuc = model_ret.extracted.inverse_unit_costs
+        entropy = -(iuc * iuc.exp()).sum()
+        metrics += Metric('entropy', entropy, batch.batch_size)
         return metrics

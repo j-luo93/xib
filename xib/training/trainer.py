@@ -269,6 +269,8 @@ class ExtractTrainer(BaseTrainer):
     def should_terminate(self):
         return self.tracker.is_finished('early_stop') or self.tracker.is_finished('total_step')
 
+    add_argument('entropy_hyper', default=0.0, dtype=float)
+
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
@@ -289,9 +291,10 @@ class ExtractTrainer(BaseTrainer):
             # sparsity = Metric('sparsity', sparsity, batch.batch_size)
             # metrics += sparsity
 
-            # loss = -metrics.score.mean + sparsity.mean * 0.01
+            # DEBUG(j_luo)
+            loss = -metrics.score.mean + metrics.entropy.mean * g.entropy_hyper
 
-            loss = -metrics.score.mean
+            # loss = -metrics.score.mean
             (loss / g.accum_gradients).backward()
 
             # (-metrics.score.mean / g.accum_gradients).backward()
@@ -310,3 +313,11 @@ class ExtractTrainer(BaseTrainer):
         accum_metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
 
         return accum_metrics
+
+    @global_property
+    def inverse_ratio(self):
+        pass
+
+    @inverse_ratio.setter
+    def inverse_ratio(self, value):
+        pass

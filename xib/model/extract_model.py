@@ -1,4 +1,3 @@
-from dev_misc import get_tensor
 import logging
 import math
 from dataclasses import fields
@@ -8,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dev_misc import BT, FT, LT, add_argument, g, get_zeros
+from dev_misc import BT, FT, LT, add_argument, g, get_tensor, get_zeros
 from dev_misc.devlib import (BaseBatch, batch_class, get_array,
                              get_length_mask, get_range)
 from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
@@ -239,6 +238,7 @@ class ExtractModel(nn.Module):
                  choices=['soft', 'linear', 'exp', 'exp_linear'], msg='Threshold function to use.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
+    add_argument('use_probs', default=True, dtype=bool, msg='Flag to use probabilities instead of distances.')
     add_argument('dist_func', default='hamming', dtype=str,
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
@@ -472,17 +472,27 @@ class ExtractModel(nn.Module):
         vs = len(self.vocab)
 
         # Get the best score and span.
-        # Only lv4 needs special treatment.
-        if self.training and g.relaxation_level == 4:
+        if g.use_probs or (self.training and g.relaxation_level == 4):  # Only lv4 needs special treatment.
             flat_score = matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
+            # # NOTE(j_luo) Use min if g.use_probs is True.
+            # _soft_func = _soft_min if g.use_probs else _soft_max
             best_matched_score, best_span_ind = _soft_max(flat_score, 'cand', self.temperature)
             start = best_span_ind // (len_e * vs)
             # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
             end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
             best_matched_vocab = best_span_ind % vs
 
+            if g.use_probs:
+                flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+                # flat_viable_score = flat_score + (-99999.9) * (~flat_viable).float()
+                viable_count = flat_viable.sum('cand').float()
+                # combined_logits = (1.0 / viable_count + 1e-8).log().align_as(flat_score) + flat_score
+                # best_matched_score = combined_logits.logsumexp(dim='cand').exp()
+                best_matched_score = flat_score.logsumexp(dim='cand').exp()
+                ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
+
             # DEBUG(j_luo)
-            if g.uniform_scheme in ['prior', 'topk']:
+            elif g.uniform_scheme in ['prior', 'topk']:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
                 if g.uniform_scheme == 'prior':
                     flat_viable = flat_viable & (flat_score > -50)  # DEBUG(j_luo)
@@ -593,13 +603,18 @@ class ExtractModel(nn.Module):
                 continue
 
             attr = getattr(matches, fname)
-            value = None
-            if 'score' in fname or 'thresh' in fname:
-                value = -99999.9
-            elif 'ed_dist' in fname:
-                value = 99999.9
-            # value = -999.9 if 'score' in fname or 'ed_dist' in fname else None
-            restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
+            if attr is not None:
+                value = None
+                if 'score' in fname or 'thresh' in fname:
+                    value = -99999.9
+                elif 'ed_dist' in fname:
+                    value = 99999.9
+                # DEBUG(j_luo)
+                # NOTE(j_luo) Reverse signs if g.use_probs is True
+                # if g.use_probs:
+                #     value = -value
+                # value = -999.9 if 'score' in fname or 'ed_dist' in fname else None
+                restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
             setattr(matches, fname, restored)
 
         new_extracted = Extracted(batch.batch_size, matches, viable)
@@ -612,17 +627,8 @@ class ExtractModel(nn.Module):
         msl = extracted_word_repr.size('len_w')
         mtl = self.vocab_feat_matrix.size('length')
 
-        # # NOTE(j_luo) Use dictionary save every state.
-        fs = dict()
-        for i in range(msl + 1):
-            fs[(i, 0)] = get_zeros(ns, nt).fill_(i * self.ins_del_cost)
-        for j in range(mtl + 1):
-            fs[(0, j)] = get_zeros(ns, nt).fill_(j * self.ins_del_cost)
-        # # DEBUG(j_luo)
-        # fs[(0, 1)] = get_zeros(ns, nt)
-        # fs[(1, 0)] = get_zeros(ns, nt)
-
         # Compute cosine distance all at once: for each viable span, compare it against all units.
+
         def _get_cosine_matrix(x, y):
             dot = x @ y.t()
             with NoName(x, y):
@@ -644,16 +650,32 @@ class ExtractModel(nn.Module):
 
         nh = NameHelper()
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
-        if g.dist_func == 'cos':
+        if g.use_probs:
+            dist_func = lambda x, y: x @ y.t()
+        elif g.dist_func == 'cos':
             dist_func = _get_cosine_matrix
         elif g.dist_func == 'hamming':
             dist_func = _get_hamming_matrix
         else:
             dist_func = _get_sos_matrix
         costs = dist_func(_extracted_word_repr, unit_repr)
+        ins_del_cost = self.ins_del_cost
+        if g.use_probs:
+            costs = (-costs).log_softmax(dim='unit')
+            ins_del_cost = -ins_del_cost
 
         # Name: viable x len_w x unit
         costs = nh.unflatten(costs, 'viable_X_len_w', ['viable', 'len_w'])
+
+        # # NOTE(j_luo) Use dictionary save every state.
+        fs = dict()
+        for i in range(msl + 1):
+            fs[(i, 0)] = get_zeros(ns, nt).fill_(i * ins_del_cost)
+        for j in range(mtl + 1):
+            fs[(0, j)] = get_zeros(ns, nt).fill_(j * ins_del_cost)
+        # # DEBUG(j_luo)
+        # fs[(0, 1)] = get_zeros(ns, nt)
+        # fs[(1, 0)] = get_zeros(ns, nt)
 
         # ------------------------ Main body: DP ----------------------- #
 
@@ -665,23 +687,27 @@ class ExtractModel(nn.Module):
                 for lt in range(min_lt, max_lt):
                     transitions = list()
                     if (ls - 1, lt) in fs:
-                        transitions.append(fs[(ls - 1, lt)] + self.ins_del_cost)
+                        transitions.append(fs[(ls - 1, lt)] + ins_del_cost)
                     if (ls, lt - 1) in fs:
-                        transitions.append(fs[(ls, lt - 1)] + self.ins_del_cost)
+                        transitions.append(fs[(ls, lt - 1)] + ins_del_cost)
                     if (ls - 1, lt - 1) in fs:
                         vocab_inds = self.indexed_segments[:, lt - 1]
                         sub_cost = costs[:, ls - 1, vocab_inds]
                         transitions.append(fs[(ls - 1, lt - 1)] + sub_cost)
                     if transitions:
                         all_s = torch.stack(transitions, dim=-1)
-                        new_s, _ = all_s.min(dim=-1)
+                        if g.use_probs:
+                            new_s, _ = all_s.max(dim=-1)
+                        else:
+                            new_s, _ = all_s.min(dim=-1)
                         fs[(ls, lt)] = new_s
 
         f_lst = list()
+        value = -9999.9 if g.use_probs else 9999.9
         for i in range(msl + 1):
             for j in range(mtl + 1):
                 if (i, j) not in fs:
-                    fs[(i, j)] = get_zeros(ns, nt).fill_(9999.9)
+                    fs[(i, j)] = get_zeros(ns, nt).fill_(value)
                 f_lst.append(fs[(i, j)])
         f = torch.stack(f_lst, dim=0).view(msl + 1, mtl + 1, -1, len(self.vocab))
         f.rename_('len_w_src', 'len_w_tgt', 'viable', 'vocab')
@@ -710,12 +736,14 @@ class ExtractModel(nn.Module):
             thresh_func = _exp_threshold
         else:
             thresh_func = _exp_linear_threshold
-        if self.training and g.relaxation_level > 0:
+        if g.use_probs:
+            thresh = None
+            score = self.vocab_length.float().log() + ed_dist
+            matches = MatchesLv4(ed_dist, f, None, score)
+
+        elif self.training:
             if g.relaxation_level == 1:
                 matched_ed_dist, matched_vocab = _soft_min(ed_dist, 'vocab', self.temperature)
-                # DEBUG(j_luo)
-                # matched_ed_dist = ed_dist.sum(dim='vocab')
-
                 matched_length = self.vocab_length.gather('vocab', matched_vocab)
                 matched_thresh = thresh_func(matched_ed_dist, self.threshold)
                 matched_score = matched_length * matched_thresh

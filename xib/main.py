@@ -1,3 +1,5 @@
+import torch
+
 from dev_misc.arglib import g, parse_args, show_args
 from dev_misc.devlib import initiate
 from dev_misc.devlib.named_tensor import patch_named_tensors
@@ -36,5 +38,6 @@ if __name__ == "__main__":
     parse_args()
     show_args()
     set_random_seeds(g.random_seed)
+    torch.set_printoptions(sci_mode=False)
 
     train()

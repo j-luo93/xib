@@ -420,6 +420,12 @@ class ExtractModel(nn.Module):
         v2 = self.get_vector(c2)
         return (v1 - v2).abs().sum()
 
+    def get_one_hot_unit_repr(self):
+        with NoName(*self.unit_dense_feat_matrix.values()):
+            unit_repr = torch.cat([self.unit_dense_feat_matrix[name]
+                                   for name in Category if should_include(g.feat_groups, name)], dim=-1)
+        return unit_repr.rename_('batch', 'length', 'char_emb').squeeze('length')
+
     def forward(self, batch: ExtractBatch) -> ExtractModelReturn:
         """
         There are four ways of relaxing the original hard objective.
@@ -491,6 +497,10 @@ class ExtractModel(nn.Module):
         len_e = matches.ed_dist.size('len_e')
         vs = len(self.vocab)
 
+        # # DEBUG(j_luo)
+        # inverse_new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr, inverse=True)
+        # inverse_matches = inverse_new_extracted.matches
+
         # Get the best score and span.
         if g.use_probs or (self.training and g.relaxation_level == 4):  # Only lv4 needs special treatment.
             flat_score = matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
@@ -505,11 +515,18 @@ class ExtractModel(nn.Module):
             if g.use_probs:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
                 # flat_viable_score = flat_score + (-99999.9) * (~flat_viable).float()
-                viable_count = flat_viable.sum('cand').float()
+                # viable_count = flat_viable.sum('cand').float()
+
                 # combined_logits = (1.0 / viable_count + 1e-8).log().align_as(flat_score) + flat_score
                 # best_matched_score = combined_logits.logsumexp(dim='cand').exp()
 
                 best_matched_score = flat_score.logsumexp(dim='cand').exp()
+
+                # # DEBUG(j_luo)
+                # inverse_flat_score = inverse_matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
+                # inverse_best_matched_score = inverse_flat_score.logsumexp(dim='cand').exp()
+
+                # best_matched_score = 0.9 * best_matched_score + 0.1 * inverse_best_matched_score
                 # best_matched_score = flat_score.logsumexp(dim='cand')
                 # DEBUG(j_luo)
                 # best_matched_score = flat_score.max(dim='cand')[0].exp()
@@ -584,7 +601,7 @@ class ExtractModel(nn.Module):
     def inverse_ratio(self):
         pass
 
-    def _extract_one_span(self, batch: ExtractBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
+    def _extract_one_span(self, batch: ExtractBatch, extracted: Extracted, word_repr: FT, unit_repr: FT, inverse: bool = False) -> Extracted:
         # Propose all span start/end positions.
         start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
         # Range from `min_word_length` to `max_word_length`.
@@ -630,7 +647,7 @@ class ExtractModel(nn.Module):
 
         # Main body: Run DP to find the best matches.
         matches, inverse_unit_costs = self._get_matches(
-            extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids, unit_counts)
+            extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids, unit_counts, inverse=inverse)
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
@@ -661,7 +678,7 @@ class ExtractModel(nn.Module):
         new_extracted = Extracted(batch.batch_size, matches, viable, inverse_unit_costs)
         return new_extracted
 
-    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT, extracted_unit_ids: LT, unit_counts: FT) -> Tuple[Matches, FT]:
+    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT, extracted_unit_ids: LT, unit_counts: FT, inverse: bool = False) -> Tuple[Matches, FT]:
         d_char = extracted_word_repr.size('char_emb')
         ns = extracted_word_repr.size('viable')
         nt = len(self.vocab_feat_matrix)
@@ -721,7 +738,8 @@ class ExtractModel(nn.Module):
             ins_del_cost = -ins_del_cost
 
         # DEBUG(j_luo)
-        partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(..., 'unit').expand(-1, costs.size('unit'))
+        partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(...,
+                                                                             'unit').expand(-1, costs.size('unit'))
         with NoName(partial_counts, extracted_unit_ids, costs):
             # NOTE(j_luo) There seems to be a bug with the in-place `scatter_add_`.
             _partial_counts = partial_counts.scatter_add(
@@ -734,13 +752,15 @@ class ExtractModel(nn.Module):
         inverse_unit_costs = log_p_w_g_v = log_p_v_g_w + log_p_w - log_p_v + (-9999.9) * (wi2vi_logits < -9999)
         with NoName(inverse_unit_costs, extracted_unit_ids):
             inverse_costs = inverse_unit_costs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+        # if inverse:
+        #     costs = inverse_costs
+
+        # # # DEBUG(j_luo)
+        # # costs = (1.0 - self.inverse_ratio) * costs + self.inverse_ratio * inverse_costs
 
         # # DEBUG(j_luo)
-        # costs = (1.0 - self.inverse_ratio) * costs + self.inverse_ratio * inverse_costs
-
-        # DEBUG(j_luo)
-        _tmp = 0.0
-        costs = (1.0 - _tmp) * costs + _tmp * inverse_costs
+        # _tmp = 0.0
+        # costs = (1.0 - _tmp) * costs + _tmp * inverse_costs
 
         # Name: viable x len_w x unit
         costs = nh.unflatten(costs, 'viable_X_len_w', ['viable', 'len_w'])

@@ -276,13 +276,13 @@ class ExtractManager:
             # x = self.model.g2p.unit_embedding.weight
             # x.data.copy_(x[idx])
 
-            # # DEBUG(j_luo)
-            import random
-            logging.warning('shuffling c_manner')
-            idx = list(range(22, 43))
-            random.shuffle(idx)
-            x = self.model.g2p.unit_embedding.weight
-            x.data[:, list(range(22, 43))].copy_(x[:, idx])
+            # # # DEBUG(j_luo)
+            # import random
+            # logging.warning('shuffling c_manner')
+            # idx = list(range(22, 43))
+            # random.shuffle(idx)
+            # x = self.model.g2p.unit_embedding.weight
+            # x.data[:, list(range(22, 43))].copy_(x[:, idx])
 
             # # # DEBUG(j_luo)
             # if g.uniform_scheme == 'prior':

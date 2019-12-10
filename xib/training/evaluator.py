@@ -334,7 +334,7 @@ class ExtractEvaluator(BaseEvaluator):
         matched_segments = list()
         for segment, s, e, m, w in zip(batch.segments, start, end, matched, bmw):
             spans = list()
-            if m:
+            if len(segment) >= g.min_word_length and m:
                 span = [segment[i] for i in range(s, e + 1)]
                 span = Span('-'.join(span), s, e)
                 spans.append(span)

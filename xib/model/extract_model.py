@@ -261,8 +261,8 @@ class ExtractModel(nn.Module):
                  choices=['soft', 'linear', 'exp', 'exp_linear'], msg='Threshold function to use.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
-    add_argument('use_probs', default=True, dtype=bool, msg='Flag to use probabilities instead of distances.')
-    add_argument('use_residual', default=True, dtype=bool, msg='Flag to use residual.')
+    add_argument('use_probs', default=False, dtype=bool, msg='Flag to use probabilities instead of distances.')
+    add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('dist_func', default='hamming', dtype=str,
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
@@ -693,15 +693,23 @@ class ExtractModel(nn.Module):
         word_pos = nh.flatten(word_pos, ['viable', 'len_w'], 'viable_X_len_w')
         viable_bi = nh.flatten(viable_bi, ['viable', 'len_w'], 'viable_X_len_w')
         word_repr = word_repr.align_to('batch', 'length', 'char_emb')
-        with NoName(word_repr, viable_bi, word_pos, batch.unit_id_seqs):
-            extracted_word_repr = word_repr[viable_bi, word_pos].rename('viable_X_len_w', 'char_emb')
-            extracted_unit_ids = batch.unit_id_seqs[viable_bi, word_pos].rename('viable_X_len_w')
+        if g.input_format == 'text':
+            with NoName(word_repr, viable_bi, word_pos, batch.unit_id_seqs):
+                extracted_word_repr = word_repr[viable_bi, word_pos].rename('viable_X_len_w', 'char_emb')
+                extracted_unit_ids = batch.unit_id_seqs[viable_bi, word_pos].rename('viable_X_len_w')
+        else:
+            with NoName(word_repr, viable_bi, word_pos):
+                extracted_word_repr = word_repr[viable_bi, word_pos].rename('viable_X_len_w', 'char_emb')
+            extracted_unit_ids = None
         extracted_word_repr = nh.unflatten(extracted_word_repr, 'viable_X_len_w', ['viable', 'len_w'])
 
         # DEBUG(j_luo)
-        unit_counts = get_zeros(extracted_unit_ids.max().item() + 1).rename('extracted_unit')
-        with NoName(extracted_unit_ids, unit_counts):
-            unit_counts.scatter_add_(0, extracted_unit_ids, torch.full_like(extracted_unit_ids, 1).float())
+        if g.input_format == 'text':
+            unit_counts = get_zeros(extracted_unit_ids.max().item() + 1).rename('extracted_unit')
+            with NoName(extracted_unit_ids, unit_counts):
+                unit_counts.scatter_add_(0, extracted_unit_ids, torch.full_like(extracted_unit_ids, 1).float())
+        else:
+            unit_counts = None
 
         # Main body: Run DP to find the best matches.
         matches, inverse_unit_costs = self._get_matches(
@@ -797,20 +805,23 @@ class ExtractModel(nn.Module):
             ins_del_cost = -ins_del_cost
 
         # DEBUG(j_luo)
-        partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(...,
-                                                                             'unit').expand(-1, costs.size('unit'))
-        with NoName(partial_counts, extracted_unit_ids, costs):
-            # NOTE(j_luo) There seems to be a bug with the in-place `scatter_add_`.
-            _partial_counts = partial_counts.scatter_add(
-                0, extracted_unit_ids.unsqueeze(dim=-1).expand_as(costs), costs)
-        partial_counts = _partial_counts.rename(*partial_counts.names)
-        wi2vi_logits = partial_counts / (1e-8 + unit_counts.align_as(partial_counts))
-        log_p_v_g_w = wi2vi_logits.log_softmax('unit')
-        log_p_w = (unit_counts / (1e-8 + unit_counts.sum()) + 1e-8).log().align_as(log_p_v_g_w)
-        log_p_v = (log_p_w + log_p_v_g_w).logsumexp('extracted_unit', keepdim=True)
-        inverse_unit_costs = log_p_w_g_v = log_p_v_g_w + log_p_w - log_p_v + (-9999.9) * (wi2vi_logits < -9999)
-        with NoName(inverse_unit_costs, extracted_unit_ids):
-            inverse_costs = inverse_unit_costs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+        if g.input_format == 'text':
+            partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(...,
+                                                                                 'unit').expand(-1, costs.size('unit'))
+            with NoName(partial_counts, extracted_unit_ids, costs):
+                # NOTE(j_luo) There seems to be a bug with the in-place `scatter_add_`.
+                _partial_counts = partial_counts.scatter_add(
+                    0, extracted_unit_ids.unsqueeze(dim=-1).expand_as(costs), costs)
+            partial_counts = _partial_counts.rename(*partial_counts.names)
+            wi2vi_logits = partial_counts / (1e-8 + unit_counts.align_as(partial_counts))
+            log_p_v_g_w = wi2vi_logits.log_softmax('unit')
+            log_p_w = (unit_counts / (1e-8 + unit_counts.sum()) + 1e-8).log().align_as(log_p_v_g_w)
+            log_p_v = (log_p_w + log_p_v_g_w).logsumexp('extracted_unit', keepdim=True)
+            inverse_unit_costs = log_p_w_g_v = log_p_v_g_w + log_p_w - log_p_v + (-9999.9) * (wi2vi_logits < -9999)
+            with NoName(inverse_unit_costs, extracted_unit_ids):
+                inverse_costs = inverse_unit_costs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+        else:
+            inverse_unit_costs = None
         # if inverse:
         #     costs = inverse_costs
 

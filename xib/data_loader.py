@@ -223,7 +223,8 @@ class UnbrokenIpaDataset(IpaDataset):
                         continue
                     if end > last_end:
                         segment_window = segments[start: end]
-                        segment_windows.append(segment_window)
+                        if len(SegmentWindow(segment_window)) >= g.min_word_length:
+                            segment_windows.append(segment_window)
                     last_end = end
                     start = last_end
         return {

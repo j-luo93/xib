@@ -298,7 +298,11 @@ class ExtractTrainer(BaseTrainer):
             # metrics += sparsity
 
             # DEBUG(j_luo)
-            loss = -metrics.score.mean + metrics.entropy.mean * g.entropy_hyper
+            loss = -metrics.score.mean
+            try:
+                loss = loss + metrics.entropy.mean * g.entropy_hyper
+            except AttributeError:
+                pass
 
             # loss = -metrics.score.mean
             (loss / g.accum_gradients).backward()

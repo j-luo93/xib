@@ -190,6 +190,7 @@ class ExtractAnalyzer:
         metrics += Metric('score', model_ret.best_matched_score.sum(), batch.batch_size)
 
         iuc = model_ret.extracted.inverse_unit_costs
-        entropy = -(iuc * iuc.exp()).sum()
-        metrics += Metric('entropy', entropy, batch.batch_size)
+        if iuc is not None:
+            entropy = -(iuc * iuc.exp()).sum()
+            metrics += Metric('entropy', entropy, batch.batch_size)
         return metrics

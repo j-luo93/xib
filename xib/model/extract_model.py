@@ -16,7 +16,7 @@ from dev_misc.utils import WithholdKeys, global_property
 from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
                              convert_to_dense)
 from xib.ipa import Category, Index, get_enum_by_cat, should_include
-from xib.ipa.process import Segment, SegmentWindow
+from xib.ipa.process import Segment, Segmentation, SegmentWindow, Span
 from xib.model.modules import AdaptLayer, FeatEmbedding
 
 from .modules import DenseFeatEmbedding
@@ -204,6 +204,9 @@ class G2PLayer(nn.Module):
 
         # DEBUG(j_luo)
         self.aligner = nn.Linear(g.dim, 60)
+        # DEBUG(j_luo)
+        logging.warning('hack unit embedding ')
+        self.unit_aligner = nn.Embedding(33, 29)
 
     def forward(self, unit_id_seqs: LT) -> Tuple[Dict[Category, FT], FT]:
         unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
@@ -480,7 +483,15 @@ class ExtractModel(nn.Module):
                 word_repr.rename_('batch', 'length', 'char_emb')
                 # DEBUG(j_luo)
                 if g.use_residual:
+                    # DEBUG(j_luo)
+                    # word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
+                    # word_repr = word_repr @ unit_repr.squeeze(1)
+                    # with NoName(batch.unit_id_seqs):
+                    #     word_repr = word_repr[batch.unit_id_seqs]
+                    # word_repr.rename_('batch', 'length', 'char_emb')
+
                     word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
+
                 unit_repr.rename_('batch', 'length', 'char_emb')
         else:
             with Rename(self.unit_feat_matrix, unit='batch'):
@@ -514,6 +525,52 @@ class ExtractModel(nn.Module):
 
             if g.use_probs:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+
+                # nh = NameHelper()
+                # x = nh.flatten(matches.score, ['len_s', 'len_e'], 'len_s_X_len_e')
+                # TOP = 100
+                # _, inds = torch.topk(x.logsumexp('vocab'), TOP, 'len_s_X_len_e')
+                # top_start = inds // len_e
+                # top_end = inds % len_e + top_start + g.min_word_length - 1
+                # top = torch.stack([top_start, top_end], new_name='index').cpu().numpy()
+
+                # predictions = list()
+                # for bi in range(batch.batch_size):
+                #     segments = list()
+                #     for k in range(TOP):
+                #         s = top[bi, k, 0]
+                #         e = top[bi, k, 1]
+                #         span = Span('dummy', s, e)
+                #         segment = Segmentation([span])
+                #         segments.append(segment)
+                #     predictions.append(segments)
+
+                # ground_truths = [segment.to_segmentation() for segment in batch.segments]
+                # recalled = list()
+                # for preds, gt in zip(predictions, ground_truths):
+                #     _recalled = np.zeros(TOP)
+                #     for k, pred in enumerate(preds):
+                #         p = pred.spans[0]
+                #         for _g in gt:
+                #             if p.is_same_span(_g):
+                #                 _recalled[k] = 1
+                #                 break
+                #     _recalled = np.cumsum(_recalled)
+                #     recalled.append(_recalled)
+                # recalled = np.asarray(recalled).sum(axis=0)
+                # try:
+                #     self._cnt += 1
+                #     self._recalled = self._recalled + recalled
+                #     self._total += batch.batch_size
+                # except AttributeError:
+                #     self._cnt = 1
+                #     self._recalled = np.zeros(TOP)
+                #     self._total = batch.batch_size
+                # if self._cnt % 100 == 0:
+                #     print((self._recalled / self._total)[range(19, TOP, 20)])
+                #     self._recalled = np.zeros(TOP)
+                #     self._total = 0
+
                 # flat_viable_score = flat_score + (-99999.9) * (~flat_viable).float()
                 # viable_count = flat_viable.sum('cand').float()
 
@@ -526,7 +583,8 @@ class ExtractModel(nn.Module):
                 # inverse_flat_score = inverse_matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
                 # inverse_best_matched_score = inverse_flat_score.logsumexp(dim='cand').exp()
 
-                # best_matched_score = 0.9 * best_matched_score + 0.1 * inverse_best_matched_score
+                # best_matched_score = 0.5 * best_matched_score + 0.5 * inverse_best_matched_score
+
                 # best_matched_score = flat_score.logsumexp(dim='cand')
                 # DEBUG(j_luo)
                 # best_matched_score = flat_score.max(dim='cand')[0].exp()
@@ -718,7 +776,8 @@ class ExtractModel(nn.Module):
             dist_func = _get_sos_matrix
         # DEBUG(j_luo)
         # from IPython import embed; embed()
-        costs = dist_func(_extracted_word_repr, unit_repr)
+        # DEBUG(j_luo)
+        costs = dist_func(_extracted_word_repr, unit_repr)  # / 0.2
 
         # # DEBUG(j_luo) This is wrong
         # partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(..., 'unit').expand(-1, costs.size('unit'))
@@ -821,8 +880,9 @@ class ExtractModel(nn.Module):
 
             ed_dist = f[idx_src, idx_tgt, viable_i, vocab_i]
 
+            # # DEBUG(j_luo)
             # min_len = torch.min(idx_src, self.vocab_length)
-            # ed_dist = ed_dist / min_len
+            # ed_dist = ed_dist / min_len * 7
 
             ed_dist.rename_('viable', 'vocab')
 

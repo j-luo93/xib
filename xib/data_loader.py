@@ -212,16 +212,20 @@ class UnbrokenIpaDataset(IpaDataset):
                 ex_cum_lengths = np.concatenate([np.zeros([1], dtype=np.int32), cum_lengths[:-1]])
                 last_end = -1
                 end = 0
-                for start in range(len(tokens)):
+                start = 0
+                while start < len(tokens):
+                    # for start in range(len(tokens)):
                     while end < len(tokens) and cum_lengths[end] - ex_cum_lengths[start] <= g.max_segment_length:
                         end += 1
                     if end <= start:
                         end = start + 1
+                        start += 1
                         continue
                     if end > last_end:
                         segment_window = segments[start: end]
                         segment_windows.append(segment_window)
                     last_end = end
+                    start = last_end
         return {
             'segments': get_array(segment_windows),
             'matrices': [torch.cat([segment.feat_matrix for segment in segment_window], dim=0) for segment_window in segment_windows]

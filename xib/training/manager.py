@@ -259,7 +259,7 @@ class ExtractManager:
             # DEBUG(j_luo)
             # self.trainer.threshold *= g.anneal_factor
             # self.trainer.threshold = max(self.trainer.threshold, g.min_threshold)
-            logging.imp(f'threshold is now {self.trainer.threshold:.3f}.')
+            # logging.imp(f'threshold is now {self.trainer.threshold:.3f}.')
             self.trainer.tracker.update('round')
             if g.use_dilute:
                 self.trainer.dilute()

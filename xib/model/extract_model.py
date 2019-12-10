@@ -652,7 +652,16 @@ class ExtractModel(nn.Module):
 
         if g.debug:
             torch.set_printoptions(sci_mode=False, linewidth=200)
-            breakpoint()
+            from dev_misc.devlib.inspector import Inspector
+            ins = Inspector()
+            ins.add_table(matches.ed_dist, 'ed_dist')
+            ins.add_table(matches.f, 'f')
+            ins.add_table(matches.score, 'score')
+            ins.add_table(matches.thresh, 'thresh')
+            vocab = [''.join(segment.segment_list) for segment in self.vocab]
+            ins.add_table(vocab, 'vocab')
+            ins.run()
+            breakpoint() # DEBUG(j_luo)
 
         # DEBUG(j_luo)
         ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)

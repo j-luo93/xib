@@ -262,6 +262,7 @@ class ExtractModel(nn.Module):
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
     add_argument('use_probs', default=False, dtype=bool, msg='Flag to use probabilities instead of distances.')
+    add_argument('new_use_probs', default=False, dtype=bool)
     add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('dist_func', default='hamming', dtype=str,
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
@@ -523,6 +524,10 @@ class ExtractModel(nn.Module):
             end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
             best_matched_vocab = best_span_ind % vs
 
+            # NOTE(j_luo) Some segments don't have any viable spans.
+            any_viable = new_extracted.viable.any('len_s').any('len_e')
+            best_matched_score = best_matched_score * any_viable
+
             if g.use_probs:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
 
@@ -774,7 +779,7 @@ class ExtractModel(nn.Module):
 
         nh = NameHelper()
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
-        if g.use_probs:
+        if g.use_probs or g.new_use_probs:
             dist_func = lambda x, y: x @ y.t()
         elif g.dist_func == 'cos':
             dist_func = _get_cosine_matrix
@@ -800,12 +805,15 @@ class ExtractModel(nn.Module):
         #     inverse_costs = inverse_unit_costs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
 
         ins_del_cost = self.ins_del_cost
-        if g.use_probs:
+        if g.new_use_probs:
+            costs = -costs.log_softmax(dim='unit')
+
+        elif g.use_probs:
             costs = costs.log_softmax(dim='unit')
             ins_del_cost = -ins_del_cost
 
         # DEBUG(j_luo)
-        if g.input_format == 'text':
+        if g.input_format == 'text' and g.use_probs:
             partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(...,
                                                                                  'unit').expand(-1, costs.size('unit'))
             with NoName(partial_counts, extracted_unit_ids, costs):

@@ -407,6 +407,12 @@ class UnbrokenTextDataLoader(UnbrokenIpaDataLoader):
             unit_id_seqs=collate_return.unit_id_seqs,
         )
 
+    def __iter__(self):
+        for batch in super().__iter__():
+            if batch.max_length < g.min_word_length:
+                continue
+            yield batch.cuda()
+
 
 class BrokenIpaDataLoader(UnbrokenIpaDataLoader):
 

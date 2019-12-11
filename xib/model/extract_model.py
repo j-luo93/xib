@@ -207,7 +207,8 @@ class G2PLayer(nn.Module):
         self.aligner = nn.Linear(g.dim, 60)
         # DEBUG(j_luo)
         logging.warning('unit aligner initialized.')
-        self.unit_aligner = nn.Embedding(24, 28)
+        # self.unit_aligner = nn.Embedding(24, 28)
+        self.unit_aligner = nn.Embedding(33, 28)
 
     def forward(self, unit_id_seqs: LT) -> Tuple[Dict[Category, FT], FT]:
         unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
@@ -486,7 +487,8 @@ class ExtractModel(nn.Module):
                 # DEBUG(j_luo)
                 if g.use_residual:
                     # # DEBUG(j_luo)
-                    word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
+                    word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp() * 10.0
+                    # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
                     word_repr = word_repr @ unit_repr.squeeze(1)
                     with NoName(batch.unit_id_seqs):
                         word_repr = word_repr[batch.unit_id_seqs]

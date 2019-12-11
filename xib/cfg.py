@@ -194,6 +194,27 @@ class ExtractEsWithP5GermanTest(DecipherEsWithP5GermanTest):
         self.data_path: str = 'data/tmp'
 
 
+@reg
+class SanityCheck(ExtractEsWithP5GermanTest):
+    input_format: str = 'text'
+    g2p_window_size: int = 1
+    thresh_func: str = 'linear'
+    dim: int = 60
+    optim_cls: str = 'sgd'
+    relaxation_level: int = 4
+    init_ins_del: int = 100
+    use_probs: bool = False
+    thresh_func: str = 'exp'
+    new_use_probs: bool = True
+    min_word_length: int = 6
+    use_residual: bool = True
+    init_threshold: float = 30.0
+    anneal_factor: float = 0.8
+    temperature: float = 1.0
+    num_steps: int = 2000
+    learning_rate: float = 1.0
+
+
 # @reg
 # class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):
 #     task: str = 'transfer'

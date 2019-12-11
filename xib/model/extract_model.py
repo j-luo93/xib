@@ -72,6 +72,7 @@ class Extracted(BaseBatch):
     batch_size: int
     matches: Optional[Matches] = None
     viable: Optional[BT] = None
+    costs: Optional[FT] = None
     inverse_unit_costs: Optional[FT] = None
     # last_end: Optional[LT] = None  # The end positions (inclusive) of the last extracted words.
     # score: Optional[FT] = None
@@ -205,7 +206,7 @@ class G2PLayer(nn.Module):
         # DEBUG(j_luo)
         self.aligner = nn.Linear(g.dim, 60)
         # DEBUG(j_luo)
-        logging.warning('hack unit embedding ')
+        logging.warning('unit aligner initialized.')
         self.unit_aligner = nn.Embedding(33, 29)
 
     def forward(self, unit_id_seqs: LT) -> Tuple[Dict[Category, FT], FT]:
@@ -654,14 +655,41 @@ class ExtractModel(nn.Module):
             torch.set_printoptions(sci_mode=False, linewidth=200)
             from dev_misc.devlib.inspector import Inspector
             ins = Inspector()
+            id_seq_emb = self.g2p.unit_embedding.weight
+            unit_logits = id_seq_emb @ unit_repr.t()
+            unit_logits.rename_('lost_unit', 'known_unit')
+            unit_probs = unit_logits.log_softmax('known_unit').exp()
+            ins.add_table(unit_logits, 'unit_logit')
+            ins.add_table(unit_probs, 'unit_prob')
+
             ins.add_table(matches.ed_dist, 'ed_dist')
-            ins.add_table(matches.f, 'f')
+            ins.add_table(matches.f, 'f', auto_merge=False)
             ins.add_table(matches.score, 'score')
             ins.add_table(matches.thresh, 'thresh')
+            ins.add_table(new_extracted.costs, 'cost')
+
+            lost_units = self.g2p.dataset.id2unit
+            ins.add_table(lost_units, 'lost_unit', is_index=True)
+            known_units = self.id2unit
+            ins.add_table(known_units, 'known_unit', is_index=True)
             vocab = [''.join(segment.segment_list) for segment in self.vocab]
-            ins.add_table(vocab, 'vocab')
+            ins.add_table(vocab, 'vocab', is_index=True)
+            segments = [''.join(segment.segment_list) for segment in batch.segments]
+            ins.add_table(segments, 'batch', is_index=True)
+            ins.add_table(new_extracted.viable, 'viable', is_mask_index=True)
+
+            ins.take('viable')
+            ins.take('batch_id', 2)
+            ins.merge('f', how='left', left_index=True, right_on='viable_id')
+            ins.take('len_s_id', 2)
+            ins.take('len_e_id', 0)
+            ins.narrow(['f', 'len_w_src_id', 'len_w_tgt_id', 'vocab_id'])
+            ins.merge('vocab', how='right', right_index=True, left_on='vocab_id')
+            ins.save_as('first')
+            ins.take('vocab', 'tɾaeɾas')
+            ins.pivot(index='len_w_src_id', columns='len_w_tgt_id', values='f')
             ins.run()
-            breakpoint() # DEBUG(j_luo)
+            breakpoint()  # DEBUG(j_luo)
 
         # DEBUG(j_luo)
         ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
@@ -726,7 +754,7 @@ class ExtractModel(nn.Module):
             unit_counts = None
 
         # Main body: Run DP to find the best matches.
-        matches, inverse_unit_costs = self._get_matches(
+        matches, costs, inverse_unit_costs = self._get_matches(
             extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids, unit_counts, inverse=inverse)
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
@@ -755,7 +783,7 @@ class ExtractModel(nn.Module):
                 restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
                 setattr(matches, fname, restored)
 
-        new_extracted = Extracted(batch.batch_size, matches, viable, inverse_unit_costs)
+        new_extracted = Extracted(batch.batch_size, matches, viable, costs, inverse_unit_costs)
         return new_extracted
 
     def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT, extracted_unit_ids: LT, unit_counts: FT, inverse: bool = False) -> Tuple[Matches, FT]:
@@ -966,4 +994,4 @@ class ExtractModel(nn.Module):
             matches = MatchesLv0(ed_dist, f, matched_ed_dist, matched_vocab,
                                  matched_length, matched_thresh, matched_score)
 
-        return matches, inverse_unit_costs
+        return matches, costs, inverse_unit_costs

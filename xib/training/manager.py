@@ -224,7 +224,6 @@ class ExtractManager:
         # self.trainer.set_optimizer(Adam, lr=g.learning_rate)
 
     def run(self):
-        self.trainer.threshold = g.init_threshold
         optim_cls = self._name2cls[g.optim_cls]
 
         # # DEBUG(j_luo)
@@ -245,9 +244,13 @@ class ExtractManager:
         #         self.trainer.dilute()
 
         self.trainer.temperature = g.temperature
+        self.trainer.threshold = g.init_threshold
+        # self.trainer.temperature = 12.0
+        # self.trainer.threshold = 0.4
         self.trainer.uniform_prior = 1.0
         self.trainer.topk_ratio = 1.0
         self.trainer.inverse_ratio = 0.0
+        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
         while self.trainer.threshold > g.min_threshold:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
@@ -257,17 +260,13 @@ class ExtractManager:
 
             self.trainer.train(self.dl_reg)
             # DEBUG(j_luo)
-            # self.trainer.threshold *= g.anneal_factor
-            # self.trainer.threshold = max(self.trainer.threshold, g.min_threshold)
-            # logging.imp(f'threshold is now {self.trainer.threshold:.3f}.')
             self.trainer.tracker.update('round')
             if g.use_dilute:
                 self.trainer.dilute()
 
             # DEBUG(j_luo)
-            # self.trainer.temperature *= 0.5
-            # self.trainer.temperature = max(0.1, self.trainer.temperature)
-            # logging.imp(f'temperature is now {self.trainer.temperature:.3f}.')
+            self.trainer.threshold = max(self.trainer.threshold * g.anneal_factor, g.min_threshold)
+            self.trainer.temperature = max(0.1, self.trainer.temperature * g.anneal_factor)
 
             # # DEBUG(j_luo)
             # import random

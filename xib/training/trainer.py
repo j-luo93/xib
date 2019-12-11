@@ -225,7 +225,7 @@ class ExtractTrainer(BaseTrainer):
 
     @threshold.setter
     def threshold(self, value):
-        pass
+        logging.imp(f'Setting threshold to {value}.')
 
     @global_property
     def temperature(self):
@@ -233,7 +233,7 @@ class ExtractTrainer(BaseTrainer):
 
     @temperature.setter
     def temperature(self, value):
-        pass
+        logging.imp(f'Setting temperature to {value}.')
 
     def add_trackables(self):
         self.tracker.add_trackable('round', endless=True)

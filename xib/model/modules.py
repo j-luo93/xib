@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Optional
 
 import numpy as np
@@ -102,6 +103,8 @@ class DenseFeatEmbedding(FeatEmbedding):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
                 emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, self.dim))
+                logging.warning('dense feature embedding init')
+                torch.nn.init.uniform_(emb_dict[cat.name], -0.1, 0.1)
         return nn.ParameterDict(emb_dict)
 
     # HACK(j_luo) Use kwargs to deal with masked_positions.

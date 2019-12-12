@@ -201,7 +201,7 @@ class ExtractTrainer(BaseTrainer):
 
     @ins_del_cost.setter
     def ins_del_cost(self, value):
-        pass
+        logging.imp(f'Setting ins_del_cost to {value}.')
 
     @global_property
     def topk_ratio(self):
@@ -262,8 +262,9 @@ class ExtractTrainer(BaseTrainer):
             self.save_to(out_path)
 
         if not self.tracker.update('best_score', value=eval_metrics.score.value, threshold=0.01):
-            self.tracker.update('early_stop')
             # DEBUG(j_luo)
+            pass
+            # self.tracker.update('early_stop')
             # self.lr_scheduler.step()
 
     def should_terminate(self):

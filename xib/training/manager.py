@@ -195,6 +195,7 @@ class ExtractManager:
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
     add_argument('min_threshold', default=0.01, dtype=float, msg='Min value for threshold')
+    add_argument('min_temperature', default=0.1, dtype=float, msg='Min value for threshold')
     add_argument('use_dilute', default=False, dtype=bool, msg='Flag to dilute params after each round.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
@@ -242,6 +243,9 @@ class ExtractManager:
         #     self.trainer.tracker.update('round')
         #     if g.use_dilute:
         #         self.trainer.dilute()
+        if g.use_embedding:
+            logging.warning('frozen embedding')
+            freeze(self.model.embedding)
 
         self.trainer.temperature = g.temperature
         self.trainer.threshold = g.init_threshold
@@ -250,7 +254,10 @@ class ExtractManager:
         self.trainer.uniform_prior = 1.0
         self.trainer.topk_ratio = 1.0
         self.trainer.inverse_ratio = 0.0
-        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
+        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)  # , momentum=0.9, nesterov=True)
+        if not g.saved_model_path:
+            out_path = g.log_dir / f'saved.init'
+            self.trainer.save_to(out_path)
         while self.trainer.threshold > g.min_threshold:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
@@ -265,8 +272,10 @@ class ExtractManager:
                 self.trainer.dilute()
 
             # DEBUG(j_luo)
-            self.trainer.threshold = max(self.trainer.threshold * g.anneal_factor, g.min_threshold)
-            self.trainer.temperature = max(0.1, self.trainer.temperature * g.anneal_factor)
+            # self.trainer.threshold = max(self.trainer.threshold * g.anneal_factor, g.min_threshold)
+            self.trainer.temperature = max(g.min_temperature, self.trainer.temperature * g.anneal_factor)
+            # if self.trainer.tracker.round == 7:
+            #     break
 
             # # DEBUG(j_luo)
             # import random

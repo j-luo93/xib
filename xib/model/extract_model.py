@@ -209,6 +209,8 @@ class G2PLayer(nn.Module):
         logging.warning('unit aligner initialized.')
         # self.unit_aligner = nn.Embedding(24, 28)
         self.unit_aligner = nn.Embedding(33, 28)
+        logging.warning('unit aligner initialized uniformly.')
+        torch.nn.init.uniform_(self.unit_aligner.weight, -0.1, 0.1)
 
     def forward(self, unit_id_seqs: LT) -> Tuple[Dict[Category, FT], FT]:
         unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
@@ -475,8 +477,21 @@ class ExtractModel(nn.Module):
             else:
                 adapted_dfm = dfm
             if g.use_embedding:
-                word_repr = self.embedding(adapted_dfm, batch.source_padding)
-                unit_repr = self.embedding(self.unit_dense_feat_matrix)
+                with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
+                    unit_repr = self.embedding(self.unit_dense_feat_matrix)
+                # DEBUG(j_luo)
+                if g.use_residual:
+                    # # DEBUG(j_luo)
+                    word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
+                    # word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
+                    # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
+                    word_repr = word_repr @ unit_repr.squeeze(1)
+                    word_repr = (word_repr / word_repr.sum(dim=-1, keepdim=True)) * 7.0 * 10.0
+                    with NoName(batch.unit_id_seqs, word_repr):
+                        word_repr = word_repr[batch.unit_id_seqs]
+                    word_repr.rename_('batch', 'length', 'char_emb')
+                else:
+                    word_repr = self.embedding(adapted_dfm, batch.source_padding)
             else:
                 names = sorted(adapted_dfm, key=lambda name: name.value)
                 # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
@@ -487,6 +502,15 @@ class ExtractModel(nn.Module):
                 # DEBUG(j_luo)
                 if g.use_residual:
                     # # DEBUG(j_luo)
+                    # word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
+                    # # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
+                    # word_repr = word_repr @ unit_repr.squeeze(1)
+                    # word_repr = (word_repr / word_repr.sum(dim=-1, keepdim=True)) * 7.0 * 10.0
+                    # with NoName(batch.unit_id_seqs, word_repr):
+                    #     word_repr = word_repr[batch.unit_id_seqs]
+                    # word_repr.rename_('batch', 'length', 'char_emb')
+
+                    # # # DEBUG(j_luo)
                     word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp() * 10.0
                     # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
                     word_repr = word_repr @ unit_repr.squeeze(1)
@@ -530,7 +554,10 @@ class ExtractModel(nn.Module):
 
             # NOTE(j_luo) Some segments don't have any viable spans.
             any_viable = new_extracted.viable.any('len_s').any('len_e')
-            best_matched_score = best_matched_score * any_viable
+            # DEBUG(j_luo)
+            # best_matched_score = best_matched_score * any_viable
+            best_matched_score = best_matched_score + (~any_viable).float() * (-9999.9)
+            best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
 
             if g.use_probs:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
@@ -650,6 +677,11 @@ class ExtractModel(nn.Module):
             start = best_span_ind // len_e
             # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
             end = best_span_ind % len_e + start + g.min_word_length - 1
+
+            any_viable = new_extracted.viable.any('len_s').any('len_e')
+            # DEBUG(j_luo)
+            # best_matched_score = best_matched_score * any_viable
+            best_matched_score = best_matched_score + (~any_viable).float() * (-9999.9)
 
             flat_matched_vocab = matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
             best_matched_vocab = flat_matched_vocab.gather('cand', best_span_ind)
@@ -954,7 +986,13 @@ class ExtractModel(nn.Module):
             thresh_func = _exp_threshold
         else:
             thresh_func = _exp_linear_threshold
-        if g.use_probs:
+        # DEBUG(j_luo)
+        if g.new_use_probs and self.training:
+            thresh = None
+            score = self.vocab_length.float().log() - ed_dist
+            # score = ed_dist
+            matches = MatchesLv4(ed_dist, f, thresh, score)
+        elif g.use_probs:
             # DEBUG(j_luo)
             # thresh = (ed_dist / 5.0).exp()
             thresh = None

@@ -74,6 +74,7 @@ class Extracted(BaseBatch):
     viable: Optional[BT] = None
     costs: Optional[FT] = None
     inverse_unit_costs: Optional[FT] = None
+    len_candidates: Optional[LT] = None
     # last_end: Optional[LT] = None  # The end positions (inclusive) of the last extracted words.
     # score: Optional[FT] = None
 
@@ -277,6 +278,7 @@ class ExtractModel(nn.Module):
     add_argument('use_g_embedding', default=False, dtype=bool)
     add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('use_plain_embedding', default=False, dtype=bool, msg='Flag to use residual.')
+    add_argument('use_full_prob', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('dist_func', default='hamming', dtype=str,
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
@@ -595,8 +597,16 @@ class ExtractModel(nn.Module):
             if g.new_use_probs:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
                 flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
-                best_matched_score = flat_viable_score.logsumexp(dim='cand')
-                best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
+                if g.use_full_prob:
+                    unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
+                    unextracted = unextracted.expand_as(matches.score)
+                    flat_unextracted_score = unextracted.flatten(['len_s', 'len_e', 'vocab'], 'cand') * math.log(0.1)
+                    flat_viable_score = flat_viable_score + flat_unextracted_score
+                    best_matched_score = flat_viable_score.logsumexp(dim='cand')
+                    best_matched_score = best_matched_score * (any_viable).float()
+                else:
+                    best_matched_score = flat_viable_score.logsumexp(dim='cand')
+                    best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
                 ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
             elif g.use_probs:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
@@ -856,7 +866,7 @@ class ExtractModel(nn.Module):
                 restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
                 setattr(matches, fname, restored)
 
-        new_extracted = Extracted(batch.batch_size, matches, viable, costs, inverse_unit_costs)
+        new_extracted = Extracted(batch.batch_size, matches, viable, costs, inverse_unit_costs, len_candidates)
         return new_extracted
 
     def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT, extracted_unit_ids: LT, unit_counts: FT, inverse: bool = False) -> Tuple[Matches, FT]:
@@ -1031,8 +1041,10 @@ class ExtractModel(nn.Module):
         # DEBUG(j_luo)
         if g.new_use_probs and self.training:
             thresh = None
-            score = self.vocab_length.float().log() - ed_dist
-            # score = ed_dist
+            if g.use_full_prob:
+                score = -ed_dist
+            else:
+                score = self.vocab_length.float().log() - ed_dist
             matches = MatchesLv4(ed_dist, f, thresh, score)
         elif g.use_probs:
             # DEBUG(j_luo)

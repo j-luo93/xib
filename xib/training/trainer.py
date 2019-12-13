@@ -281,14 +281,8 @@ class ExtractTrainer(BaseTrainer):
         # import time; time.sleep(0.2)
         # print(self.ins_del_cost)
         for _ in pbar(range(g.accum_gradients), desc='accum_gradients'):
-            while True:
-                try:
-                    batch = dl.get_next_batch()
-                    ret = self.model(batch)
-                except RuntimeError:
-                    logging.exception('Encountered some issue during training.')
-                    continue
-                break
+            batch = dl.get_next_batch()
+            ret = self.model(batch)
             metrics = self.analyzer.analyze(ret, batch)
 
             # # # DEBUG(j_luo)

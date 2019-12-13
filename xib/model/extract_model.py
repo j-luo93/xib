@@ -276,6 +276,7 @@ class ExtractModel(nn.Module):
     add_argument('use_global', default=False, dtype=bool)
     add_argument('use_g_embedding', default=False, dtype=bool)
     add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
+    add_argument('use_plain_embedding', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('dist_func', default='hamming', dtype=str,
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
     add_argument('relaxation_level', default=1, dtype=int, choices=[0, 1, 2, 3, 4], msg='Level of relaxation.')
@@ -292,8 +293,8 @@ class ExtractModel(nn.Module):
         if g.use_embedding:
             emb_cls = DenseFeatEmbedding if g.dense_input else FeatEmbedding
             self.embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb')
-        elif not g.dense_input:
-            raise ValueError(f'Use embedding for sparse inputs.')
+        # elif not g.dense_input:
+        #     raise ValueError(f'Use embedding for sparse inputs.')
 
         def _has_proper_length(segment):
             l = len(segment)
@@ -346,6 +347,8 @@ class ExtractModel(nn.Module):
                 k: v.rename(batch='unit')
                 for k, v in unit_dense_feat_matrix.items()
             }
+            if g.use_plain_embedding:
+                self.plain_unit_embedding = nn.Embedding(LU_SIZE, g.dim)
 
         if g.use_adapt:
             assert g.dense_input
@@ -543,9 +546,19 @@ class ExtractModel(nn.Module):
 
                 unit_repr.rename_('batch', 'length', 'char_emb')
         else:
-            with Rename(self.unit_feat_matrix, unit='batch'):
-                word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
-                unit_repr = self.embedding(self.unit_feat_matrix)
+            if g.input_format == 'text':
+                assert g.use_plain_embedding
+                with NoName(batch.feat_matrix, batch.source_padding):
+                    # IDEA(j_luo) A global switch to turn off the following names?
+                    word_repr = self.plain_unit_embedding(batch.unit_id_seqs).rename(None)
+                    word_repr[batch.source_padding] = 0.0
+                    word_repr.rename_('batch', 'length', 'char_emb')
+                    unit_repr = self.g2p.unit_embedding(get_range(KU_SIZE, 1, 0)).unsqueeze(dim=1)
+                    unit_repr.rename_('batch', 'length', 'char_emb')
+            else:
+                with Rename(self.unit_feat_matrix, unit='batch'):
+                    word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
+                    unit_repr = self.embedding(self.unit_feat_matrix)
         unit_repr = unit_repr.squeeze('length')
         unit_repr.rename_(batch='unit')
 

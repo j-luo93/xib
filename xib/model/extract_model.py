@@ -267,6 +267,8 @@ class ExtractModel(nn.Module):
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
     add_argument('use_probs', default=False, dtype=bool, msg='Flag to use probabilities instead of distances.')
     add_argument('new_use_probs', default=False, dtype=bool)
+    add_argument('use_global', default=False, dtype=bool)
+    add_argument('use_g_embedding', default=False, dtype=bool)
     add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('dist_func', default='hamming', dtype=str,
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
@@ -509,6 +511,15 @@ class ExtractModel(nn.Module):
                     # with NoName(batch.unit_id_seqs, word_repr):
                     #     word_repr = word_repr[batch.unit_id_seqs]
                     # word_repr.rename_('batch', 'length', 'char_emb')
+
+                    if g.use_global:
+                        if g.use_g_embedding:
+                            word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)) @ unit_repr.squeeze(dim=1)
+                            raw_logits = (word_repr @ unit_repr.squeeze(dim=1).t()).reshape(-1)  # / 5.0
+                        else:
+                            raw_logits = self.g2p.unit_aligner(get_range(33, 1, 0)).reshape(-1)
+                        with NoName(raw_logits):
+                            self.global_log_probs = raw_logits.log_softmax(0).view(33, -1).rename('lost_unit', 'unit')
 
                     # # # DEBUG(j_luo)
                     word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp() * 10.0
@@ -883,6 +894,10 @@ class ExtractModel(nn.Module):
         elif g.use_probs:
             costs = costs.log_softmax(dim='unit')
             ins_del_cost = -ins_del_cost
+
+        if g.use_global:
+            with NoName(self.global_log_probs, extracted_unit_ids):
+                costs = -self.global_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
 
         # DEBUG(j_luo)
         if g.input_format == 'text' and g.use_probs:

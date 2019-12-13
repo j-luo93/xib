@@ -149,6 +149,12 @@ def _restore_shape(tensor, bi, lsi, lei, viable, value: Optional[float] = None):
     return ret
 
 
+LU_SIZE = 33
+KU_SIZE = 28
+# LU_SIZE = 3
+# KU_SIZE = 4
+
+
 class G2PLayer(nn.Module):
 
     add_argument('g2p_window_size', default=3, dtype=int, msg='Window size for g2p layer.')
@@ -208,7 +214,7 @@ class G2PLayer(nn.Module):
         # DEBUG(j_luo)
         logging.warning('unit aligner initialized.')
         # self.unit_aligner = nn.Embedding(24, 28)
-        self.unit_aligner = nn.Embedding(33, 28)
+        self.unit_aligner = nn.Embedding(LU_SIZE, KU_SIZE)
         logging.warning('unit aligner initialized uniformly.')
         torch.nn.init.uniform_(self.unit_aligner.weight, -0.1, 0.1)
 
@@ -484,7 +490,8 @@ class ExtractModel(nn.Module):
                 # DEBUG(j_luo)
                 if g.use_residual:
                     # # DEBUG(j_luo)
-                    word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
+                    # word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
+                    word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0)).log_softmax(dim=0).exp()
                     # word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
                     # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
                     word_repr = word_repr @ unit_repr.squeeze(1)
@@ -514,15 +521,17 @@ class ExtractModel(nn.Module):
 
                     if g.use_global:
                         if g.use_g_embedding:
-                            word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)) @ unit_repr.squeeze(dim=1)
+                            word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0)) @ unit_repr.squeeze(dim=1)
                             raw_logits = (word_repr @ unit_repr.squeeze(dim=1).t()).reshape(-1)  # / 5.0
                         else:
-                            raw_logits = self.g2p.unit_aligner(get_range(33, 1, 0)).reshape(-1)
+                            raw_logits = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0)).reshape(-1)
                         with NoName(raw_logits):
-                            self.global_log_probs = raw_logits.log_softmax(0).view(33, -1).rename('lost_unit', 'unit')
+                            self.global_log_probs = raw_logits.log_softmax(
+                                0).view(LU_SIZE, -1).rename('lost_unit', 'unit')
 
                     # # # DEBUG(j_luo)
-                    word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp() * 10.0
+                    word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
+                    # word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0)).log_softmax(dim=0).exp() * 10.0
                     # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
                     word_repr = word_repr @ unit_repr.squeeze(1)
                     with NoName(batch.unit_id_seqs):
@@ -568,9 +577,15 @@ class ExtractModel(nn.Module):
             # DEBUG(j_luo)
             # best_matched_score = best_matched_score * any_viable
             best_matched_score = best_matched_score + (~any_viable).float() * (-9999.9)
-            best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
-
-            if g.use_probs:
+            # DEBUG(j_luo) This was actually the correct one.
+            # best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
+            if g.new_use_probs:
+                flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+                flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
+                best_matched_score = flat_viable_score.logsumexp(dim='cand')
+                best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
+                ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
+            elif g.use_probs:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
 
                 # nh = NameHelper()
@@ -735,7 +750,6 @@ class ExtractModel(nn.Module):
             ins.take('vocab', 'tɾaeɾas')
             ins.pivot(index='len_w_src_id', columns='len_w_tgt_id', values='f')
             ins.run()
-            breakpoint()  # DEBUG(j_luo)
 
         # DEBUG(j_luo)
         ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)

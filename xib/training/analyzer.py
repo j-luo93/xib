@@ -193,4 +193,8 @@ class ExtractAnalyzer:
         if iuc is not None:
             entropy = -(iuc * iuc.exp()).sum()
             metrics += Metric('entropy', entropy, batch.batch_size)
+        almt = model_ret.alignment
+        if almt is not None:
+            reg = ((almt.sum(dim=0) - 1.0) ** 2).sum()
+            metrics += Metric('reg', reg, batch.batch_size)
         return metrics

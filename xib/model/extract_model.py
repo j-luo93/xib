@@ -93,6 +93,7 @@ class ExtractModelReturn(BaseBatch):
     best_matched_vocab: LT
     extracted: Extracted
     adapted_dfm: Dict[Category, FT]
+    alignment: FT
 
 
 def _soft_threshold(x, thresh):
@@ -151,7 +152,8 @@ def _restore_shape(tensor, bi, lsi, lei, viable, value: Optional[float] = None):
 
 
 LU_SIZE = 33
-KU_SIZE = 28
+KU_SIZE = 29
+# KU_SIZE = 28
 # LU_SIZE = 3
 # KU_SIZE = 4
 
@@ -278,6 +280,7 @@ class ExtractModel(nn.Module):
     add_argument('use_g_embedding', default=False, dtype=bool)
     add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('use_plain_embedding', default=False, dtype=bool, msg='Flag to use residual.')
+    add_argument('use_direct_almt', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('use_full_prob', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('dist_func', default='hamming', dtype=str,
                  choices=['cos', 'hamming', 'sos'], msg='Type of distance function to use')
@@ -483,6 +486,8 @@ class ExtractModel(nn.Module):
         else:
             dfm = batch.dense_feat_matrix
 
+        alignment = None
+
         if g.dense_input:
             if g.input_format == 'ipa':
                 with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
@@ -534,11 +539,17 @@ class ExtractModel(nn.Module):
                             self.global_log_probs = raw_logits.log_softmax(
                                 0).view(LU_SIZE, -1).rename('lost_unit', 'unit')
 
-                    # # # DEBUG(j_luo)
-                    word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
-                    # word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0)).log_softmax(dim=0).exp() * 10.0
-                    # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
-                    word_repr = word_repr @ unit_repr.squeeze(1)
+                    if g.use_direct_almt:
+                        word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
+                        alignment = word_repr.log_softmax(dim=-1).exp()
+                        word_repr = alignment @ unit_repr.squeeze(dim=1)
+                    else:
+                        # # # DEBUG(j_luo)
+                        word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
+                        # word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0)).log_softmax(dim=0).exp()
+                        # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
+                        word_repr = word_repr @ unit_repr.squeeze(1)
+                        word_repr = 10 * word_repr
                     with NoName(batch.unit_id_seqs):
                         word_repr = word_repr[batch.unit_id_seqs]
                     word_repr.rename_('batch', 'length', 'char_emb')
@@ -607,7 +618,9 @@ class ExtractModel(nn.Module):
                 else:
                     best_matched_score = flat_viable_score.logsumexp(dim='cand')
                     best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
-                ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
+                    best_matched_score = best_matched_score * any_viable
+                ret = ExtractModelReturn(start, end, best_matched_score,
+                                         best_matched_vocab, new_extracted, dfm, alignment)
             elif g.use_probs:
                 flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
 
@@ -774,8 +787,7 @@ class ExtractModel(nn.Module):
             ins.pivot(index='len_w_src_id', columns='len_w_tgt_id', values='f')
             ins.run()
 
-        # DEBUG(j_luo)
-        ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
+        ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm, alignment)
         # ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, adapted_dfm)
 
         return ret
@@ -901,6 +913,24 @@ class ExtractModel(nn.Module):
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
         if g.use_probs or g.new_use_probs:
             dist_func = lambda x, y: x @ y.t()
+            # DEBUG(j_luo) a specialized dist_function
+
+            # def dist_func(x, y):
+            #     weight = get_zeros(60).fill_(0.2)
+            #     # weight[0:2] = 5.0
+            #     weight[5:22] = 1.0
+            #     weight[22:43] = 1.0
+            #     x = x * weight
+            #     return x @ y.t()
+            # def dist_func(x, y):
+            #     ptype = x[:, :2] * y[:, :2]
+            #     c_voicing = x[:, 2: 5] * y[:, 2:5]
+            #     c_place = x[:, 5: 22] * y[:, 5, :22]
+            #     c_manner = x[:, 22:43] * y[:, 22:43]
+            #     v_height = x[:, 43:51] * y[: 43: 51]
+            #     v_backness = x[:, 51:57] * y[:, 51:57]
+            #     v_roundness = x[: 57:] * y[:, 57:]
+            #     ptype.log_softmax(dim=-1)
         elif g.dist_func == 'cos':
             dist_func = _get_cosine_matrix
         elif g.dist_func == 'hamming':

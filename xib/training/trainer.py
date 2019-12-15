@@ -1,7 +1,7 @@
 import logging
 from abc import ABCMeta
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 import torch
 import torch.optim as optim
@@ -28,6 +28,7 @@ class BaseTrainer(BaseTrainerDev, metaclass=ABCMeta):  # pylint: disable=abstrac
     add_argument('learning_rate', default=2e-3, dtype=float, msg='learning rate')
     add_argument('check_interval', default=2, dtype=int, msg='check metrics after this many steps')
     add_argument('eval_interval', default=500, dtype=int, msg='save models after this many steps')
+    add_argument('save_interval', default=500, dtype=int, msg='save models after this many steps')
 
     def save_to(self, path: Path):
         to_save = {
@@ -173,6 +174,8 @@ class ExtractTrainer(BaseTrainer):
 
     model: ExtractModel
 
+    add_argument('reg_hyper', default=1, dtype=float)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.analyzer = ExtractAnalyzer()
@@ -252,20 +255,21 @@ class ExtractTrainer(BaseTrainer):
         self.model.load_state_dict(smsd)
         logging.imp(f'Loading model from {path}.')
 
-    def save(self, eval_metrics: Metrics):
+    def save(self, eval_metrics: Optional[Metrics] = None):
         r = self.tracker.round
         self.save_to(g.log_dir / f'saved.{self.stage}.latest')
         # self.tracker.update('best_loss', value=eval_metrics.dev_total_loss.mean)
-        if self.tracker.update('best_f1', value=eval_metrics.prf_exact_span_f1.value):
-            out_path = g.log_dir / f'saved.{self.stage}.best'
-            logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
-            self.save_to(out_path)
+        if eval_metrics is not None:
+            if self.tracker.update('best_f1', value=eval_metrics.prf_exact_span_f1.value):
+                out_path = g.log_dir / f'saved.{self.stage}.best'
+                logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
+                self.save_to(out_path)
 
-        if not self.tracker.update('best_score', value=eval_metrics.score.value, threshold=0.01):
-            # DEBUG(j_luo)
-            pass
-            # self.tracker.update('early_stop')
-            # self.lr_scheduler.step()
+            if not self.tracker.update('best_score', value=eval_metrics.score.value, threshold=0.01):
+                # DEBUG(j_luo)
+                pass
+                # self.tracker.update('early_stop')
+                # self.lr_scheduler.step()
 
     def should_terminate(self):
         return self.tracker.is_finished('early_stop') or self.tracker.is_finished('total_step')
@@ -298,6 +302,7 @@ class ExtractTrainer(BaseTrainer):
                 loss = loss + metrics.entropy.mean * g.entropy_hyper
             except AttributeError:
                 pass
+            loss = loss + metrics.reg.mean * g.reg_hyper
 
             # loss = -metrics.score.mean
             (loss / g.accum_gradients).backward()

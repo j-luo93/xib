@@ -277,7 +277,6 @@ class ExtractModel(nn.Module):
     add_argument('use_g_embedding', default=False, dtype=bool)
     add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('use_plain_embedding', default=False, dtype=bool, msg='Flag to use residual.')
-    add_argument('use_full_prob', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
@@ -561,10 +560,6 @@ class ExtractModel(nn.Module):
         len_e = matches.ed_dist.size('len_e')
         vs = len(self.vocab)
 
-        # # DEBUG(j_luo)
-        # inverse_new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr, inverse=True)
-        # inverse_matches = inverse_new_extracted.matches
-
         # Get the best score and span.
         if self.training:
             flat_score = matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
@@ -583,18 +578,15 @@ class ExtractModel(nn.Module):
             # best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
             flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
             flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
-            if g.use_full_prob:
-                unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
-                unextracted = unextracted.expand_as(matches.score)
-                flat_unextracted_score = unextracted.flatten(
-                    ['len_s', 'len_e', 'vocab'], 'cand') * math.log(g.unextracted_prob)
-                flat_viable_score = flat_viable_score + flat_unextracted_score
-                best_matched_score = flat_viable_score.logsumexp(dim='cand')
-                best_matched_score = best_matched_score * (any_viable).float()
-            else:
-                best_matched_score = flat_viable_score.logsumexp(dim='cand')
-                best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
-                best_matched_score = best_matched_score * any_viable
+
+            unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
+            unextracted = unextracted.expand_as(matches.score)
+            flat_unextracted_score = unextracted.flatten(
+                ['len_s', 'len_e', 'vocab'], 'cand') * math.log(g.unextracted_prob)
+            flat_viable_score = flat_viable_score + flat_unextracted_score
+            best_matched_score = flat_viable_score.logsumexp(dim='cand')
+            best_matched_score = best_matched_score * (any_viable).float()
+
             ret = ExtractModelReturn(start, end, best_matched_score,
                                      best_matched_vocab, new_extracted, dfm, alignment)
         else:
@@ -656,11 +648,7 @@ class ExtractModel(nn.Module):
 
         return ret
 
-    @global_property
-    def inverse_ratio(self):
-        pass
-
-    def _extract_one_span(self, batch: ExtractBatch, extracted: Extracted, word_repr: FT, unit_repr: FT, inverse: bool = False) -> Extracted:
+    def _extract_one_span(self, batch: ExtractBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
         # Propose all span start/end positions.
         start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
         # Range from `min_word_length` to `max_word_length`.
@@ -673,7 +661,7 @@ class ExtractModel(nn.Module):
         viable = (end_candidates < batch.lengths.align_as(end_candidates))
         start_candidates = start_candidates.expand_as(viable)
         len_candidates = len_candidates.expand_as(viable)
-        # NOTE(j_luo) Use `viable` to get the lengths. `len_candidates` has dummy axes. # IDEA(j_luo) Any better way of handling this?
+        # NOTE(j_luo) Use `viable` to get the lengths. `len_candidates` has dummy axes. # IDEA(j_luo) Any better way of handling this? Perhaps persistent names?
         len_s = viable.size('len_s')
         len_e = viable.size('len_e')
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
@@ -704,30 +692,22 @@ class ExtractModel(nn.Module):
             extracted_unit_ids = None
         extracted_word_repr = nh.unflatten(extracted_word_repr, 'viable_X_len_w', ['viable', 'len_w'])
 
-        # DEBUG(j_luo)
-        if g.input_format == 'text':
-            unit_counts = get_zeros(extracted_unit_ids.max().item() + 1).rename('extracted_unit')
-            with NoName(extracted_unit_ids, unit_counts):
-                unit_counts.scatter_add_(0, extracted_unit_ids, torch.full_like(extracted_unit_ids, 1).float())
-        else:
-            unit_counts = None
-
         # Main body: Run DP to find the best matches.
-        matches, costs, inverse_unit_costs = self._get_matches(
-            extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids)
+        matches, costs, inverse_unit_costs = self._get_matches(extracted_word_repr, viable_lens, extracted_unit_ids)
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
         field_names = [f.name for f in fields(matches)]
         for fname in field_names:
-            # Skip dp scores.
+            # NOTE(j_luo) Skip DP scores.
             if fname == 'f':
                 continue
 
             attr = getattr(matches, fname)
             if attr is not None:
                 value = None
+                # FIXME(j_luo) Probably need to remove these later.
                 if 'score' in fname or 'thresh' in fname:
                     value = -99999.9
                 elif 'ed_dist' in fname:
@@ -738,7 +718,8 @@ class ExtractModel(nn.Module):
         new_extracted = Extracted(batch.batch_size, matches, viable, costs, inverse_unit_costs, len_candidates)
         return new_extracted
 
-    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT, extracted_unit_ids: LT) -> Tuple[Matches, FT]:
+    def _get_matches(self, extracted_word_repr: FT, viable_lens: LT, extracted_unit_ids: LT) -> Tuple[Matches, FT]:
+        # FIXME(j_luo) Think about how to deal with repr and unit_ids. It is not needed right now to compute costs, but mayber later.
         ns = extracted_word_repr.size('viable')
         len_w = extracted_word_repr.size('len_w')
         nt = len(self.vocab_feat_matrix)
@@ -746,20 +727,18 @@ class ExtractModel(nn.Module):
         mtl = self.vocab_feat_matrix.size('length')
 
         # Compute cosine distances all at once: for each viable span, compare it against all units.
-        ins_del_cost = self.ins_del_cost
-
         with NoName(self.global_log_probs, extracted_unit_ids):
             costs = -self.global_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
 
         # Name: viable x len_w x unit
         costs = costs.unflatten('viable_X_len_w', [('viable', ns), ('len_w', len_w)])
 
-        # # NOTE(j_luo) Use dictionary to save every state.
+        # NOTE(j_luo) Use dictionary to save every state.
         fs = dict()
         for i in range(msl + 1):
-            fs[(i, 0)] = get_zeros(ns, nt).fill_(i * ins_del_cost)
+            fs[(i, 0)] = get_zeros(ns, nt).fill_(i * self.ins_del_cost)
         for j in range(mtl + 1):
-            fs[(0, j)] = get_zeros(ns, nt).fill_(j * ins_del_cost)
+            fs[(0, j)] = get_zeros(ns, nt).fill_(j * self.ins_del_cost)
 
         # ------------------------ Main body: DP ----------------------- #
 
@@ -771,9 +750,9 @@ class ExtractModel(nn.Module):
                 for lt in range(min_lt, max_lt):
                     transitions = list()
                     if (ls - 1, lt) in fs:
-                        transitions.append(fs[(ls - 1, lt)] + ins_del_cost)
+                        transitions.append(fs[(ls - 1, lt)] + self.ins_del_cost)
                     if (ls, lt - 1) in fs:
-                        transitions.append(fs[(ls, lt - 1)] + ins_del_cost)
+                        transitions.append(fs[(ls, lt - 1)] + self.ins_del_cost)
                     if (ls - 1, lt - 1) in fs:
                         vocab_inds = self.indexed_segments[:, lt - 1]
                         sub_cost = costs[:, ls - 1, vocab_inds]
@@ -802,6 +781,7 @@ class ExtractModel(nn.Module):
             ed_dist.rename_('viable', 'vocab')
 
         # Get the best spans.
+        # FIXME(j_luo) REmove thresh_func.
         if g.thresh_func == 'soft':
             thresh_func = _soft_threshold
         elif g.thresh_func == 'linear':
@@ -810,13 +790,10 @@ class ExtractModel(nn.Module):
             thresh_func = _exp_threshold
         else:
             thresh_func = _exp_linear_threshold
-        # DEBUG(j_luo)
+
         if self.training:
             thresh = None
-            if g.use_full_prob:
-                score = -ed_dist
-            else:
-                score = self.vocab_length.float().log() - ed_dist
+            score = -ed_dist
             matches = MatchesLv4(ed_dist, f, thresh, score)
         else:
             matched_ed_dist, matched_vocab = ed_dist.min(dim='vocab')

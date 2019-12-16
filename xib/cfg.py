@@ -212,7 +212,6 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     learning_rate: float = 1.0
     reg_hyper: float = 1.0
     learning_rate: float = 0.1
-    use_full_prob: bool = True
     temperature: float = 1000.0
 
 

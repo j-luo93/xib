@@ -254,7 +254,6 @@ class ExtractManager:
         # self.trainer.threshold = 0.4
         self.trainer.uniform_prior = 1.0
         self.trainer.topk_ratio = 1.0
-        self.trainer.inverse_ratio = 0.0
         self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)  # , momentum=0.9, nesterov=True)
         # Save init parameters.
 
@@ -303,8 +302,3 @@ class ExtractManager:
             #     self.trainer.topk_ratio *= g.anneal_factor
             #     self.trainer.topk_ratio = max(0.0, self.trainer.topk_ratio)
             #     logging.imp(f'topk_ratio is now {self.trainer.topk_ratio:.3f}.')
-
-            # # DEBUG(j_luo)
-            # self.trainer.inverse_ratio += 0.1
-            # self.trainer.inverse_ratio = min(0.5, self.trainer.inverse_ratio)
-            # logging.imp(f'inverse_ratio is now {self.trainer.inverse_ratio:.3f}.')

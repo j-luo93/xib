@@ -332,11 +332,3 @@ class ExtractTrainer(BaseTrainer):
         accum_metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
 
         return accum_metrics
-
-    @global_property
-    def inverse_ratio(self):
-        pass
-
-    @inverse_ratio.setter
-    def inverse_ratio(self, value):
-        pass

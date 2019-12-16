@@ -215,11 +215,9 @@ class G2PLayer(nn.Module):
         # DEBUG(j_luo)
         self.aligner = nn.Linear(g.dim, 60)
         # DEBUG(j_luo)
-        logging.warning('unit aligner initialized.')
-        # self.unit_aligner = nn.Embedding(24, 28)
         self.unit_aligner = nn.Embedding(LU_SIZE, KU_SIZE)
-        logging.warning('unit aligner initialized uniformly.')
-        torch.nn.init.uniform_(self.unit_aligner.weight, -0.1, 0.1)
+        logging.warning('Unit aligner initialized to 0.')
+        self.unit_aligner.weight.data.fill_(0.0)
 
     def forward(self, unit_id_seqs: LT) -> Tuple[Dict[Category, FT], FT]:
         unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')

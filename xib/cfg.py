@@ -203,9 +203,7 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     optim_cls: str = 'sgd'
     relaxation_level: int = 4
     init_ins_del: int = 100
-    use_probs: bool = False
     thresh_func: str = 'exp'
-    new_use_probs: bool = True
     min_word_length: int = 4
     use_residual: bool = True
     init_threshold: float = 30.0

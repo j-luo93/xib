@@ -320,10 +320,7 @@ class ExtractEvaluator(BaseEvaluator):
         with NoName(bi, start, end, bmv, ed_dist):
             bmed = ed_dist[bi, start, end - start - g.min_word_length + 1, bmv]  # Best matched edit distance
         bmed.rename_('batch')
-        if g.use_probs:
-            matched = bmed.exp() > 1.0 - self.model.threshold
-        else:
-            matched = bmed < self.model.threshold
+        matched = bmed < self.model.threshold
 
         start = start.cpu().numpy()
         end = end.cpu().numpy()

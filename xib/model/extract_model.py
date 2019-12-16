@@ -274,8 +274,6 @@ class ExtractModel(nn.Module):
                  choices=['soft', 'linear', 'exp', 'exp_linear'], msg='Threshold function to use.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
-    add_argument('use_probs', default=False, dtype=bool, msg='Flag to use probabilities instead of distances.')
-    add_argument('new_use_probs', default=False, dtype=bool)
     add_argument('use_global', default=False, dtype=bool)
     add_argument('use_g_embedding', default=False, dtype=bool)
     add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
@@ -595,10 +593,8 @@ class ExtractModel(nn.Module):
         # inverse_matches = inverse_new_extracted.matches
 
         # Get the best score and span.
-        if g.use_probs or (self.training and g.relaxation_level == 4):  # Only lv4 needs special treatment.
+        if self.training and g.relaxation_level == 4:  # Only lv4 needs special treatment.
             flat_score = matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
-            # # NOTE(j_luo) Use min if g.use_probs is True.
-            # _soft_func = _soft_min if g.use_probs else _soft_max
             best_matched_score, best_span_ind = _soft_max(flat_score, 'cand', self.temperature)
             start = best_span_ind // (len_e * vs)
             # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
@@ -612,114 +608,22 @@ class ExtractModel(nn.Module):
             best_matched_score = best_matched_score + (~any_viable).float() * (-9999.9)
             # DEBUG(j_luo) This was actually the correct one.
             # best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
-            if g.new_use_probs:
-                flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
-                flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
-                if g.use_full_prob:
-                    unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
-                    unextracted = unextracted.expand_as(matches.score)
-                    flat_unextracted_score = unextracted.flatten(
-                        ['len_s', 'len_e', 'vocab'], 'cand') * math.log(g.unextracted_prob)
-                    flat_viable_score = flat_viable_score + flat_unextracted_score
-                    best_matched_score = flat_viable_score.logsumexp(dim='cand')
-                    best_matched_score = best_matched_score * (any_viable).float()
-                else:
-                    best_matched_score = flat_viable_score.logsumexp(dim='cand')
-                    best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
-                    best_matched_score = best_matched_score * any_viable
-                ret = ExtractModelReturn(start, end, best_matched_score,
-                                         best_matched_vocab, new_extracted, dfm, alignment)
-            elif g.use_probs:
-                flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
-
-                # nh = NameHelper()
-                # x = nh.flatten(matches.score, ['len_s', 'len_e'], 'len_s_X_len_e')
-                # TOP = 100
-                # _, inds = torch.topk(x.logsumexp('vocab'), TOP, 'len_s_X_len_e')
-                # top_start = inds // len_e
-                # top_end = inds % len_e + top_start + g.min_word_length - 1
-                # top = torch.stack([top_start, top_end], new_name='index').cpu().numpy()
-
-                # predictions = list()
-                # for bi in range(batch.batch_size):
-                #     segments = list()
-                #     for k in range(TOP):
-                #         s = top[bi, k, 0]
-                #         e = top[bi, k, 1]
-                #         span = Span('dummy', s, e)
-                #         segment = Segmentation([span])
-                #         segments.append(segment)
-                #     predictions.append(segments)
-
-                # ground_truths = [segment.to_segmentation() for segment in batch.segments]
-                # recalled = list()
-                # for preds, gt in zip(predictions, ground_truths):
-                #     _recalled = np.zeros(TOP)
-                #     for k, pred in enumerate(preds):
-                #         p = pred.spans[0]
-                #         for _g in gt:
-                #             if p.is_same_span(_g):
-                #                 _recalled[k] = 1
-                #                 break
-                #     _recalled = np.cumsum(_recalled)
-                #     recalled.append(_recalled)
-                # recalled = np.asarray(recalled).sum(axis=0)
-                # try:
-                #     self._cnt += 1
-                #     self._recalled = self._recalled + recalled
-                #     self._total += batch.batch_size
-                # except AttributeError:
-                #     self._cnt = 1
-                #     self._recalled = np.zeros(TOP)
-                #     self._total = batch.batch_size
-                # if self._cnt % 100 == 0:
-                #     print((self._recalled / self._total)[range(19, TOP, 20)])
-                #     self._recalled = np.zeros(TOP)
-                #     self._total = 0
-
-                # flat_viable_score = flat_score + (-99999.9) * (~flat_viable).float()
-                # viable_count = flat_viable.sum('cand').float()
-
-                # combined_logits = (1.0 / viable_count + 1e-8).log().align_as(flat_score) + flat_score
-                # best_matched_score = combined_logits.logsumexp(dim='cand').exp()
-
-                best_matched_score = flat_score.logsumexp(dim='cand').exp()
-
-                # # DEBUG(j_luo)
-                # inverse_flat_score = inverse_matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
-                # inverse_best_matched_score = inverse_flat_score.logsumexp(dim='cand').exp()
-
-                # best_matched_score = 0.5 * best_matched_score + 0.5 * inverse_best_matched_score
-
-                # best_matched_score = flat_score.logsumexp(dim='cand')
-                # DEBUG(j_luo)
-                # best_matched_score = flat_score.max(dim='cand')[0].exp()
-                ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm)
-
-            # DEBUG(j_luo)
-            elif g.uniform_scheme in ['prior', 'topk']:
-                flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
-                if g.uniform_scheme == 'prior':
-                    flat_viable = flat_viable & (flat_score > -50)  # DEBUG(j_luo)
-                    summed_score = (flat_viable * flat_score).sum(dim='cand')
-                    summed_weight = flat_viable.sum(dim='cand')
-                    uniform_matched_score = summed_score / summed_weight
-                    best_matched_score = self.uniform_prior * uniform_matched_score + \
-                        (1.0 - self.uniform_prior) * best_matched_score
-                else:
-                    # This is the upper boundary of k.
-                    k = int(flat_viable.sum('cand').max() * self.topk_ratio)
-                    k = max(1, k)
-                    # k = 20  # DEBUG(j_luo)
-                    # Get the top k candidates.
-                    flat_viable_score = flat_score + (-99999.9) * (~flat_viable).float()
-                    top_score, top_ind = torch.topk(flat_viable_score, k, 'cand')
-                    # Each batch has a different k.
-                    batch_k = torch.min(get_tensor([k]).long(), flat_viable.sum('cand'))
-                    # Get the actual top indices for each batch
-                    batch_k_mask = get_length_mask(batch_k, k)
-                    summed_score = (batch_k_mask * top_score).sum('cand')
-                    best_matched_score = summed_score / batch_k
+            flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+            flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
+            if g.use_full_prob:
+                unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
+                unextracted = unextracted.expand_as(matches.score)
+                flat_unextracted_score = unextracted.flatten(
+                    ['len_s', 'len_e', 'vocab'], 'cand') * math.log(g.unextracted_prob)
+                flat_viable_score = flat_viable_score + flat_unextracted_score
+                best_matched_score = flat_viable_score.logsumexp(dim='cand')
+                best_matched_score = best_matched_score * (any_viable).float()
+            else:
+                best_matched_score = flat_viable_score.logsumexp(dim='cand')
+                best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
+                best_matched_score = best_matched_score * any_viable
+            ret = ExtractModelReturn(start, end, best_matched_score,
+                                     best_matched_vocab, new_extracted, dfm, alignment)
         else:
             flat_matched_score = matches.matched_score.flatten(['len_s', 'len_e'], 'cand')
             if self.training and g.relaxation_level in [1, 2, 3]:
@@ -858,7 +762,7 @@ class ExtractModel(nn.Module):
 
         # Main body: Run DP to find the best matches.
         matches, costs, inverse_unit_costs = self._get_matches(
-            extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids, unit_counts, inverse=inverse)
+            extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids)
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
@@ -876,21 +780,13 @@ class ExtractModel(nn.Module):
                     value = -99999.9
                 elif 'ed_dist' in fname:
                     value = 99999.9
-                    if g.use_probs:
-                        value = -value
-                # DEBUG(j_luo)
-                # NOTE(j_luo) Reverse signs if g.use_probs is True
-                # if g.use_probs:
-                #     value = -value
-                # value = -999.9 if 'score' in fname or 'ed_dist' in fname else None
                 restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
                 setattr(matches, fname, restored)
 
         new_extracted = Extracted(batch.batch_size, matches, viable, costs, inverse_unit_costs, len_candidates)
         return new_extracted
 
-    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT, extracted_unit_ids: LT, unit_counts: FT, inverse: bool = False) -> Tuple[Matches, FT]:
-        d_char = extracted_word_repr.size('char_emb')
+    def _get_matches(self, extracted_word_repr: FT, unit_repr: FT, viable_lens: LT, extracted_unit_ids: LT) -> Tuple[Matches, FT]:
         ns = extracted_word_repr.size('viable')
         nt = len(self.vocab_feat_matrix)
         msl = extracted_word_repr.size('len_w')
@@ -919,23 +815,11 @@ class ExtractModel(nn.Module):
 
         nh = NameHelper()
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
-        if g.use_probs or g.new_use_probs:
-            dist_func = lambda x, y: x @ y.t()
-        elif g.dist_func == 'cos':
-            dist_func = _get_cosine_matrix
-        elif g.dist_func == 'hamming':
-            dist_func = _get_hamming_matrix
-        else:
-            dist_func = _get_sos_matrix
+        dist_func = lambda x, y: x @ y.t()
         costs = dist_func(_extracted_word_repr, unit_repr)
 
         ins_del_cost = self.ins_del_cost
-        if g.new_use_probs:
-            costs = -costs.log_softmax(dim='unit')
-
-        elif g.use_probs:
-            costs = costs.log_softmax(dim='unit')
-            ins_del_cost = -ins_del_cost
+        costs = -costs.log_softmax(dim='unit')
 
         if g.use_global or g.use_direct_almt:
             with NoName(self.global_log_probs, extracted_unit_ids):
@@ -970,18 +854,14 @@ class ExtractModel(nn.Module):
                         transitions.append(fs[(ls - 1, lt - 1)] + sub_cost)
                     if transitions:
                         all_s = torch.stack(transitions, dim=-1)
-                        if g.use_probs:
-                            new_s, _ = all_s.max(dim=-1)
-                        else:
-                            new_s, _ = all_s.min(dim=-1)
+                        new_s, _ = all_s.min(dim=-1)
                         fs[(ls, lt)] = new_s
 
         f_lst = list()
-        value = -9999.9 if g.use_probs else 9999.9
         for i in range(msl + 1):
             for j in range(mtl + 1):
                 if (i, j) not in fs:
-                    fs[(i, j)] = get_zeros(ns, nt).fill_(value)
+                    fs[(i, j)] = get_zeros(ns, nt).fill_(9999.9)
                 f_lst.append(fs[(i, j)])
         f = torch.stack(f_lst, dim=0).view(msl + 1, mtl + 1, -1, len(self.vocab))
         f.rename_('len_w_src', 'len_w_tgt', 'viable', 'vocab')
@@ -1007,19 +887,13 @@ class ExtractModel(nn.Module):
         else:
             thresh_func = _exp_linear_threshold
         # DEBUG(j_luo)
-        if g.new_use_probs and self.training:
+        if self.training:
             thresh = None
             if g.use_full_prob:
                 score = -ed_dist
             else:
                 score = self.vocab_length.float().log() - ed_dist
             matches = MatchesLv4(ed_dist, f, thresh, score)
-        elif g.use_probs:
-            thresh = None
-
-            score = self.vocab_length.float().log() + ed_dist
-            matches = MatchesLv4(ed_dist, f, thresh, score)
-
         elif self.training:
             if g.relaxation_level == 1:
                 matched_ed_dist, matched_vocab = _soft_min(ed_dist, 'vocab', self.temperature)

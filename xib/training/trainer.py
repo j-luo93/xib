@@ -174,7 +174,8 @@ class ExtractTrainer(BaseTrainer):
 
     model: ExtractModel
 
-    add_argument('reg_hyper', default=1, dtype=float)
+    add_argument('reg_hyper', default=1.0, dtype=float, msg='Hyperparameter for alignment regularization.')
+    add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -190,7 +191,8 @@ class ExtractTrainer(BaseTrainer):
         #     p.data[range(lp), range(lp)] += 200.0
 
         self.ins_del_cost = g.init_ins_del_cost
-        self.add_callback('total_step', 1, self.save_alignment)
+        if g.save_alignment:
+            self.add_callback('total_step', 1, self.save_alignment)
 
     def save_alignment(self):
         to_save = {

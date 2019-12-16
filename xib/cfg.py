@@ -196,11 +196,9 @@ class ExtractEsWithP5GermanTest(DecipherEsWithP5GermanTest):
 class SanityCheck(ExtractEsWithP5GermanTest):
     input_format: str = 'text'
     g2p_window_size: int = 1
-    thresh_func: str = 'linear'
     dim: int = 60
     optim_cls: str = 'sgd'
     init_ins_del: int = 100
-    thresh_func: str = 'exp'
     min_word_length: int = 4
     init_threshold: float = 30.0
     min_threshold: float = 0.99

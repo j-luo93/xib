@@ -28,42 +28,6 @@ ExtractBatch = Union[ContinuousIpaBatch, UnbrokenTextBatch]
 class Matches(BaseBatch):
     ed_dist: FT
     f: FT  # All these dp scores.
-
-
-@batch_class
-class MatchesLv0(Matches):
-    matched_ed_dist: FT
-    matched_vocab: LT
-    matched_length: LT
-    matched_thresh: FT
-    matched_score: FT
-
-
-@batch_class
-class MatchesLv1(MatchesLv0):
-    pass
-
-
-@batch_class
-class MatchesLv2(Matches):
-    thresh: FT
-    matched_thresh: FT
-    matched_vocab: LT
-    matched_length: LT
-    matched_score: FT
-
-
-@batch_class
-class MatchesLv3(Matches):
-    thresh: FT
-    score: FT
-    matched_score: FT
-    matched_vocab: LT
-
-
-@batch_class
-class MatchesLv4(Matches):
-    thresh: FT
     score: FT
 
 
@@ -75,14 +39,6 @@ class Extracted(BaseBatch):
     costs: Optional[FT] = None
     inverse_unit_costs: Optional[FT] = None
     len_candidates: Optional[LT] = None
-    # last_end: Optional[LT] = None  # The end positions (inclusive) of the last extracted words.
-    # score: Optional[FT] = None
-
-    # def __post_init__(self):
-    #     if self.score is None:
-    #         # NOTE(j_luo) Mind the -1.
-    #         # self.last_end = get_zeros(self.batch_size, g.max_extracted_candidates).long().rename('batch', 'cand') - 1
-    #         self.score = get_zeros(self.batch_size, g.max_extracted_candidates).rename('batch', 'cand')
 
 
 @batch_class
@@ -96,34 +52,10 @@ class ExtractModelReturn(BaseBatch):
     alignment: FT
 
 
-def _soft_threshold(x, thresh):
-    return (nn.functional.celu(1 - 2 * x / thresh) + 1) / 2
-
-
-def _linear_threshold(x, thresh):
-    return 1 - x / thresh
-
-
-def _exp_linear_threshold(x, thresh):
-    pt = - thresh * math.log(thresh)
-    return torch.where(x > pt, -x / thresh, (-x / thresh).exp())
-
-
-def _exp_threshold(x, thresh):
-    return (-x / thresh).exp()
-
-
 def _soft_max(x, dim, temperature):
     w = (x / temperature).log_softmax(dim=dim).exp()
     value = (x * w).sum(dim)
     _, index = x.max(dim=dim)
-    return value, index
-
-
-def _soft_min(x, dim, temperature):
-    w = (-x / temperature).log_softmax(dim=dim).exp()
-    value = (x * w).sum(dim)
-    _, index = x.min(dim=dim)
     return value, index
 
 
@@ -268,8 +200,6 @@ class ExtractModel(nn.Module):
     add_argument('max_extracted_candidates', default=200, dtype=int, msg='Max number of extracted candidates.')
     add_argument('init_threshold', default=0.05, dtype=float,
                  msg='Initial value of threshold to determine whether two words are matched.')
-    add_argument('thresh_func', default='soft', dtype=str,
-                 choices=['soft', 'linear', 'exp', 'exp_linear'], msg='Threshold function to use.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_g_embedding', default=False, dtype=bool)
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
@@ -388,52 +318,20 @@ class ExtractModel(nn.Module):
     def topk_ratio(self):
         pass
 
-    # ------------------------ Useful methods for debugging ----------------------- #
-
-    def get_g2p_vector(self, c: str):
-        idx = self.g2p.dataset.unit2id[c]
-        idx = get_zeros(1).fill_(idx).long()
-        adapted_dfm = self.g2p(idx.rename('batch'))
-        names = sorted(adapted_dfm, key=lambda name: name.value)
-        with NoName(*adapted_dfm.values()):
-            unit_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
-        return adapted_dfm, unit_repr
-
-    def get_vector(self, c: str, adapt: bool = False):
-        c = self._str2sw(c)
-        fm = c.feat_matrix.rename('length', 'feat_group').align_to('batch', ...)
-        dfm = convert_to_dense(fm)
-        if adapt:
-            dfm = self.adapter(dfm)
-        names = [name for name in dfm if should_include(g.feat_groups, name)]
-        names = sorted(names, key=lambda name: name.value)
-        with NoName(*dfm.values()):
-            word_repr = torch.cat([dfm[name] for name in names], dim=-1)
-        word_repr = word_repr.rename('batch', 'length', 'char_emb').squeeze(dim='batch').squeeze(dim='length')
-        return word_repr
-
-    def _str2sw(self, c: str):
-        return SegmentWindow([Segment(c)])
-
-    def get_char_sim(self, c1: str, c2: str, adapt: bool = False):
-        v1 = self.get_vector(c1, adapt=adapt)
-        v2 = self.get_vector(c2)
-        return (v1 * v2).sum() / (v1 ** 2).sum().sqrt() / (v2 ** 2).sum().sqrt()
-
-    def get_char_hamming(self, c1: str, c2: str, adapt: bool = False):
-        v1 = self.get_vector(c1, adapt=adapt)
-        v2 = self.get_vector(c2)
-        return (v1 - v2).abs().sum()
-
-    def get_one_hot_unit_repr(self):
-        with NoName(*self.unit_dense_feat_matrix.values()):
-            unit_repr = torch.cat([self.unit_dense_feat_matrix[name]
-                                   for name in Category if should_include(g.feat_groups, name)], dim=-1)
-        return unit_repr.rename_('batch', 'length', 'char_emb').squeeze('length')
-
     def forward(self, batch: ExtractBatch) -> ExtractModelReturn:
         """
         # FIXME(j_luo) Probably need to remove this.
+        The generating story is:
+            v
+            |
+            w
+            |
+            x -- ww -- theta
+
+        Pr(x) = sum_w Pr(w) Pr(ww)
+              = sum_w Pr(w) theta^|ww|
+              = sum_{w, v} Pr(w | v) Pr(v) theta^|ww|
+
         Terminologies:
         ed_dist: d(v, w)
         thresh: after thresholding
@@ -475,7 +373,6 @@ class ExtractModel(nn.Module):
 
             # DEBUG(j_luo)
             # word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
-
             unit_repr.rename_('batch', 'length', 'char_emb')
         else:
             with Rename(self.unit_feat_matrix, unit='batch'):
@@ -493,89 +390,38 @@ class ExtractModel(nn.Module):
         vs = len(self.vocab)
 
         # Get the best score and span.
+        # if self.training:
+        flat_score = matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        best_matched_score, best_span_ind = _soft_max(flat_score, 'cand', self.temperature)
+        start = best_span_ind // (len_e * vs)
+        # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
+        end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
+        best_matched_vocab = best_span_ind % vs
+
+        # NOTE(j_luo) Some segments don't have any viable spans.
+        any_viable = new_extracted.viable.any('len_s').any('len_e')
+        # DEBUG(j_luo)
+        # best_matched_score = best_matched_score * any_viable
+        best_matched_score = best_matched_score + (~any_viable).float() * (-9999.9)
+        # DEBUG(j_luo) This was actually the correct one.
+        # best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
+        flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
+
+        unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
+        unextracted = unextracted.expand_as(matches.score)
+        flat_unextracted_score = unextracted.flatten(
+            ['len_s', 'len_e', 'vocab'], 'cand') * math.log(g.unextracted_prob)
+        flat_viable_score = flat_viable_score + flat_unextracted_score
+        # FIXME(j_luo) A big messy here
         if self.training:
-            flat_score = matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
-            best_matched_score, best_span_ind = _soft_max(flat_score, 'cand', self.temperature)
-            start = best_span_ind // (len_e * vs)
-            # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
-            end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
-            best_matched_vocab = best_span_ind % vs
-
-            # NOTE(j_luo) Some segments don't have any viable spans.
-            any_viable = new_extracted.viable.any('len_s').any('len_e')
-            # DEBUG(j_luo)
-            # best_matched_score = best_matched_score * any_viable
-            best_matched_score = best_matched_score + (~any_viable).float() * (-9999.9)
-            # DEBUG(j_luo) This was actually the correct one.
-            # best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
-            flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
-            flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
-
-            unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
-            unextracted = unextracted.expand_as(matches.score)
-            flat_unextracted_score = unextracted.flatten(
-                ['len_s', 'len_e', 'vocab'], 'cand') * math.log(g.unextracted_prob)
-            flat_viable_score = flat_viable_score + flat_unextracted_score
             best_matched_score = flat_viable_score.logsumexp(dim='cand')
-            best_matched_score = best_matched_score * (any_viable).float()
-
-            ret = ExtractModelReturn(start, end, best_matched_score,
-                                     best_matched_vocab, new_extracted, dfm, alignment)
         else:
-            flat_matched_score = matches.matched_score.flatten(['len_s', 'len_e'], 'cand')
-            best_matched_score, best_span_ind = flat_matched_score.max(dim='cand')
-            start = best_span_ind // len_e
-            # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
-            end = best_span_ind % len_e + start + g.min_word_length - 1
+            best_matched_score, _ = flat_viable_score.max(dim='cand')
+        best_matched_score = best_matched_score * (any_viable).float()
 
-            any_viable = new_extracted.viable.any('len_s').any('len_e')
-            # DEBUG(j_luo)
-            # best_matched_score = best_matched_score * any_viable
-            best_matched_score = best_matched_score + (~any_viable).float() * (-9999.9)
-
-            flat_matched_vocab = matches.matched_vocab.flatten(['len_s', 'len_e'], 'cand')
-            best_matched_vocab = flat_matched_vocab.gather('cand', best_span_ind)
-
-        if g.debug:
-            torch.set_printoptions(sci_mode=False, linewidth=200)
-            from dev_misc.devlib.inspector import Inspector
-            ins = Inspector()
-            id_seq_emb = self.g2p.unit_embedding.weight
-            unit_logits = id_seq_emb @ unit_repr.t()
-            unit_logits.rename_('lost_unit', 'known_unit')
-            unit_probs = unit_logits.log_softmax('known_unit').exp()
-            ins.add_table(unit_logits, 'unit_logit')
-            ins.add_table(unit_probs, 'unit_prob')
-
-            ins.add_table(matches.ed_dist, 'ed_dist')
-            ins.add_table(matches.f, 'f', auto_merge=False)
-            ins.add_table(matches.score, 'score')
-            ins.add_table(matches.thresh, 'thresh')
-            ins.add_table(new_extracted.costs, 'cost')
-
-            lost_units = self.g2p.dataset.id2unit
-            ins.add_table(lost_units, 'lost_unit', is_index=True)
-            known_units = self.id2unit
-            ins.add_table(known_units, 'known_unit', is_index=True)
-            vocab = [''.join(segment.segment_list) for segment in self.vocab]
-            ins.add_table(vocab, 'vocab', is_index=True)
-            segments = [''.join(segment.segment_list) for segment in batch.segments]
-            ins.add_table(segments, 'batch', is_index=True)
-            ins.add_table(new_extracted.viable, 'viable', is_mask_index=True)
-
-            ins.take('viable')
-            ins.take('batch_id', 2)
-            ins.merge('f', how='left', left_index=True, right_on='viable_id')
-            ins.take('len_s_id', 2)
-            ins.take('len_e_id', 0)
-            ins.narrow(['f', 'len_w_src_id', 'len_w_tgt_id', 'vocab_id'])
-            ins.merge('vocab', how='right', right_index=True, left_on='vocab_id')
-            ins.save_as('first')
-            ins.take('vocab', 'tɾaeɾas')
-            ins.pivot(index='len_w_src_id', columns='len_w_tgt_id', values='f')
-            ins.run()
-
-        ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm, alignment)
+        ret = ExtractModelReturn(start, end, best_matched_score,
+                                 best_matched_vocab, new_extracted, dfm, alignment)
 
         return ret
 
@@ -601,6 +447,7 @@ class ExtractModel(nn.Module):
             viable_lens = len_candidates[viable].rename('viable')
             viable_bi = bi[viable].rename('viable')
 
+        # breakpoint()  # BREAKPOINT(j_luo)
         # Get the word positions to get the corresponding representations.
         viable_starts = viable_starts.align_to('viable', 'len_w')
         word_pos_offsets = get_named_range(g.max_word_length, 'len_w').align_as(viable_starts)
@@ -712,26 +559,6 @@ class ExtractModel(nn.Module):
             ed_dist.rename_('viable', 'vocab')
 
         # Get the best spans.
-        # FIXME(j_luo) REmove thresh_func.
-        if g.thresh_func == 'soft':
-            thresh_func = _soft_threshold
-        elif g.thresh_func == 'linear':
-            thresh_func = _linear_threshold
-        elif g.thresh_func == 'exp':
-            thresh_func = _exp_threshold
-        else:
-            thresh_func = _exp_linear_threshold
-
-        if self.training:
-            thresh = None
-            score = -ed_dist
-            matches = MatchesLv4(ed_dist, f, thresh, score)
-        else:
-            matched_ed_dist, matched_vocab = ed_dist.min(dim='vocab')
-            matched_length = self.vocab_length.gather('vocab', matched_vocab)
-            matched_thresh = thresh_func(matched_ed_dist, self.threshold)
-            matched_score = matched_length * matched_thresh
-            matches = MatchesLv0(ed_dist, f, matched_ed_dist, matched_vocab,
-                                 matched_length, matched_thresh, matched_score)
-
+        score = -ed_dist
+        matches = Matches(ed_dist, f, score)
         return matches, costs, None

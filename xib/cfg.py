@@ -187,7 +187,6 @@ class ExtractEsWithP5GermanTest(DecipherEsWithP5GermanTest):
     use_adapt: bool = True
     check_interval: int = 50
     use_embedding: bool = False
-    dist_func: str = 'sos'
 
     def __post_init__(self):
         super().__post_init__()
@@ -201,7 +200,6 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     thresh_func: str = 'linear'
     dim: int = 60
     optim_cls: str = 'sgd'
-    relaxation_level: int = 4
     init_ins_del: int = 100
     thresh_func: str = 'exp'
     min_word_length: int = 4
@@ -216,7 +214,6 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     learning_rate: float = 0.1
     use_full_prob: bool = True
     temperature: float = 1000.0
-    use_direct_almt: bool = True
 
 
 # @reg

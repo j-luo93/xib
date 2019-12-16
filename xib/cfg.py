@@ -206,13 +206,19 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     use_probs: bool = False
     thresh_func: str = 'exp'
     new_use_probs: bool = True
-    min_word_length: int = 6
+    min_word_length: int = 4
     use_residual: bool = True
     init_threshold: float = 30.0
+    min_threshold: float = 0.99
     anneal_factor: float = 0.8
     temperature: float = 1.0
-    num_steps: int = 2000
+    num_steps: int = 1000
     learning_rate: float = 1.0
+    reg_hyper: float = 1.0
+    learning_rate: float = 0.1
+    use_full_prob: bool = True
+    temperature: float = 1000.0
+    use_direct_almt: bool = True
 
 
 # @reg

@@ -288,6 +288,8 @@ class ExtractModel(nn.Module):
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
+    add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
+    add_argument('multiplier', default=1.0, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
     add_argument('uniform_scheme', dtype=str, default='none',
                  choices=['none', 'prior', 'topk'], msg='How to use uniformly-weighted scores.')
@@ -541,8 +543,13 @@ class ExtractModel(nn.Module):
 
                     if g.use_direct_almt:
                         word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
-                        alignment = word_repr.log_softmax(dim=-1).exp()
-                        word_repr = alignment @ unit_repr.squeeze(dim=1)
+                        # DEBUG(j_luo)
+                        # alignment = word_repr.log_softmax(dim=-1).exp()
+                        # word_repr = alignment @ unit_repr.squeeze(dim=1)
+                        # word_repr = word_repr * g.multiplier
+                        word_repr = word_repr @ unit_repr.squeeze(dim=1)
+                        self.global_log_probs = (word_repr @ unit_repr.squeeze(dim=1).t()).log_softmax(dim=-1)
+                        alignment = self.global_log_probs.exp()
                     else:
                         # # # DEBUG(j_luo)
                         word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
@@ -611,7 +618,8 @@ class ExtractModel(nn.Module):
                 if g.use_full_prob:
                     unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
                     unextracted = unextracted.expand_as(matches.score)
-                    flat_unextracted_score = unextracted.flatten(['len_s', 'len_e', 'vocab'], 'cand') * math.log(0.1)
+                    flat_unextracted_score = unextracted.flatten(
+                        ['len_s', 'len_e', 'vocab'], 'cand') * math.log(g.unextracted_prob)
                     flat_viable_score = flat_viable_score + flat_unextracted_score
                     best_matched_score = flat_viable_score.logsumexp(dim='cand')
                     best_matched_score = best_matched_score * (any_viable).float()
@@ -962,7 +970,7 @@ class ExtractModel(nn.Module):
             costs = costs.log_softmax(dim='unit')
             ins_del_cost = -ins_del_cost
 
-        if g.use_global:
+        if g.use_global or g.use_direct_almt:
             with NoName(self.global_log_probs, extracted_unit_ids):
                 costs = -self.global_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
 

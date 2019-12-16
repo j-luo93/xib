@@ -28,7 +28,7 @@ class BaseTrainer(BaseTrainerDev, metaclass=ABCMeta):  # pylint: disable=abstrac
     add_argument('learning_rate', default=2e-3, dtype=float, msg='learning rate')
     add_argument('check_interval', default=2, dtype=int, msg='check metrics after this many steps')
     add_argument('eval_interval', default=500, dtype=int, msg='save models after this many steps')
-    add_argument('save_interval', default=500, dtype=int, msg='save models after this many steps')
+    add_argument('save_interval', default=0, dtype=int, msg='save models after this many steps')
 
     def save_to(self, path: Path):
         to_save = {
@@ -190,6 +190,15 @@ class ExtractTrainer(BaseTrainer):
         #     p.data[range(lp), range(lp)] += 200.0
 
         self.ins_del_cost = g.init_ins_del_cost
+        self.add_callback('total_step', 1, self.save_alignment)
+
+    def save_alignment(self):
+        to_save = {
+            'unit_aligner': self.model.g2p.unit_aligner.state_dict(),
+        }
+        path = g.log_dir / f'saved.{self.stage}.almt'
+        torch.save(to_save, path)
+        logging.imp(f'Alignment saved to {path}.')
 
     # DEBUG(j_luo) dilute
     def dilute(self):

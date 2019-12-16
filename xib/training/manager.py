@@ -256,9 +256,10 @@ class ExtractManager:
         self.trainer.topk_ratio = 1.0
         self.trainer.inverse_ratio = 0.0
         self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)  # , momentum=0.9, nesterov=True)
-        if not g.saved_model_path:
-            out_path = g.log_dir / f'saved.init'
-            self.trainer.save_to(out_path)
+        # Save init parameters.
+
+        out_path = g.log_dir / f'saved.init'
+        self.trainer.save_to(out_path)
         while self.trainer.threshold > g.min_threshold:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)

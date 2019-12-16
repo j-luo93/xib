@@ -921,46 +921,13 @@ class ExtractModel(nn.Module):
         _extracted_word_repr = nh.flatten(extracted_word_repr, ['viable', 'len_w'], 'viable_X_len_w')
         if g.use_probs or g.new_use_probs:
             dist_func = lambda x, y: x @ y.t()
-            # DEBUG(j_luo) a specialized dist_function
-
-            # def dist_func(x, y):
-            #     weight = get_zeros(60).fill_(0.2)
-            #     # weight[0:2] = 5.0
-            #     weight[5:22] = 1.0
-            #     weight[22:43] = 1.0
-            #     x = x * weight
-            #     return x @ y.t()
-            # def dist_func(x, y):
-            #     ptype = x[:, :2] * y[:, :2]
-            #     c_voicing = x[:, 2: 5] * y[:, 2:5]
-            #     c_place = x[:, 5: 22] * y[:, 5, :22]
-            #     c_manner = x[:, 22:43] * y[:, 22:43]
-            #     v_height = x[:, 43:51] * y[: 43: 51]
-            #     v_backness = x[:, 51:57] * y[:, 51:57]
-            #     v_roundness = x[: 57:] * y[:, 57:]
-            #     ptype.log_softmax(dim=-1)
         elif g.dist_func == 'cos':
             dist_func = _get_cosine_matrix
         elif g.dist_func == 'hamming':
             dist_func = _get_hamming_matrix
         else:
             dist_func = _get_sos_matrix
-        # DEBUG(j_luo)
-        # from IPython import embed; embed()
-        # DEBUG(j_luo)
-        costs = dist_func(_extracted_word_repr, unit_repr)  # / 0.2
-
-        # # DEBUG(j_luo) This is wrong
-        # partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(..., 'unit').expand(-1, costs.size('unit'))
-        # with NoName(partial_counts, extracted_unit_ids, costs):
-        #     # NOTE(j_luo) There seems to be a bug with the in-place `scatter_add_`.
-        #     _partial_counts = partial_counts.scatter_add(
-        #         0, extracted_unit_ids.unsqueeze(dim=-1).expand_as(costs), costs)
-        # partial_counts = _partial_counts.rename(*partial_counts.names)
-        # wi2vi_logits = partial_counts / (1e-8 + unit_counts.align_as(partial_counts))
-        # inverse_unit_costs = wi2vi_logits.log_softmax('extracted_unit')
-        # with NoName(inverse_unit_costs, extracted_unit_ids):
-        #     inverse_costs = inverse_unit_costs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+        costs = dist_func(_extracted_word_repr, unit_repr)
 
         ins_del_cost = self.ins_del_cost
         if g.new_use_probs:
@@ -974,46 +941,15 @@ class ExtractModel(nn.Module):
             with NoName(self.global_log_probs, extracted_unit_ids):
                 costs = -self.global_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
 
-        # DEBUG(j_luo)
-        if g.input_format == 'text' and g.use_probs:
-            partial_counts = torch.zeros_like(unit_counts).fill_(-1e-4).align_to(...,
-                                                                                 'unit').expand(-1, costs.size('unit'))
-            with NoName(partial_counts, extracted_unit_ids, costs):
-                # NOTE(j_luo) There seems to be a bug with the in-place `scatter_add_`.
-                _partial_counts = partial_counts.scatter_add(
-                    0, extracted_unit_ids.unsqueeze(dim=-1).expand_as(costs), costs)
-            partial_counts = _partial_counts.rename(*partial_counts.names)
-            wi2vi_logits = partial_counts / (1e-8 + unit_counts.align_as(partial_counts))
-            log_p_v_g_w = wi2vi_logits.log_softmax('unit')
-            log_p_w = (unit_counts / (1e-8 + unit_counts.sum()) + 1e-8).log().align_as(log_p_v_g_w)
-            log_p_v = (log_p_w + log_p_v_g_w).logsumexp('extracted_unit', keepdim=True)
-            inverse_unit_costs = log_p_w_g_v = log_p_v_g_w + log_p_w - log_p_v + (-9999.9) * (wi2vi_logits < -9999)
-            with NoName(inverse_unit_costs, extracted_unit_ids):
-                inverse_costs = inverse_unit_costs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
-        else:
-            inverse_unit_costs = None
-        # if inverse:
-        #     costs = inverse_costs
-
-        # # # DEBUG(j_luo)
-        # # costs = (1.0 - self.inverse_ratio) * costs + self.inverse_ratio * inverse_costs
-
-        # # DEBUG(j_luo)
-        # _tmp = 0.0
-        # costs = (1.0 - _tmp) * costs + _tmp * inverse_costs
-
         # Name: viable x len_w x unit
         costs = nh.unflatten(costs, 'viable_X_len_w', ['viable', 'len_w'])
 
-        # # NOTE(j_luo) Use dictionary save every state.
+        # # NOTE(j_luo) Use dictionary to save every state.
         fs = dict()
         for i in range(msl + 1):
             fs[(i, 0)] = get_zeros(ns, nt).fill_(i * ins_del_cost)
         for j in range(mtl + 1):
             fs[(0, j)] = get_zeros(ns, nt).fill_(j * ins_del_cost)
-        # # DEBUG(j_luo)
-        # fs[(0, 1)] = get_zeros(ns, nt)
-        # fs[(1, 0)] = get_zeros(ns, nt)
 
         # ------------------------ Main body: DP ----------------------- #
 
@@ -1042,7 +978,6 @@ class ExtractModel(nn.Module):
 
         f_lst = list()
         value = -9999.9 if g.use_probs else 9999.9
-        # value = 9999.9
         for i in range(msl + 1):
             for j in range(mtl + 1):
                 if (i, j) not in fs:
@@ -1050,7 +985,6 @@ class ExtractModel(nn.Module):
                 f_lst.append(fs[(i, j)])
         f = torch.stack(f_lst, dim=0).view(msl + 1, mtl + 1, -1, len(self.vocab))
         f.rename_('len_w_src', 'len_w_tgt', 'viable', 'vocab')
-        # ls_idx, lt_idx = zip(*fs.keys())
 
         # Get the values wanted.
         with NoName(f, viable_lens, self.vocab_length):
@@ -1060,10 +994,6 @@ class ExtractModel(nn.Module):
             vocab_i = get_range(len(self.vocab_length), 2, 1)
 
             ed_dist = f[idx_src, idx_tgt, viable_i, vocab_i]
-
-            # # DEBUG(j_luo)
-            # min_len = torch.min(idx_src, self.vocab_length)
-            # ed_dist = ed_dist / min_len * 7
 
             ed_dist.rename_('viable', 'vocab')
 
@@ -1085,15 +1015,9 @@ class ExtractModel(nn.Module):
                 score = self.vocab_length.float().log() - ed_dist
             matches = MatchesLv4(ed_dist, f, thresh, score)
         elif g.use_probs:
-            # DEBUG(j_luo)
-            # thresh = (ed_dist / 5.0).exp()
             thresh = None
-            # logging.warning('not weighted by length.')
-            # score = self.vocab_length.float().log() + ed_dist
-            # score = ed_dist
 
             score = self.vocab_length.float().log() + ed_dist
-            # score = ed_dist
             matches = MatchesLv4(ed_dist, f, thresh, score)
 
         elif self.training:
@@ -1127,4 +1051,4 @@ class ExtractModel(nn.Module):
             matches = MatchesLv0(ed_dist, f, matched_ed_dist, matched_vocab,
                                  matched_length, matched_thresh, matched_score)
 
-        return matches, costs, inverse_unit_costs
+        return matches, costs, None

@@ -186,7 +186,6 @@ class ExtractEsWithP5GermanTest(DecipherEsWithP5GermanTest):
     dense_input: bool = True
     use_adapt: bool = True
     check_interval: int = 50
-    use_embedding: bool = False
 
     def __post_init__(self):
         super().__post_init__()
@@ -203,7 +202,6 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     init_ins_del: int = 100
     thresh_func: str = 'exp'
     min_word_length: int = 4
-    use_residual: bool = True
     init_threshold: float = 30.0
     min_threshold: float = 0.99
     anneal_factor: float = 0.8

@@ -271,10 +271,7 @@ class ExtractModel(nn.Module):
     add_argument('thresh_func', default='soft', dtype=str,
                  choices=['soft', 'linear', 'exp', 'exp_linear'], msg='Threshold function to use.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
-    add_argument('use_embedding', default=True, dtype=bool, msg='Flag to use embedding.')
     add_argument('use_g_embedding', default=False, dtype=bool)
-    add_argument('use_residual', default=False, dtype=bool, msg='Flag to use residual.')
-    add_argument('use_plain_embedding', default=False, dtype=bool, msg='Flag to use residual.')
     add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
@@ -286,12 +283,6 @@ class ExtractModel(nn.Module):
 
     def __init__(self, unit_vocab_size: Optional[int] = None, dataset=None):
         super().__init__()
-
-        if g.use_embedding:
-            emb_cls = DenseFeatEmbedding if g.dense_input else FeatEmbedding
-            self.embedding = emb_cls('feat_emb', 'chosen_feat_group', 'char_emb')
-        # elif not g.dense_input:
-        #     raise ValueError(f'Use embedding for sparse inputs.')
 
         def _has_proper_length(segment):
             l = len(segment)
@@ -344,8 +335,6 @@ class ExtractModel(nn.Module):
                 k: v.rename(batch='unit')
                 for k, v in unit_dense_feat_matrix.items()
             }
-            if g.use_plain_embedding:
-                self.plain_unit_embedding = nn.Embedding(LU_SIZE, g.dim)
 
         if g.use_adapt:
             assert g.dense_input
@@ -452,20 +441,6 @@ class ExtractModel(nn.Module):
         score: after multiplication with |w|
         best_: the prefix after selecting w
         """
-        # DEBUG(j_luo)
-        # Prepare representations.
-        # If input_format is 'text', then we need to use g2p to induce ipa first.
-        # dfm = self.g2p(batch.unit_id_seqs)
-
-        # names = sorted([cat for cat in Category if should_include(g.feat_groups, cat)], key=lambda name: name.value)
-        # # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
-        # with NoName(*self.unit_dense_feat_matrix.values()):
-        #     # word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
-        #     unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
-        # word_repr = dfm.rename('batch', 'length', 'char_emb')
-        # unit_repr.rename_('batch', 'length', 'char_emb')
-
-        # DEBUG(j_luo)
         # Prepare representations.
         # If input_format is 'text', then we need to use g2p to induce ipa first.
         if g.input_format == 'text':
@@ -481,72 +456,31 @@ class ExtractModel(nn.Module):
                     adapted_dfm = self.adapter(dfm)
             else:
                 adapted_dfm = dfm
-            if g.use_embedding:
-                with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
-                    unit_repr = self.embedding(self.unit_dense_feat_matrix)
-                # DEBUG(j_luo)
-                if g.use_residual:
-                    # # DEBUG(j_luo)
-                    # word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
-                    word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0)).log_softmax(dim=0).exp()
-                    # word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
-                    # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
-                    word_repr = word_repr @ unit_repr.squeeze(1)
-                    word_repr = (word_repr / word_repr.sum(dim=-1, keepdim=True)) * 7.0 * 10.0
-                    with NoName(batch.unit_id_seqs, word_repr):
-                        word_repr = word_repr[batch.unit_id_seqs]
-                    word_repr.rename_('batch', 'length', 'char_emb')
-                else:
-                    word_repr = self.embedding(adapted_dfm, batch.source_padding)
-            else:
-                names = sorted(adapted_dfm, key=lambda name: name.value)
-                # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
-                with NoName(*self.unit_dense_feat_matrix.values(), *adapted_dfm.values()):
-                    word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
-                    unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
-                word_repr.rename_('batch', 'length', 'char_emb')
-                # DEBUG(j_luo)
-                if g.use_residual:
-                    # # DEBUG(j_luo)
-                    # word_repr = self.g2p.unit_aligner(get_range(33, 1, 0)).log_softmax(dim=0).exp()
-                    # # word_repr = self.g2p.unit_aligner(get_range(24, 1, 0)).log_softmax(dim=0).exp() * 10.0
-                    # word_repr = word_repr @ unit_repr.squeeze(1)
-                    # word_repr = (word_repr / word_repr.sum(dim=-1, keepdim=True)) * 7.0 * 10.0
-                    # with NoName(batch.unit_id_seqs, word_repr):
-                    #     word_repr = word_repr[batch.unit_id_seqs]
-                    # word_repr.rename_('batch', 'length', 'char_emb')
 
-                    word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
-                    # DEBUG(j_luo)
-                    # alignment = word_repr.log_softmax(dim=-1).exp()
-                    # word_repr = alignment @ unit_repr.squeeze(dim=1)
-                    # word_repr = word_repr * g.multiplier
-                    word_repr = word_repr @ unit_repr.squeeze(dim=1)
-                    self.global_log_probs = (word_repr @ unit_repr.squeeze(dim=1).t()).log_softmax(dim=-1)
-                    alignment = self.global_log_probs.exp()
+            names = sorted(adapted_dfm, key=lambda name: name.value)
+            # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
+            with NoName(*self.unit_dense_feat_matrix.values(), *adapted_dfm.values()):
+                word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
+                unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
+            word_repr.rename_('batch', 'length', 'char_emb')
 
-                    with NoName(batch.unit_id_seqs):
-                        word_repr = word_repr[batch.unit_id_seqs]
-                    word_repr.rename_('batch', 'length', 'char_emb')
+            word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
+            word_repr = word_repr @ unit_repr.squeeze(dim=1)
+            self.global_log_probs = (word_repr @ unit_repr.squeeze(dim=1).t()).log_softmax(dim=-1)
+            alignment = self.global_log_probs.exp()
 
-                    # DEBUG(j_luo)
-                    # word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
+            with NoName(batch.unit_id_seqs):
+                word_repr = word_repr[batch.unit_id_seqs]
+            word_repr.rename_('batch', 'length', 'char_emb')
 
-                unit_repr.rename_('batch', 'length', 'char_emb')
+            # DEBUG(j_luo)
+            # word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
+
+            unit_repr.rename_('batch', 'length', 'char_emb')
         else:
-            if g.input_format == 'text':
-                assert g.use_plain_embedding
-                with NoName(batch.feat_matrix, batch.source_padding):
-                    # IDEA(j_luo) A global switch to turn off the following names?
-                    word_repr = self.plain_unit_embedding(batch.unit_id_seqs).rename(None)
-                    word_repr[batch.source_padding] = 0.0
-                    word_repr.rename_('batch', 'length', 'char_emb')
-                    unit_repr = self.g2p.unit_embedding(get_range(KU_SIZE, 1, 0)).unsqueeze(dim=1)
-                    unit_repr.rename_('batch', 'length', 'char_emb')
-            else:
-                with Rename(self.unit_feat_matrix, unit='batch'):
-                    word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
-                    unit_repr = self.embedding(self.unit_feat_matrix)
+            with Rename(self.unit_feat_matrix, unit='batch'):
+                word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
+                unit_repr = self.embedding(self.unit_feat_matrix)
         unit_repr = unit_repr.squeeze('length')
         unit_repr.rename_(batch='unit')
 
@@ -642,7 +576,6 @@ class ExtractModel(nn.Module):
             ins.run()
 
         ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, dfm, alignment)
-        # ret = ExtractModelReturn(start, end, best_matched_score, best_matched_vocab, new_extracted, adapted_dfm)
 
         return ret
 

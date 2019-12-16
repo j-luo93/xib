@@ -244,9 +244,6 @@ class ExtractManager:
         #     self.trainer.tracker.update('round')
         #     if g.use_dilute:
         #         self.trainer.dilute()
-        if g.use_embedding:
-            logging.warning('frozen embedding')
-            freeze(self.model.embedding)
 
         self.trainer.temperature = g.temperature
         self.trainer.threshold = g.init_threshold

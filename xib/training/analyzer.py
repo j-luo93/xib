@@ -187,9 +187,8 @@ class ExtractAnalyzer:
 
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
-        metrics += Metric('score', model_ret.best_matched_score.sum(), batch.batch_size)
+        metrics += Metric('ll', model_ret.best_matched_ll.sum(), batch.batch_size)
 
-        # FIXME(j_luo)  remove ius
         almt = model_ret.alignment
         if almt is not None:
             reg = ((almt.sum(dim=0) - 1.0) ** 2).sum()

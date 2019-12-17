@@ -184,7 +184,6 @@ class ExtractEsWithP5GermanTest(DecipherEsWithP5GermanTest):
     task: str = 'extract'
     init_threshold: float = 10.0
     dense_input: bool = True
-    use_adapt: bool = True
     check_interval: int = 50
 
     def __post_init__(self):

@@ -1,8 +1,7 @@
-from abc import ABC, abstractmethod
 import logging
 import os
-from abc import ABC, abstractmethod
 import random
+from abc import ABC, abstractmethod
 
 import torch
 import torch.nn as nn
@@ -211,11 +210,10 @@ class ExtractManager(BaseManager):
         self.dl_reg = DataLoaderRegistry()
         self.dl_reg.register_data_loader(task, g.data_path)
 
-        unit_vocab_size = None
+        lu_size = None
         if g.input_format == 'text':
-            unit_vocab_size = self.dl_reg[task].dataset.unit_vocab_size
-        # DEBUG(j_luo)
-        self.model = ExtractModel(unit_vocab_size, self.dl_reg[task].dataset)
+            lu_size = self.dl_reg[task].dataset.unit_vocab_size
+        self.model = ExtractModel(lu_size=lu_size)
         if has_gpus():
             self.model.cuda()
 
@@ -244,5 +242,4 @@ class ExtractManager(BaseManager):
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
 
             self.trainer.train(self.dl_reg)
-            # DEBUG(j_luo)
             self.trainer.tracker.update('round')

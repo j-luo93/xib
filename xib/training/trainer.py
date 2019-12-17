@@ -237,8 +237,7 @@ class ExtractTrainer(BaseTrainer):
             ret = self.model(batch)
             metrics = self.analyzer.analyze(ret, batch)
 
-            # FIXME(j_luo) rename score
-            loss = -metrics.score.mean
+            loss = -metrics.ll.mean
             try:
                 loss = loss + metrics.reg.mean * g.reg_hyper
             except AttributeError:

@@ -134,7 +134,7 @@ class DecipherModel(nn.Module):
     add_argument('num_samples', default=100, dtype=int, msg='number of samples per sequence')
     add_argument('num_heads', default=4, dtype=int, msg='Number for heads for self attention.')
     add_argument('lm_model_path', dtype='path', msg='path to a pretrained lm model')
-    add_argument('dropout', default=0.2, dtype=float, msg='dropout rate')
+    add_argument('dropout', default=0.0, dtype=float, msg='dropout rate')
     add_argument('sampling_temperature', default=1.0, dtype=float, msg='Sampling temperature')
     add_argument('vocab_path', dtype='path',
                  msg='Path to a vocabulary file which would provide word-level features to the  model.')

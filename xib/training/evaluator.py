@@ -286,17 +286,11 @@ class ExtractEvaluator(BaseEvaluator):
         return analyzed_metrics + matching_stats + prf_scores
 
     def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Tuple[List[Segmentation], np.ndarray]:
-        matches = model_ret.extracted.matches
-        nll = matches.nll
         # Get the best matched nll.
-        bs = nll.size('batch')
-        bi = get_named_range(bs, 'batch')
         start = model_ret.start
         end = model_ret.end
         bmv = model_ret.best_matched_vocab
-        with NoName(bi, start, end, bmv, nll):
-            bmnll = nll[bi, start, end - start - g.min_word_length + 1, bmv]  # Best matched nll.
-        bmnll.rename_('batch')
+        bmnll = -model_ret.best_matched_ll
         matched = bmnll < self.model.threshold
 
         start = start.cpu().numpy()

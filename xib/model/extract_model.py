@@ -1,7 +1,7 @@
 import logging
 import math
 from dataclasses import fields
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -12,7 +12,7 @@ from dev_misc.devlib import (BaseBatch, batch_class, get_array,
                              get_length_mask, get_range)
 from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
                                           drop_names, get_named_range)
-from dev_misc.utils import WithholdKeys, global_property
+from dev_misc.utils import WithholdKeys, cached_property, global_property
 from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
                              convert_to_dense)
 from xib.ipa import Category, Index, get_enum_by_cat, should_include
@@ -26,7 +26,7 @@ ExtractBatch = Union[ContinuousIpaBatch, UnbrokenTextBatch]
 
 @batch_class
 class Matches(BaseBatch):
-    nll: FT
+    ll: FT
     f: FT  # All these dp scores.
 
 
@@ -35,8 +35,6 @@ class Extracted(BaseBatch):
     batch_size: int
     matches: Optional[Matches] = None
     viable: Optional[BT] = None
-    costs: Optional[FT] = None
-    inverse_unit_costs: Optional[FT] = None
     len_candidates: Optional[LT] = None
 
 
@@ -44,11 +42,9 @@ class Extracted(BaseBatch):
 class ExtractModelReturn(BaseBatch):
     start: LT
     end: LT
-    # FIXME(j_luo) rename this
-    best_matched_score: FT
+    best_matched_ll: FT
     best_matched_vocab: LT
     extracted: Extracted
-    adapted_dfm: Dict[Category, FT]
     alignment: Optional[FT] = None
 
 
@@ -76,117 +72,52 @@ def _restore_shape(tensor, bi, lsi, lei, viable, value: Optional[float] = None):
     return ret
 
 
-# FIXME(j_luo) fix this
-LU_SIZE = 33
-KU_SIZE = 29
-# KU_SIZE = 28
-# LU_SIZE = 3
-# KU_SIZE = 4
-
-
 class G2PLayer(nn.Module):
 
     add_argument('g2p_window_size', default=3, dtype=int, msg='Window size for g2p layer.')
-    # DEBUG(j_luo)
-    add_argument('oracle', default=False, dtype=bool)
 
-    def __init__(self, unit_vocab_size: int, dataset):  # FIXME(j_luo) remove dataset
+    def __init__(self, lu_size: int, ku_size: int):
+        """`lu_size`: number of lost units, `ku_size`: number of known units."""
         super().__init__()
-        # DEBUG(j_luo)
-        self.dataset = dataset
 
-        # # DEBUG(j_luo)
-        if g.oracle:
-            logging.warn('Hacking it right now.')
-            units = torch.cat([Segment(u).feat_matrix for u in dataset.id2unit], dim=0)
-            xx = list()
-            for unit in units:
-                x = list()
-                for u, cat in zip(unit[:7], Category):
-                    if cat.name[0] in ['P', 'C', 'V']:
-                        e = get_enum_by_cat(cat)
-                        f_idx = Index.get_feature(int(u)).value.f_idx
-                        x.extend([0] * (f_idx) + [1] + [0] * (len(e) - f_idx - 1))
-                assert len(x) == 60
-                xx.append(x)
-            units = torch.LongTensor(xx)
-            self.unit_embedding = nn.Embedding(unit_vocab_size, 60)  # Vg.dim)
-            self.unit_embedding.weight.data.copy_(units * 5.0)
-            # self.unit_embedding = nn.Embedding(unit_vocab_size, 60)
-
-            # # DEBUG(j_luo)
-            # noise = torch.randn_like(self.unit_embedding.weight) * 0.1
-            # self.unit_embedding.weight.data.copy_(0.5 + noise)
-
-            # DEBUG(j_luo)
-            # self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
-            # self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
-
-            # DEBUG(j_luo)
-        else:
-            self.unit_embedding = nn.Embedding(unit_vocab_size, g.dim)
-            nn.init.uniform_(self.unit_embedding.weight, 0.4, 0.6)
-        self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
-
-        module_dict = dict()
-        for cat in Category:
-            if should_include(g.feat_groups, cat):
-                e = get_enum_by_cat(cat)
-                nf = len(e)
-                # DEBUG(j_luo)
-                # module_dict[cat.name] = nn.Linear(g.dim, nf)
-                module_dict[cat.name] = nn.Linear(g.dim, nf)
-        self.p_predictors = nn.ModuleDict(module_dict)
-
-        # DEBUG(j_luo)
-        self.aligner = nn.Linear(g.dim, 60)
-        # DEBUG(j_luo)
-        self.unit_aligner = nn.Embedding(LU_SIZE, KU_SIZE)
-        logging.warning('Unit aligner initialized to 0.')
+        self.unit_aligner = nn.Embedding(lu_size, ku_size)
+        logging.imp('Unit aligner initialized to 0.')
         self.unit_aligner.weight.data.fill_(0.0)
 
-    def forward(self, unit_id_seqs: LT) -> Tuple[Dict[Category, FT], FT]:
-        unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
-        # DEBUG(j_luo)
-        aligned_unit_emb = unit_embeddings
-        # FIXME(j_luo) dropout
+        self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
+        self.dropout = nn.Dropout(g.dropout)
 
-        unit_embeddings = unit_embeddings.align_to('batch', 'unit_emb', 'length')
-        with NoName(unit_embeddings):
-            output = self.conv(unit_embeddings).rename('batch', 'unit_conv_repr', 'length')
-        output = output.align_to(..., 'unit_conv_repr')
+    def forward(self, ku_id_seqs: LT, lu_repr: FT) -> Tuple[FT, FT]:
+        """Returns lu x ku representation and bs x l x ku representation."""
+        ku_char_weight = self.unit_aligner.weight
+        ku_char_repr = ku_char_weight @ lu_repr
 
-        # DEBUG(j_luo)
-        output = nn.functional.dropout(output, g.dropout)
+        ku_char_repr = ku_char_repr.refine_names('ku_char_emb', 'char_emb')
+        with NoName(ku_char_repr, ku_id_seqs):
+            _ku_repr = ku_char_repr[ku_id_seqs].rename('batch', 'length', 'char_emb')
+        _ku_repr = _ku_repr.align_to('batch', 'char_emb', ...)
+        with NoName(_ku_repr):
+            ku_ctx_repr = self.conv(_ku_repr).rename('batch', 'char_emb', 'length')
+        ku_ctx_repr = ku_ctx_repr.align_to(..., 'char_emb')
+        ku_ctx_repr = self.dropout(ku_ctx_repr)
 
-        ret = dict()
-        for cat in Category:
-            if should_include(g.feat_groups, cat):
-                predictor = self.p_predictors[cat.name]
-                label = predictor(output)  # .log_softmax(dim=-1).exp()  # DEBUG(j_luo)
-                ret[cat] = label
-
-        return ret, aligned_unit_emb
+        return ku_char_repr, ku_ctx_repr
 
 
 class ExtractModel(nn.Module):
 
     add_argument('max_num_words', default=3, dtype=int, msg='Max number of extracted words.')
     add_argument('max_word_length', default=10, dtype=int, msg='Max length of extracted words.')
-    add_argument('max_extracted_candidates', default=200, dtype=int, msg='Max number of extracted candidates.')
     add_argument('init_threshold', default=0.05, dtype=float,
                  msg='Initial value of threshold to determine whether two words are matched.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
-    add_argument('use_g_embedding', default=False, dtype=bool)
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
-    add_argument('multiplier', default=1.0, dtype=float, msg='Initial unit cost for insertions and deletions.')
+    add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
-    add_argument('uniform_scheme', dtype=str, default='none',
-                 choices=['none', 'prior', 'topk'], msg='How to use uniformly-weighted scores.')
 
-    def __init__(self, unit_vocab_size: Optional[int] = None, dataset=None):
+    def __init__(self, lu_size: int):
         super().__init__()
 
         def _has_proper_length(segment):
@@ -232,6 +163,7 @@ class ExtractModel(nn.Module):
             self.register_buffer('unit_feat_matrix', unit_feat_matrix.unsqueeze(dim=1))
             self.register_buffer('indexed_segments', torch.from_numpy(indexed_segments))
             # Use dummy length to avoid the trouble later on.
+            # HACK(j_luo) Have to provide 'length'.
             self.unit_feat_matrix.rename_('unit', 'length', 'feat_group')
             self.indexed_segments.rename_('vocab', 'length')
             with Rename(self.unit_feat_matrix, unit='batch'):
@@ -241,12 +173,10 @@ class ExtractModel(nn.Module):
                 for k, v in unit_dense_feat_matrix.items()
             }
 
-        if g.use_adapt:
-            assert g.dense_input
-            self.adapter = AdaptLayer()
+        self.adapter = AdaptLayer()
 
         if g.input_format == 'text':
-            self.g2p = G2PLayer(unit_vocab_size, dataset)
+            self.g2p = G2PLayer(lu_size, len(self.id2unit))
 
     _special_state_keys = ['vocab', 'vocab_dense_feat_matrix', 'unit2id', 'id2unit', 'unit_dense_feat_matrix']
 
@@ -260,7 +190,7 @@ class ExtractModel(nn.Module):
     def load_state_dict(self, state_dict: Dict, **kwargs):
         with WithholdKeys(state_dict, *self._special_state_keys):
             super().load_state_dict(state_dict, **kwargs)
-        # HACK(j_luo)
+        # HACK(j_luo) This isn't really terse.
         for key in self._special_state_keys:
             attr = getattr(self, key)
             setattr(self, key, state_dict[key])
@@ -281,9 +211,16 @@ class ExtractModel(nn.Module):
     def ins_del_cost(self):
         pass
 
+    @cached_property
+    def effective_categories(self) -> List[Category]:
+        ret = list()
+        for cat in Category:
+            if should_include(g.feat_groups, cat):
+                ret.append(cat)
+        return ret
+
     def forward(self, batch: ExtractBatch) -> ExtractModelReturn:
         """
-        # FIXME(j_luo) Probably need to remove this.
         The generating story is:
             v
             |
@@ -296,71 +233,63 @@ class ExtractModel(nn.Module):
               = sum_{w, v} Pr(w | v) Pr(v) theta^|ww|
 
         Terminologies:
-        thresh: after thresholding
         matched_: the prefix after selecting v
         score: after multiplication with |w|
         best_: the prefix after selecting w
         """
         # Prepare representations.
-        # If input_format is 'text', then we need to use g2p to induce ipa first.
         if g.dense_input:
+            # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
+            with NoName(*self.unit_dense_feat_matrix.values()):
+                unit_repr = torch.cat([self.unit_dense_feat_matrix[cat] for cat in self.effective_categories], dim=-1)
+            unit_repr = unit_repr.rename('batch', 'length', 'char_emb').squeeze(dim='length')
+
             if g.input_format == 'text':
-                dfm, unit_emb = self.g2p(batch.unit_id_seqs)
-                adapted_dfm = dfm
+                ku_char_repr, word_repr = self.g2p(batch.unit_id_seqs, unit_repr)
+                # FIXME(j_luo) Pass this instead of doing this directly.
+                self.global_log_probs = (ku_char_repr @ unit_repr.t()).log_softmax(dim=-1)
+                alignment = self.global_log_probs.exp()
+
+                # with NoName(batch.unit_id_seqs):
+                #     word_repr = word_repr[batch.unit_id_seqs]
+                # word_repr.rename_('batch', 'length', 'char_emb')
+
+                # DEBUG(j_luo)
+                # word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
             else:
                 dfm = batch.dense_feat_matrix
                 with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
                     adapted_dfm = self.adapter(dfm)
-
-            # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
-            names = sorted(adapted_dfm, key=lambda name: name.value)
-            with NoName(*self.unit_dense_feat_matrix.values()):
-                unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
-
-            if g.input_format == 'text':
-                word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))
-                word_repr = word_repr @ unit_repr.squeeze(dim=1)
-                self.global_log_probs = (word_repr @ unit_repr.squeeze(dim=1).t()).log_softmax(dim=-1)
-                alignment = self.global_log_probs.exp()
-
-                with NoName(batch.unit_id_seqs):
-                    word_repr = word_repr[batch.unit_id_seqs]
-                word_repr.rename_('batch', 'length', 'char_emb')
-
-                # DEBUG(j_luo)
-                # word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
-                unit_repr.rename_('batch', 'length', 'char_emb')
-            else:
                 with NoName(*adapted_dfm.values()):
-                    word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
+                    word_repr = torch.cat([adapted_dfm[cat] for cat in self.effective_categories], dim=-1)
                 word_repr.rename_('batch', 'length', 'char_emb')
         else:
             with Rename(self.unit_feat_matrix, unit='batch'):
                 word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
                 unit_repr = self.embedding(self.unit_feat_matrix)
-        unit_repr = unit_repr.squeeze('length')
+            unit_repr = unit_repr.squeeze('length')
         unit_repr.rename_(batch='unit')
 
         # Main body: extract one span.
         extracted = Extracted(batch.batch_size)
         new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr)
         matches = new_extracted.matches
-        len_e = matches.nll.size('len_e')
+        len_e = matches.ll.size('len_e')
         vs = len(self.vocab)
 
         # Get the best score and span.
         # NOTE(j_luo) Some segments don't have any viable spans.
-        flat_score = matches.nll.flatten(['len_s', 'len_e', 'vocab'], 'cand')
-        flat_viable = new_extracted.viable.expand_as(matches.nll).flatten(['len_s', 'len_e', 'vocab'], 'cand')
-        flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
+        flat_ll = matches.ll.flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        flat_viable = new_extracted.viable.expand_as(matches.ll).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        flat_viable_ll = (~flat_viable) * (-9999.9) + flat_ll
         # Add probs for unextracted characters.
         unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
-        unextracted = unextracted.expand_as(matches.nll)
+        unextracted = unextracted.expand_as(matches.ll)
         flat_unextracted = unextracted.flatten(['len_s', 'len_e', 'vocab'], 'cand')
-        flat_unextracted_score = flat_unextracted * math.log(g.unextracted_prob)
-        flat_total_score = flat_viable_score + flat_unextracted_score
+        flat_unextracted_ll = flat_unextracted * math.log(g.unextracted_prob)
+        flat_total_ll = flat_viable_ll + flat_unextracted_ll
         # Get the top candiates based on total scores.
-        best_matched_score, best_span_ind = flat_total_score.max(dim='cand')
+        best_matched_ll, best_span_ind = flat_total_ll.max(dim='cand')
         start = best_span_ind // (len_e * vs)
         # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
         end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
@@ -368,11 +297,11 @@ class ExtractModel(nn.Module):
 
         if self.training:
             any_viable = new_extracted.viable.any('len_s').any('len_e')
-            best_matched_score = flat_total_score.logsumexp(dim='cand')
-            best_matched_score = best_matched_score * any_viable
+            best_matched_ll = flat_total_ll.logsumexp(dim='cand')
+            best_matched_ll = best_matched_ll * any_viable
 
-        ret = ExtractModelReturn(start, end, best_matched_score,
-                                 best_matched_vocab, new_extracted, dfm, alignment)
+        ret = ExtractModelReturn(start, end, best_matched_ll,
+                                 best_matched_vocab, new_extracted, alignment)
 
         return ret
 
@@ -422,26 +351,26 @@ class ExtractModel(nn.Module):
         extracted_word_repr = nh.unflatten(extracted_word_repr, 'viable_X_len_w', ['viable', 'len_w'])
 
         # Main body: Run DP to find the best matches.
-        matches, costs, inverse_unit_costs = self._get_matches(extracted_word_repr, viable_lens, extracted_unit_ids)
+        matches = self._get_matches(extracted_word_repr, viable_lens, extracted_unit_ids)
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
-        vs = matches.nll.size('vocab')
+        vs = matches.ll.size('vocab')
         # IDEA(j_luo) NoName shouldn't make size() calls unavaiable. Otherwise size() calls have to be moved outside the context. Also the names should be preserved as well.
-        with NoName(bi, lsi, lei, viable, matches.nll):
+        with NoName(bi, lsi, lei, viable, matches.ll):
             v_bi = bi[viable]
             v_lsi = lsi[viable]
             v_lei = lei[viable]
-            all_nll = get_zeros(batch.batch_size, len_s, len_e, vs)
-            all_nll = all_nll.float().fill_(-9999.9)
-            all_nll[v_bi, v_lsi, v_lei] = matches.nll
-            matches.nll = all_nll.rename('batch', 'len_s', 'len_e', 'vocab')
+            all_ll = get_zeros(batch.batch_size, len_s, len_e, vs)
+            all_ll = all_ll.float().fill_(-9999.9)
+            all_ll[v_bi, v_lsi, v_lei] = matches.ll
+            matches.ll = all_ll.rename('batch', 'len_s', 'len_e', 'vocab')
 
-        new_extracted = Extracted(batch.batch_size, matches, viable, costs, inverse_unit_costs, len_candidates)
+        new_extracted = Extracted(batch.batch_size, matches, viable, len_candidates)
         return new_extracted
 
-    def _get_matches(self, extracted_word_repr: FT, viable_lens: LT, extracted_unit_ids: LT) -> Tuple[Matches, FT]:
+    def _get_matches(self, extracted_word_repr: FT, viable_lens: LT, extracted_unit_ids: LT) -> Matches:
         # FIXME(j_luo) Think about how to deal with repr and unit_ids. It is not needed right now to compute costs, but mayber later.
         ns = extracted_word_repr.size('viable')
         len_w = extracted_word_repr.size('len_w')
@@ -500,10 +429,9 @@ class ExtractModel(nn.Module):
             idx_tgt = self.vocab_length
             viable_i = get_range(ns, 2, 0)
             vocab_i = get_range(len(self.vocab_length), 2, 1)
-            log_probs = f[idx_src, idx_tgt, viable_i, vocab_i]
-            log_probs.rename_('viable', 'vocab')
+            nll = f[idx_src, idx_tgt, viable_i, vocab_i]
+            nll.rename_('viable', 'vocab')
 
         # Get the best spans.
-        nll = -log_probs
-        matches = Matches(nll, f)
-        return matches, costs, None
+        matches = Matches(-nll, f)
+        return matches

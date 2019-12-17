@@ -6,7 +6,6 @@ enum or e: the Enum class corresponding to one feature group. PType for instance
 IPAFeature: the base Enum class that all feature Enum classes subclass.
 feature or feat: the IPAFeature variable. PType.CONSONANT for instance.
 """
-
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum, unique

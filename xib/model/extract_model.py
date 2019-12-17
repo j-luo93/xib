@@ -238,6 +238,7 @@ class ExtractModel(nn.Module):
         best_: the prefix after selecting w
         """
         # Prepare representations.
+        alignment = None
         if g.dense_input:
             # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
             with NoName(*self.unit_dense_feat_matrix.values()):
@@ -246,16 +247,8 @@ class ExtractModel(nn.Module):
 
             if g.input_format == 'text':
                 ku_char_repr, word_repr = self.g2p(batch.unit_id_seqs, unit_repr)
-                # FIXME(j_luo) Pass this instead of doing this directly.
-                self.global_log_probs = (ku_char_repr @ unit_repr.t()).log_softmax(dim=-1)
-                alignment = self.global_log_probs.exp()
-
-                # with NoName(batch.unit_id_seqs):
-                #     word_repr = word_repr[batch.unit_id_seqs]
-                # word_repr.rename_('batch', 'length', 'char_emb')
-
-                # DEBUG(j_luo)
-                # word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
+                char_log_probs = (ku_char_repr @ unit_repr.t()).log_softmax(dim=-1)
+                alignment = char_log_probs.exp()
             else:
                 dfm = batch.dense_feat_matrix
                 with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
@@ -272,7 +265,7 @@ class ExtractModel(nn.Module):
 
         # Main body: extract one span.
         extracted = Extracted(batch.batch_size)
-        new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr)
+        new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr, char_log_probs)
         matches = new_extracted.matches
         len_e = matches.ll.size('len_e')
         vs = len(self.vocab)
@@ -305,7 +298,12 @@ class ExtractModel(nn.Module):
 
         return ret
 
-    def _extract_one_span(self, batch: ExtractBatch, extracted: Extracted, word_repr: FT, unit_repr: FT) -> Extracted:
+    def _extract_one_span(self,
+                          batch: ExtractBatch,
+                          extracted: Extracted,
+                          word_repr: FT,
+                          unit_repr: FT,
+                          char_log_probs: FT) -> Extracted:
         # Propose all span start/end positions.
         start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
         # Range from `min_word_length` to `max_word_length`.
@@ -351,7 +349,7 @@ class ExtractModel(nn.Module):
         extracted_word_repr = nh.unflatten(extracted_word_repr, 'viable_X_len_w', ['viable', 'len_w'])
 
         # Main body: Run DP to find the best matches.
-        matches = self._get_matches(extracted_word_repr, viable_lens, extracted_unit_ids)
+        matches = self._get_matches(extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids, char_log_probs)
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
@@ -370,8 +368,12 @@ class ExtractModel(nn.Module):
         new_extracted = Extracted(batch.batch_size, matches, viable, len_candidates)
         return new_extracted
 
-    def _get_matches(self, extracted_word_repr: FT, viable_lens: LT, extracted_unit_ids: LT) -> Matches:
-        # FIXME(j_luo) Think about how to deal with repr and unit_ids. It is not needed right now to compute costs, but mayber later.
+    def _get_matches(self,
+                     extracted_word_repr: FT,
+                     unit_repr: FT,
+                     viable_lens: LT,
+                     extracted_unit_ids: LT,
+                     char_log_probs: FT) -> Matches:
         ns = extracted_word_repr.size('viable')
         len_w = extracted_word_repr.size('len_w')
         nt = len(self.vocab_feat_matrix)
@@ -379,8 +381,12 @@ class ExtractModel(nn.Module):
         mtl = self.vocab_feat_matrix.size('length')
 
         # Compute cosine distances all at once: for each viable span, compare it against all units.
-        with NoName(self.global_log_probs, extracted_unit_ids):
-            costs = -self.global_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+        ctx_logits = extracted_word_repr @ unit_repr.t()
+        ctx_log_probs = ctx_logits.log_softmax(dim='unit').flatten(['viable', 'len_w'], 'viable_X_len_w')
+        with NoName(char_log_probs, extracted_unit_ids):
+            global_log_probs = char_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+        weighted_log_probs = g.context_weight * ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
+        costs = -weighted_log_probs
 
         # Name: viable x len_w x unit
         costs = costs.unflatten('viable_X_len_w', [('viable', ns), ('len_w', len_w)])

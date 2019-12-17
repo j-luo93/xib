@@ -57,14 +57,6 @@ class LMTrainer(BaseTrainer):
             if p.ndim == 2:
                 torch.nn.init.xavier_uniform_(p)
 
-        # # DEBUG(j_luo) identity init
-        # logging.warning('identity init')
-        # for p in self.model.adapter.adapters.values():
-        #     lp = len(p)
-        #     p.data[range(lp), range(lp)] += 20.0
-
-        # freeze(self.model.adapter)
-
         self.set_optimizer(optim.Adam, lr=g.learning_rate)
         self.analyzer = self.analyzer_cls()
 
@@ -131,7 +123,6 @@ class DecipherTrainer(BaseTrainer):
 
     def add_trackables(self):
         self.tracker.add_trackable('total_step', total=g.num_steps)
-        # self.tracker.add_min_trackable('best_loss')
         self.tracker.add_max_trackable('best_f1')
 
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
@@ -181,16 +172,6 @@ class ExtractTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.analyzer = ExtractAnalyzer()
-        # for p in self.model.parameters():
-        #     if p.ndim == 2:
-        #         torch.nn.init.xavier_uniform_(p)
-
-        # # # DEBUG(j_luo) identity init
-        # logging.warning('identity init')
-        # for p in self.model.adapter.adapters.values():
-        #     lp = len(p)
-        #     p.data[range(lp), range(lp)] += 200.0
-
         self.ins_del_cost = g.init_ins_del_cost
         if g.save_alignment:
             self.add_callback('total_step', 1, self.save_alignment)
@@ -202,13 +183,6 @@ class ExtractTrainer(BaseTrainer):
         path = g.log_dir / f'saved.{self.stage}.almt'
         torch.save(to_save, path)
         logging.imp(f'Alignment saved to {path}.')
-
-    # DEBUG(j_luo) dilute
-    def dilute(self):
-        logging.imp('Diluting the weights.')
-        for p in self.model.adapter.adapters.values():
-            lp = len(p)
-            p.data *= 0.5
 
     @global_property
     def ins_del_cost(self):
@@ -230,12 +204,10 @@ class ExtractTrainer(BaseTrainer):
         self.tracker.add_trackable('round', endless=True)
         self.tracker.add_trackable('total_step', total=g.num_steps)
         self.tracker.add_max_trackable('best_f1')
-        self.tracker.add_max_trackable('best_score')
-        self.tracker.add_trackable('early_stop', total=3)
 
     def reset(self):
         """Reset the tracker. But keep the best_f1 since it's related to evaluation."""
-        self.tracker.reset('total_step', 'best_score', 'early_stop')
+        self.tracker.reset('total_step')
 
     def load(self, path: Path):
         saved = torch.load(path)
@@ -243,71 +215,41 @@ class ExtractTrainer(BaseTrainer):
         self.model.load_state_dict(smsd)
         logging.imp(f'Loading model from {path}.')
 
-    def save(self, eval_metrics: Optional[Metrics] = None):
-        r = self.tracker.round
+    def save(self, eval_metrics: Metrics):
         self.save_to(g.log_dir / f'saved.{self.stage}.latest')
-        # self.tracker.update('best_loss', value=eval_metrics.dev_total_loss.mean)
         if eval_metrics is not None:
             if self.tracker.update('best_f1', value=eval_metrics.prf_exact_span_f1.value):
                 out_path = g.log_dir / f'saved.{self.stage}.best'
+                logging.warning('Do NOT use this number since this f1 is compared against ground truths.')
                 logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
                 self.save_to(out_path)
 
-            if not self.tracker.update('best_score', value=eval_metrics.score.value, threshold=0.01):
-                # DEBUG(j_luo)
-                pass
-                # self.tracker.update('early_stop')
-                # self.lr_scheduler.step()
-
     def should_terminate(self):
-        return self.tracker.is_finished('early_stop') or self.tracker.is_finished('total_step')
-
-    add_argument('entropy_hyper', default=0.0, dtype=float)
+        return self.tracker.is_finished('total_step')
 
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
         self.model.train()
         self.optimizer.zero_grad()
         accum_metrics = Metrics()
-        # self.ins_del_cost *= 0.9
-        # self.ins_del_cost = max(self.ins_del_cost, g.min_ins_del_cost)
-        # import time; time.sleep(0.2)
-        # print(self.ins_del_cost)
+
         for _ in pbar(range(g.accum_gradients), desc='accum_gradients'):
             batch = dl.get_next_batch()
             ret = self.model(batch)
             metrics = self.analyzer.analyze(ret, batch)
 
-            # # # DEBUG(j_luo)
-            # sparsity = 0.0
-            # for cat, dfm in ret.adapted_dfm.items():
-            #     sparsity += ((dfm ** 2) * ((1.0 - dfm) ** 2)).sum()
-            # sparsity = Metric('sparsity', sparsity, batch.batch_size)
-            # metrics += sparsity
-
-            # DEBUG(j_luo)
+            # FIXME(j_luo) rename score
             loss = -metrics.score.mean
             try:
-                loss = loss + metrics.entropy.mean * g.entropy_hyper
+                loss = loss + metrics.reg.mean * g.reg_hyper
             except AttributeError:
                 pass
-            loss = loss + metrics.reg.mean * g.reg_hyper
+            loss_per_split = loss / g.accum_gradients
+            loss_per_split.backward()
 
-            # loss = -metrics.score.mean
-            (loss / g.accum_gradients).backward()
-
-            # (-metrics.score.mean / g.accum_gradients).backward()
             accum_metrics += metrics
-
-            # # DEBUG(j_luo)
-            # self.threshold *= 0.99
-            # self.threshold = max(self.min_threshold, self.threshold)
-            # if self.tracker.total_step % 10 == 0:
-            #     print(self.threshold)
 
         grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)
         self.optimizer.step()
-        # DEBUG(j_luo)
-        # self.lr_scheduler.step()
         accum_metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
 
         return accum_metrics

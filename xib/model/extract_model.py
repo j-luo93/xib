@@ -44,11 +44,12 @@ class Extracted(BaseBatch):
 class ExtractModelReturn(BaseBatch):
     start: LT
     end: LT
+    # FIXME(j_luo) rename this
     best_matched_score: FT
     best_matched_vocab: LT
     extracted: Extracted
     adapted_dfm: Dict[Category, FT]
-    alignment: FT
+    alignment: Optional[FT] = None
 
 
 def _restore_shape(tensor, bi, lsi, lei, viable, value: Optional[float] = None):
@@ -75,6 +76,7 @@ def _restore_shape(tensor, bi, lsi, lei, viable, value: Optional[float] = None):
     return ret
 
 
+# FIXME(j_luo) fix this
 LU_SIZE = 33
 KU_SIZE = 29
 # KU_SIZE = 28
@@ -301,39 +303,37 @@ class ExtractModel(nn.Module):
         """
         # Prepare representations.
         # If input_format is 'text', then we need to use g2p to induce ipa first.
-        if g.input_format == 'text':
-            dfm, unit_emb = self.g2p(batch.unit_id_seqs)
-        else:
-            dfm = batch.dense_feat_matrix
-
-        alignment = None
-
         if g.dense_input:
-            if g.input_format == 'ipa':
+            if g.input_format == 'text':
+                dfm, unit_emb = self.g2p(batch.unit_id_seqs)
+                adapted_dfm = dfm
+            else:
+                dfm = batch.dense_feat_matrix
                 with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
                     adapted_dfm = self.adapter(dfm)
-            else:
-                adapted_dfm = dfm
 
-            names = sorted(adapted_dfm, key=lambda name: name.value)
             # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
-            with NoName(*self.unit_dense_feat_matrix.values(), *adapted_dfm.values()):
-                word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
+            names = sorted(adapted_dfm, key=lambda name: name.value)
+            with NoName(*self.unit_dense_feat_matrix.values()):
                 unit_repr = torch.cat([self.unit_dense_feat_matrix[name] for name in names], dim=-1)
-            word_repr.rename_('batch', 'length', 'char_emb')
 
-            word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))  # .log_softmax(dim=0).exp() * 10.0
-            word_repr = word_repr @ unit_repr.squeeze(dim=1)
-            self.global_log_probs = (word_repr @ unit_repr.squeeze(dim=1).t()).log_softmax(dim=-1)
-            alignment = self.global_log_probs.exp()
+            if g.input_format == 'text':
+                word_repr = self.g2p.unit_aligner(get_range(LU_SIZE, 1, 0))
+                word_repr = word_repr @ unit_repr.squeeze(dim=1)
+                self.global_log_probs = (word_repr @ unit_repr.squeeze(dim=1).t()).log_softmax(dim=-1)
+                alignment = self.global_log_probs.exp()
 
-            with NoName(batch.unit_id_seqs):
-                word_repr = word_repr[batch.unit_id_seqs]
-            word_repr.rename_('batch', 'length', 'char_emb')
+                with NoName(batch.unit_id_seqs):
+                    word_repr = word_repr[batch.unit_id_seqs]
+                word_repr.rename_('batch', 'length', 'char_emb')
 
-            # DEBUG(j_luo)
-            # word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
-            unit_repr.rename_('batch', 'length', 'char_emb')
+                # DEBUG(j_luo)
+                # word_repr = 0.0 * word_repr + unit_emb.rename(unit_emb='char_emb')
+                unit_repr.rename_('batch', 'length', 'char_emb')
+            else:
+                with NoName(*adapted_dfm.values()):
+                    word_repr = torch.cat([adapted_dfm[name] for name in names], dim=-1)
+                word_repr.rename_('batch', 'length', 'char_emb')
         else:
             with Rename(self.unit_feat_matrix, unit='batch'):
                 word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
@@ -345,7 +345,6 @@ class ExtractModel(nn.Module):
         extracted = Extracted(batch.batch_size)
         new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr)
         matches = new_extracted.matches
-        len_s = matches.nll.size('len_s')
         len_e = matches.nll.size('len_e')
         vs = len(self.vocab)
 
@@ -429,7 +428,7 @@ class ExtractModel(nn.Module):
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
         vs = matches.nll.size('vocab')
-        # IDEA(j_luo) NoName shouldn't make size() calls unavaiable. Otherwise size() calls have to be moved outside the context.
+        # IDEA(j_luo) NoName shouldn't make size() calls unavaiable. Otherwise size() calls have to be moved outside the context. Also the names should be preserved as well.
         with NoName(bi, lsi, lei, viable, matches.nll):
             v_bi = bi[viable]
             v_lsi = lsi[viable]

@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from dev_misc import LT, g
+from dev_misc import LT, add_condition, g
 from dev_misc.arglib import add_argument, g, init_g_attr
 from dev_misc.devlib import (batch_class, get_array, get_length_mask,
                              get_range, get_zeros)
@@ -283,6 +283,7 @@ class CbowIpaDataset(BrokenIpaDataset):
 
 
 add_argument('input_format', default='ipa', dtype=str, choices=['ipa', 'text'], msg='Input format to use.')
+add_condition('input_format', 'text', 'dense_input', True)
 
 
 class UnbrokenTextDataset(UnbrokenIpaDataset):

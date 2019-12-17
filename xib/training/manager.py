@@ -32,6 +32,7 @@ from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer,
 add_argument('task', default='lm', dtype=str, choices=[
              'lm', 'cbow', 'adapt_lm', 'adapt_cbow', 'decipher', 'search', 'extract'], msg='which task to run')
 
+
 class BaseManager(ABC):
 
     @abstractmethod
@@ -202,7 +203,6 @@ class ExtractManager(BaseManager):
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
     add_argument('min_threshold', default=0.01, dtype=float, msg='Min value for threshold')
-    add_argument('use_dilute', default=False, dtype=bool, msg='Flag to dilute params after each round.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -246,5 +246,3 @@ class ExtractManager(BaseManager):
             self.trainer.train(self.dl_reg)
             # DEBUG(j_luo)
             self.trainer.tracker.update('round')
-            if g.use_dilute:
-                self.trainer.dilute()

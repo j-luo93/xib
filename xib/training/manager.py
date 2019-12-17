@@ -1,5 +1,7 @@
+from abc import ABC, abstractmethod
 import logging
 import os
+from abc import ABC, abstractmethod
 import random
 
 import torch
@@ -30,8 +32,13 @@ from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer,
 add_argument('task', default='lm', dtype=str, choices=[
              'lm', 'cbow', 'adapt_lm', 'adapt_cbow', 'decipher', 'search', 'extract'], msg='which task to run')
 
+class BaseManager(ABC):
 
-class LMManager:
+    @abstractmethod
+    def run(self): ...
+
+
+class LMManager(BaseManager):
 
     model_cls = LM
     trainer_cls = LMTrainer
@@ -75,7 +82,7 @@ class AdaptCbowManager(CbowManager):
     task_cls = AdaptCbowTask
 
 
-class DecipherManager:
+class DecipherManager(BaseManager):
 
     add_argument('dev_data_path', dtype='path', msg='Path to dev data.')
     add_argument('aux_train_data_path', dtype='path', msg='Path to aux train data.')
@@ -133,7 +140,7 @@ class DecipherManager:
         self.trainer.train(self.dl_reg)
 
 
-class SearchSolverManager:
+class SearchSolverManager(BaseManager):
     """
     On tmp:
     P: 553 / 950 = 0.5821052631578948
@@ -189,13 +196,12 @@ class ReduceLR:
             logging.imp(f'Learning rate is now {new_lr:.4f}.')
 
 
-class ExtractManager:
+class ExtractManager(BaseManager):
 
     # IDEA(j_luo) when to put this in manager/trainer? what about scheduler? annealing? restarting? Probably all in trainer -- you need to track them with pbars.
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
     add_argument('min_threshold', default=0.01, dtype=float, msg='Min value for threshold')
-    add_argument('min_temperature', default=0.1, dtype=float, msg='Min value for threshold')
     add_argument('use_dilute', default=False, dtype=bool, msg='Flag to dilute params after each round.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
@@ -227,30 +233,7 @@ class ExtractManager:
 
     def run(self):
         optim_cls = self._name2cls[g.optim_cls]
-
-        # # DEBUG(j_luo)
-        # thresh = g.init_threshold
-        # while thresh > g.min_threshold:
-        #     self.trainer.reset()
-        #     self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
-        #     self.trainer.set_lr_scheduler(ReduceLR, factor=0.5)
-        #     self.trainer.threshold = thresh
-        #     # HACK(j_luo)
-        #     self.trainer.min_threshold = thresh * 0.5
-
-        #     self.trainer.train(self.dl_reg)
-        #     thresh *= g.anneal_factor
-        #     logging.imp(f'threshold is now {thresh:.3f}.')
-        #     self.trainer.tracker.update('round')
-        #     if g.use_dilute:
-        #         self.trainer.dilute()
-
-        self.trainer.temperature = g.temperature
         self.trainer.threshold = g.init_threshold
-        # self.trainer.temperature = 12.0
-        # self.trainer.threshold = 0.4
-        self.trainer.uniform_prior = 1.0
-        self.trainer.topk_ratio = 1.0
         self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)  # , momentum=0.9, nesterov=True)
         # Save init parameters.
 
@@ -259,43 +242,9 @@ class ExtractManager:
         while self.trainer.threshold > g.min_threshold:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
-            # DEBUG(j_luo)
-            # self.trainer.set_lr_scheduler(CyclicLR, base_lr=0.01, max_lr=0.1, cycle_momentum=False, step_size_up=100)
-            # self.trainer.set_lr_scheduler(ReduceLR, factor=0.5)
 
             self.trainer.train(self.dl_reg)
             # DEBUG(j_luo)
             self.trainer.tracker.update('round')
             if g.use_dilute:
                 self.trainer.dilute()
-
-            # DEBUG(j_luo)
-            # self.trainer.threshold = max(self.trainer.threshold * g.anneal_factor, g.min_threshold)
-            self.trainer.temperature = max(g.min_temperature, self.trainer.temperature * g.anneal_factor)
-            # if self.trainer.tracker.round == 7:
-            #     break
-
-            # # DEBUG(j_luo)
-            # import random
-            # idx = list(range(33))
-            # random.shuffle(idx)
-            # x = self.model.g2p.unit_embedding.weight
-            # x.data.copy_(x[idx])
-
-            # # # DEBUG(j_luo)
-            # import random
-            # logging.warning('shuffling c_manner')
-            # idx = list(range(22, 43))
-            # random.shuffle(idx)
-            # x = self.model.g2p.unit_embedding.weight
-            # x.data[:, list(range(22, 43))].copy_(x[:, idx])
-
-            # # # DEBUG(j_luo)
-            # if g.uniform_scheme == 'prior':
-            #     self.trainer.uniform_prior *= 0.9
-            #     self.trainer.uniform_prior = max(0.1, self.trainer.uniform_prior)
-            #     logging.imp(f'uniform_prior is now {self.trainer.uniform_prior:.3f}.')
-            # elif g.uniform_scheme == 'topk':
-            #     self.trainer.topk_ratio *= g.anneal_factor
-            #     self.trainer.topk_ratio = max(0.0, self.trainer.topk_ratio)
-            #     logging.imp(f'topk_ratio is now {self.trainer.topk_ratio:.3f}.')

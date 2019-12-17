@@ -26,9 +26,8 @@ ExtractBatch = Union[ContinuousIpaBatch, UnbrokenTextBatch]
 
 @batch_class
 class Matches(BaseBatch):
-    ed_dist: FT
+    nll: FT
     f: FT  # All these dp scores.
-    score: FT
 
 
 @batch_class
@@ -50,13 +49,6 @@ class ExtractModelReturn(BaseBatch):
     extracted: Extracted
     adapted_dfm: Dict[Category, FT]
     alignment: FT
-
-
-def _soft_max(x, dim, temperature):
-    w = (x / temperature).log_softmax(dim=dim).exp()
-    value = (x * w).sum(dim)
-    _, index = x.max(dim=dim)
-    return value, index
 
 
 def _restore_shape(tensor, bi, lsi, lei, viable, value: Optional[float] = None):
@@ -155,25 +147,7 @@ class G2PLayer(nn.Module):
         unit_embeddings = self.unit_embedding(unit_id_seqs).refine_names(..., 'unit_emb')
         # DEBUG(j_luo)
         aligned_unit_emb = unit_embeddings
-        # unit_embeddings = nn.functional.dropout(unit_embeddings, p=g.dropout)
-        # aligned_unit_emb = self.aligner(unit_embeddings).rename(..., 'unit_emb')
-
-        # # DEBUG(j_luo)
-        # return nn.functional.dropout(unit_embeddings, p=g.dropout)
-
-        # DEBUG(j_luo)
-        # return unit_embeddings
-
-        # # DEBUG(j_luo)
-        # logging.warn('HACKING')
-        # output = unit_embeddings
-        # ret = dict()
-        # offset = 0
-        # for i, cat in enumerate(Category):
-        #     if should_include(g.feat_groups, cat):
-        #         l = len(get_enum_by_cat(cat))
-        #         ret[cat] = output[:, :, offset: offset + l]
-        #         offset += l
+        # FIXME(j_luo) dropout
 
         unit_embeddings = unit_embeddings.align_to('batch', 'unit_emb', 'length')
         with NoName(unit_embeddings):
@@ -202,12 +176,11 @@ class ExtractModel(nn.Module):
                  msg='Initial value of threshold to determine whether two words are matched.')
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('use_g_embedding', default=False, dtype=bool)
-    add_argument('temperature', default=0.1, dtype=float, msg='Temperature.')
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('multiplier', default=1.0, dtype=float, msg='Initial unit cost for insertions and deletions.')
-    add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')  # DEBUG(j_luo) debug mode
+    add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
     add_argument('uniform_scheme', dtype=str, default='none',
                  choices=['none', 'prior', 'topk'], msg='How to use uniformly-weighted scores.')
 
@@ -306,18 +279,6 @@ class ExtractModel(nn.Module):
     def ins_del_cost(self):
         pass
 
-    @global_property
-    def temperature(self):
-        pass
-
-    @global_property
-    def uniform_prior(self):
-        pass
-
-    @global_property
-    def topk_ratio(self):
-        pass
-
     def forward(self, batch: ExtractBatch) -> ExtractModelReturn:
         """
         # FIXME(j_luo) Probably need to remove this.
@@ -333,7 +294,6 @@ class ExtractModel(nn.Module):
               = sum_{w, v} Pr(w | v) Pr(v) theta^|ww|
 
         Terminologies:
-        ed_dist: d(v, w)
         thresh: after thresholding
         matched_: the prefix after selecting v
         score: after multiplication with |w|
@@ -385,40 +345,32 @@ class ExtractModel(nn.Module):
         extracted = Extracted(batch.batch_size)
         new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr)
         matches = new_extracted.matches
-        len_s = matches.ed_dist.size('len_s')
-        len_e = matches.ed_dist.size('len_e')
+        len_s = matches.nll.size('len_s')
+        len_e = matches.nll.size('len_e')
         vs = len(self.vocab)
 
         # Get the best score and span.
-        # if self.training:
-        flat_score = matches.score.flatten(['len_s', 'len_e', 'vocab'], 'cand')
-        best_matched_score, best_span_ind = _soft_max(flat_score, 'cand', self.temperature)
+        # NOTE(j_luo) Some segments don't have any viable spans.
+        flat_score = matches.nll.flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        flat_viable = new_extracted.viable.expand_as(matches.nll).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
+        # Add probs for unextracted characters.
+        unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
+        unextracted = unextracted.expand_as(matches.nll)
+        flat_unextracted = unextracted.flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        flat_unextracted_score = flat_unextracted * math.log(g.unextracted_prob)
+        flat_total_score = flat_viable_score + flat_unextracted_score
+        # Get the top candiates based on total scores.
+        best_matched_score, best_span_ind = flat_total_score.max(dim='cand')
         start = best_span_ind // (len_e * vs)
         # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
         end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
         best_matched_vocab = best_span_ind % vs
 
-        # NOTE(j_luo) Some segments don't have any viable spans.
-        any_viable = new_extracted.viable.any('len_s').any('len_e')
-        # DEBUG(j_luo)
-        # best_matched_score = best_matched_score * any_viable
-        best_matched_score = best_matched_score + (~any_viable).float() * (-9999.9)
-        # DEBUG(j_luo) This was actually the correct one.
-        # best_matched_score = best_matched_score.logsumexp('batch').expand_as(best_matched_score)
-        flat_viable = new_extracted.viable.expand_as(matches.score).flatten(['len_s', 'len_e', 'vocab'], 'cand')
-        flat_viable_score = (~flat_viable) * (-9999.9) + flat_score
-
-        unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
-        unextracted = unextracted.expand_as(matches.score)
-        flat_unextracted_score = unextracted.flatten(
-            ['len_s', 'len_e', 'vocab'], 'cand') * math.log(g.unextracted_prob)
-        flat_viable_score = flat_viable_score + flat_unextracted_score
-        # FIXME(j_luo) A big messy here
         if self.training:
-            best_matched_score = flat_viable_score.logsumexp(dim='cand')
-        else:
-            best_matched_score, _ = flat_viable_score.max(dim='cand')
-        best_matched_score = best_matched_score * (any_viable).float()
+            any_viable = new_extracted.viable.any('len_s').any('len_e')
+            best_matched_score = flat_total_score.logsumexp(dim='cand')
+            best_matched_score = best_matched_score * any_viable
 
         ret = ExtractModelReturn(start, end, best_matched_score,
                                  best_matched_vocab, new_extracted, dfm, alignment)
@@ -438,7 +390,8 @@ class ExtractModel(nn.Module):
         viable = (end_candidates < batch.lengths.align_as(end_candidates))
         start_candidates = start_candidates.expand_as(viable)
         len_candidates = len_candidates.expand_as(viable)
-        # NOTE(j_luo) Use `viable` to get the lengths. `len_candidates` has dummy axes. # IDEA(j_luo) Any better way of handling this? Perhaps persistent names?
+        # NOTE(j_luo) Use `viable` to get the lengths. `len_candidates` has dummy axes.
+        # IDEA(j_luo) Any better way of handling this? Perhaps persistent names?
         len_s = viable.size('len_s')
         len_e = viable.size('len_e')
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
@@ -447,7 +400,6 @@ class ExtractModel(nn.Module):
             viable_lens = len_candidates[viable].rename('viable')
             viable_bi = bi[viable].rename('viable')
 
-        # breakpoint()  # BREAKPOINT(j_luo)
         # Get the word positions to get the corresponding representations.
         viable_starts = viable_starts.align_to('viable', 'len_w')
         word_pos_offsets = get_named_range(g.max_word_length, 'len_w').align_as(viable_starts)
@@ -476,22 +428,16 @@ class ExtractModel(nn.Module):
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
-        field_names = [f.name for f in fields(matches)]
-        for fname in field_names:
-            # NOTE(j_luo) Skip DP scores.
-            if fname == 'f':
-                continue
-
-            attr = getattr(matches, fname)
-            if attr is not None:
-                value = None
-                # FIXME(j_luo) Probably need to remove these later.
-                if 'score' in fname or 'thresh' in fname:
-                    value = -99999.9
-                elif 'ed_dist' in fname:
-                    value = 99999.9
-                restored = _restore_shape(attr, bi, lsi, lei, viable, value=value)
-                setattr(matches, fname, restored)
+        vs = matches.nll.size('vocab')
+        # IDEA(j_luo) NoName shouldn't make size() calls unavaiable. Otherwise size() calls have to be moved outside the context.
+        with NoName(bi, lsi, lei, viable, matches.nll):
+            v_bi = bi[viable]
+            v_lsi = lsi[viable]
+            v_lei = lei[viable]
+            all_nll = get_zeros(batch.batch_size, len_s, len_e, vs)
+            all_nll = all_nll.float().fill_(-9999.9)
+            all_nll[v_bi, v_lsi, v_lei] = matches.nll
+            matches.nll = all_nll.rename('batch', 'len_s', 'len_e', 'vocab')
 
         new_extracted = Extracted(batch.batch_size, matches, viable, costs, inverse_unit_costs, len_candidates)
         return new_extracted
@@ -555,10 +501,10 @@ class ExtractModel(nn.Module):
             idx_tgt = self.vocab_length
             viable_i = get_range(ns, 2, 0)
             vocab_i = get_range(len(self.vocab_length), 2, 1)
-            ed_dist = f[idx_src, idx_tgt, viable_i, vocab_i]
-            ed_dist.rename_('viable', 'vocab')
+            log_probs = f[idx_src, idx_tgt, viable_i, vocab_i]
+            log_probs.rename_('viable', 'vocab')
 
         # Get the best spans.
-        score = -ed_dist
-        matches = Matches(ed_dist, f, score)
+        nll = -log_probs
+        matches = Matches(nll, f)
         return matches, costs, None

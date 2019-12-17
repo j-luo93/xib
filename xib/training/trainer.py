@@ -1,5 +1,6 @@
 import logging
 from abc import ABCMeta
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Optional
 
@@ -218,36 +219,12 @@ class ExtractTrainer(BaseTrainer):
         logging.imp(f'Setting ins_del_cost to {value}.')
 
     @global_property
-    def topk_ratio(self):
-        pass
-
-    @topk_ratio.setter
-    def topk_ratio(self, value):
-        pass
-
-    @global_property
-    def uniform_prior(self):
-        pass
-
-    @uniform_prior.setter
-    def uniform_prior(self, value):
-        pass
-
-    @global_property
     def threshold(self):
         pass
 
     @threshold.setter
     def threshold(self, value):
         logging.imp(f'Setting threshold to {value}.')
-
-    @global_property
-    def temperature(self):
-        pass
-
-    @temperature.setter
-    def temperature(self, value):
-        logging.imp(f'Setting temperature to {value}.')
 
     def add_trackables(self):
         self.tracker.add_trackable('round', endless=True)

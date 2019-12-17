@@ -68,29 +68,6 @@ class LMEvaluator(BaseEvaluator):
         return all_metrics
 
 
-# @dataclass
-# class PrfScores:
-#     exact_matches: int
-#     prefix_matches: int
-#     total_correct: int
-#     total_pred: int
-
-#     @property
-#     def precision(self):
-#         return self.exact_matches / (self.total_pred + 1e-8)
-
-#     @property
-#     def recall(self):
-#         return self.exact_matches / (self.total_correct + 1e-8)
-
-#     @property
-#     def f1(self):
-#         return 2 * self.precision * self.recall / (self.precision + self.recall + 1e-8)
-
-#     def __add__(self, other: PrfScores) -> PrfScores:
-#         return PrfScores(self.exact_matches + other.exact_matches, self.total_correct + other.total_correct, self.total_pred + other.total_pred)
-
-
 def get_matching_stats(predictions: List[Segmentation], ground_truths: List[Segmentation], match_words: bool = False) -> Metrics:
     exact_span_matches = 0
     prefix_span_matches = 0
@@ -310,17 +287,17 @@ class ExtractEvaluator(BaseEvaluator):
 
     def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Tuple[List[Segmentation], np.ndarray]:
         matches = model_ret.extracted.matches
-        ed_dist = matches.ed_dist
-        # Get the best matched ed_dist scores.
-        bs = ed_dist.size('batch')
+        nll = matches.nll
+        # Get the best matched nll.
+        bs = nll.size('batch')
         bi = get_named_range(bs, 'batch')
         start = model_ret.start
         end = model_ret.end
         bmv = model_ret.best_matched_vocab
-        with NoName(bi, start, end, bmv, ed_dist):
-            bmed = ed_dist[bi, start, end - start - g.min_word_length + 1, bmv]  # Best matched edit distance
-        bmed.rename_('batch')
-        matched = bmed < self.model.threshold
+        with NoName(bi, start, end, bmv, nll):
+            bmnll = nll[bi, start, end - start - g.min_word_length + 1, bmv]  # Best matched nll.
+        bmnll.rename_('batch')
+        matched = bmnll < self.model.threshold
 
         start = start.cpu().numpy()
         end = end.cpu().numpy()

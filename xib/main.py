@@ -6,11 +6,13 @@ from dev_misc.devlib.named_tensor import patch_named_tensors
 from dev_misc.trainlib import set_random_seeds
 from xib.cfg import reg
 from xib.training.manager import (AdaptCbowManager, AdaptLMManager,
-                                  CbowManager, DecipherManager, ExtractManager,
-                                  LMManager, SearchSolverManager)
+                                  BaseManager, CbowManager, DecipherManager,
+                                  ExtractManager, LMManager,
+                                  SearchSolverManager)
 
 
 def train():
+    manager: BaseManager
     if g.task == 'lm':
         manager = LMManager()
     elif g.task == 'cbow':

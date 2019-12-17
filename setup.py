@@ -23,6 +23,7 @@ setup(
     name='xib',
     version='0.1',
     packages=find_packages(),
+    zip_safe=False,
     ext_modules=cythonize(
         ext_modules,
         annotate=True),  # DEBUG(j_luo) remove this

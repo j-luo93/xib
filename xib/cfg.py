@@ -203,12 +203,10 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     init_threshold: float = 30.0
     min_threshold: float = 0.99
     anneal_factor: float = 0.8
-    temperature: float = 1.0
     num_steps: int = 1000
     learning_rate: float = 1.0
     reg_hyper: float = 1.0
     learning_rate: float = 0.1
-    temperature: float = 1000.0
 
 
 # @reg

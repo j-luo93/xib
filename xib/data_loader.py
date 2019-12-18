@@ -4,7 +4,8 @@ import random
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Type, Union
+from typing import (Any, Dict, List, Optional, Sequence, Tuple, Type, TypeVar,
+                    Union)
 
 import numpy as np
 import torch
@@ -14,6 +15,7 @@ from dev_misc import LT, add_condition, g
 from dev_misc.arglib import add_argument, g, init_g_attr
 from dev_misc.devlib import (batch_class, get_array, get_length_mask,
                              get_range, get_zeros)
+from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import has_gpus
 from dev_misc.trainlib.base_data_loader import (BaseDataLoader,
                                                 BaseDataLoaderRegistry)
@@ -21,15 +23,18 @@ from dev_misc.trainlib.tracker.tracker import Task
 from dev_misc.utils import cached_property
 from xib.batch import CbowIpaBatch
 from xib.ipa import Category, Index, conditions, get_enum_by_cat
-from xib.ipa.process import BaseSegment, Segment, SegmentWindow
+from xib.ipa.process import BaseSegment, Segment, SegmentWindow, SegmentX
 from xib.training.task import Task
 
 from .batch import BaseBatch, DenseIpaBatch, IpaBatch
+
+S = TypeVar('S', Segment, SegmentX)
 
 
 class BaseDataset(Dataset, metaclass=ABCMeta):
 
     cache_suffix = 'cache'
+    segment_cls: Type[S] = Segment
 
     def __init__(self, data_path: Path):
         cache_path = Path(str(data_path) + f'.{self.cache_suffix}')
@@ -49,14 +54,20 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
     @abstractmethod
     def load_data(self, data_path: Path) -> Dict: ...
 
-    def _get_segment_dict(self, data_path: Path) -> Dict[str, Segment]:
+    def _get_segment_dict(self, data_path: Path) -> Dict[str, S]:
         segments = dict()
+        num_errors = 0
         with data_path.open('r', encoding='utf8') as fin:
             for line in fin:
                 tokens = line.strip().split()
                 for token in tokens:
                     if token not in segments:
-                        segments[token] = Segment(token)
+                        try:
+                            segments[token] = self.segment_cls(token)
+                        except ValueError:
+                            num_errors += 1
+
+        logging.error(f'Encountered {num_errors} errors when processing the segments.')
         return segments
 
     def __len__(self):
@@ -194,6 +205,7 @@ class DenseIpaDataLoader(IpaDataLoader):
 add_argument('max_segment_length', default=10, dtype=int,
              msg='Max length for segments. Longer ones will be broken down into moving windows.')
 add_argument('broken_words', default=False, dtype=bool, msg='Flag to break words down.')
+add_argument('aligned', default=False, dtype=bool, msg='Use aligned input format.')
 
 
 class UnbrokenIpaDataset(IpaDataset):
@@ -206,16 +218,21 @@ class UnbrokenIpaDataset(IpaDataset):
         with data_path.open('r', encoding='utf8') as fin:
             for line in fin:
                 tokens = line.strip().split()
-                segments = [segment_dict[token] for token in tokens]
+                segments = list()
+                for token in tokens:
+                    try:
+                        segments.append(segment_dict[token])
+                    except KeyError:
+                        pass
                 lengths = np.asarray([len(segment) for segment in segments])
                 cum_lengths = np.cumsum(lengths)
                 ex_cum_lengths = np.concatenate([np.zeros([1], dtype=np.int32), cum_lengths[:-1]])
                 last_end = -1
                 end = 0
                 start = 0
-                while start < len(tokens):
+                while start < len(segments):
                     # for start in range(len(tokens)):
-                    while end < len(tokens) and cum_lengths[end] - ex_cum_lengths[start] <= g.max_segment_length:
+                    while end < len(segments) and cum_lengths[end] - ex_cum_lengths[start] <= g.max_segment_length:
                         end += 1
                     if end <= start:
                         end = start + 1
@@ -237,6 +254,41 @@ class UnbrokenIpaDataset(IpaDataset):
         ret['segment'] = SegmentWindow(ret['segment'])
         ret['gold_tag_seq'] = ret['segment'].gold_tag_seq
         return ret
+
+
+class AlignedIpaDataset(UnbrokenIpaDataset):
+
+    cache_suffix = 'aligned.ipa.cache'
+    segment_cls: Type[S] = SegmentX
+
+    def set_unit_ids(self):
+        self.unit2fm = dict()
+        for segments in self.data['segments']:
+            for segment in segments:
+                for i, s in enumerate(segment.cv_list):
+                    if s not in self.unit2fm:
+                        self.unit2fm[s] = segment.feat_matrix[i]
+
+        self.id2unit = sorted(self.unit2fm)
+        self.unit2id = {u: i for i, u in enumerate(self.id2unit)}
+
+    @cached_property
+    def dfm(self) -> LT:
+        lu_repr = torch.arange(len(self.id2unit))
+        fm = torch.stack([self.unit2fm[u] for u in self.id2unit], dim=0).unsqueeze(
+            dim=1).rename('batch', 'length', 'feat')
+        dfm = convert_to_dense(fm)
+        return dfm
+
+
+class AlignedTextDataset(AlignedIpaDataset):
+
+    cache_suffix = 'aligned.text.cache'
+
+    @cached_property
+    def unit_vocab_size(self):
+        self.set_unit_ids()
+        return len(self.id2unit)
 
 
 class BrokenIpaDataset(IpaDataset):
@@ -392,6 +444,22 @@ class UnbrokenIpaDataLoader(IpaDataLoader):
         )
 
 
+class AlignedIpaDataLoader(UnbrokenIpaDataLoader):
+
+    dataset_cls = AlignedIpaDataset
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # HACK(j_luo) Dataloaders for ipas should run this.
+        self.dataset.set_unit_ids()
+
+    def __iter__(self):
+        for batch in super().__iter__():
+            # HACK(j_luo) `lu_dfm` is not part of the fields.
+            batch.lu_dfm = self.dataset.dfm
+            yield batch
+
+
 class UnbrokenTextDataLoader(UnbrokenIpaDataLoader):
 
     batch_cls = UnbrokenTextBatch
@@ -413,6 +481,11 @@ class UnbrokenTextDataLoader(UnbrokenIpaDataLoader):
             if batch.max_length < g.min_word_length:
                 continue
             yield batch.cuda()
+
+
+class AlignedTextDataLoader(UnbrokenTextDataLoader):
+
+    dataset_cls = AlignedTextDataset
 
 
 class BrokenIpaDataLoader(UnbrokenIpaDataLoader):
@@ -464,9 +537,16 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
             dl = DenseIpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer', 'extract']:
             if g.input_format == 'text':
-                dl_cls = UnbrokenTextDataLoader
+                if g.aligned:
+                    dl_cls = AlignedTextDataLoader
+                else:
+                    dl_cls = UnbrokenTextDataLoader
+            elif g.aligned:
+                dl_cls = AlignedIpaDataLoader
+            elif g.broken_words:
+                dl_cls = BrokenIpaDataLoader
             else:
-                dl_cls = BrokenIpaDataLoader if g.broken_words else UnbrokenIpaDataLoader
+                dl_cls = UnbrokenIpaDataLoader
             dl = dl_cls(data_path, task)
         else:
             raise ValueError(f'Unsupported task {task.name}.')

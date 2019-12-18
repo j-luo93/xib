@@ -177,12 +177,17 @@ class ExtractTrainer(BaseTrainer):
             self.add_callback('total_step', 1, self.save_alignment)
 
     def save_alignment(self):
-        to_save = {
-            'unit_aligner': self.model.g2p.unit_aligner.state_dict(),
-        }
+        if g.input_format == 'text':
+            to_save = {
+                'unit_aligner': self.model.g2p.unit_aligner.state_dict(),
+            }
+        else:
+            to_save = {
+                'adapter': self.model.adapter.state_dict()
+            }
         path = g.log_dir / f'saved.{self.stage}.almt'
         torch.save(to_save, path)
-        logging.imp(f'Alignment saved to {path}.')
+        logging.debug(f'Alignment saved to {path}.')
 
     @global_property
     def ins_del_cost(self):

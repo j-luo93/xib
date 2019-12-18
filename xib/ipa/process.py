@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 import re
 from abc import ABC, abstractmethod
@@ -373,7 +374,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
 
 class SegmentX(BaseSegment):
 
-    has_gold_tag_seq: ClassVar[bool] = False
+    has_gold_tag_seq: ClassVar[bool] = True
 
     def __init__(self, raw_token: str):
         if '|' in raw_token:
@@ -387,7 +388,11 @@ class SegmentX(BaseSegment):
 
     @property
     def feat_matrix(self) -> LT:
-        return self.orig_segment
+        return self.orig_segment.feat_matrix
+
+    @property
+    def gold_tag_seq(self) -> LT:
+        return self.orig_segment.gold_tag_seq
 
     @property
     def is_noise(self) -> bool:
@@ -408,6 +413,10 @@ class SegmentX(BaseSegment):
     @property
     def segment_list(self) -> List[str]:
         return self.orig_segment.segment_list
+
+    @property
+    def cv_list(self) -> List[str]:
+        return self.orig_segment.cv_list
 
     @property
     def merged_ipa(self) -> List[IPAString]:
@@ -713,6 +722,7 @@ def merge_ipa(s: Union[pd.Series, Segment], ipa: IPAString, segment: str) -> Lis
     datum_cols = {feat: list() for feat in normal_feats + feats_to_merge}
     merged_ipa = list()
     ptypes = s['ptype']
+    errors = defaultdict(list)
     while i < len(ptypes):
             # Get ptype and normal features first.
         for feat in normal_feats:
@@ -730,7 +740,7 @@ def merge_ipa(s: Union[pd.Series, Segment], ipa: IPAString, segment: str) -> Lis
                         assert datum_c_to_merge[feat] is None
                         datum_c_to_merge[feat] = value
                     except:
-                        errors[(feat)].append(s)
+                        errors[feat].append(s)
                         keep = False
             j += 1
         merged_ipa.append(ipa[i:j])
@@ -738,6 +748,8 @@ def merge_ipa(s: Union[pd.Series, Segment], ipa: IPAString, segment: str) -> Lis
         for feat in feats_to_merge:
             datum_cols[feat].append(de_none(datum_c_to_merge[feat]))
     datum = [segment, ipa, merged_ipa] + [datum_cols[feat] for feat in normal_feats + feats_to_merge]
+    for feat, value in errors.items():
+        logging.error(f'feature {feat} has {len(value)} errors.')
     if keep:
         return datum
     else:

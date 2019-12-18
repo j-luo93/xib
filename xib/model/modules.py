@@ -275,21 +275,27 @@ class Predictor(nn.Module):
 
 class AdaptLayer(nn.Module):
 
+    add_argument('adapt_softmax', default=True, dtype=bool, msg='Flag to use softmax for adapter layer.')
+
     @not_supported_argument_value('new_style', True)
     def __init__(self):
         super().__init__()
         param_dict = dict()
+        logging.imp('Initializing the adapter layers with identity matrices.')
         for cat in Category:
             if should_include(g.feat_groups, cat):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
-                param = nn.Parameter(torch.zeros(nf, nf))
+                param = nn.Parameter(torch.eye(nf))
                 param_dict[cat.name] = param
         self.adapters = nn.ParameterDict(param_dict)
 
     def alignment(self, cat_name: str) -> FT:
         param = self.adapters[cat_name]
-        alignment = param.log_softmax(dim=0).exp()
+        if g.adapt_softmax:
+            alignment = param.log_softmax(dim=0).exp
+        else:
+            alignment = param
         return alignment
 
     def forward(self, dense_feat_matrices: Dict[Category, FT]) -> Dict[Category, FT]:

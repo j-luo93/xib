@@ -16,7 +16,8 @@ from dev_misc.utils import WithholdKeys, cached_property, global_property
 from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
                              convert_to_dense)
 from xib.ipa import Category, Index, get_enum_by_cat, should_include
-from xib.ipa.process import Segment, Segmentation, SegmentWindow, Span
+from xib.ipa.process import (Segment, Segmentation, SegmentWindow, SegmentX,
+                             Span)
 from xib.model.modules import AdaptLayer, FeatEmbedding
 
 from .modules import DenseFeatEmbedding
@@ -87,21 +88,21 @@ class G2PLayer(nn.Module):
         self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
 
-    def forward(self, ku_id_seqs: LT, lu_repr: FT) -> Tuple[FT, FT]:
+    def forward(self, lu_id_seqs: LT, ku_repr: FT) -> Tuple[FT, FT]:
         """Returns lu x ku representation and bs x l x ku representation."""
-        ku_char_weight = self.unit_aligner.weight
-        ku_char_repr = ku_char_weight @ lu_repr
+        lu_char_weight = self.unit_aligner.weight
+        lu_char_repr = lu_char_weight @ ku_repr
 
-        ku_char_repr = ku_char_repr.refine_names('ku_char_emb', 'char_emb')
-        with NoName(ku_char_repr, ku_id_seqs):
-            _ku_repr = ku_char_repr[ku_id_seqs].rename('batch', 'length', 'char_emb')
-        _ku_repr = _ku_repr.align_to('batch', 'char_emb', ...)
-        with NoName(_ku_repr):
-            ku_ctx_repr = self.conv(_ku_repr).rename('batch', 'char_emb', 'length')
-        ku_ctx_repr = ku_ctx_repr.align_to(..., 'char_emb')
-        ku_ctx_repr = self.dropout(ku_ctx_repr)
+        lu_char_repr = lu_char_repr.refine_names('lu_char_emb', 'char_emb')
+        with NoName(lu_char_repr, lu_id_seqs):
+            _lu_repr = lu_char_repr[lu_id_seqs].rename('batch', 'length', 'char_emb')
+        _lu_repr = _lu_repr.align_to('batch', 'char_emb', ...)
+        with NoName(_lu_repr):
+            lu_ctx_repr = self.conv(_lu_repr).rename('batch', 'char_emb', 'length')
+        lu_ctx_repr = lu_ctx_repr.align_to(..., 'char_emb')
+        lu_ctx_repr = self.dropout(lu_ctx_repr)
 
-        return ku_char_repr, ku_ctx_repr
+        return lu_char_repr, lu_ctx_repr
 
 
 class ExtractModel(nn.Module):
@@ -124,9 +125,18 @@ class ExtractModel(nn.Module):
             l = len(segment)
             return g.min_word_length <= l <= g.max_word_length
 
+        # TODO(j_luo) This should belong in a data processing instance.
+        segment_cls = SegmentX if g.aligned else Segment
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
             _vocab = set(line.strip() for line in fin)
-            segments = [Segment(w) for w in _vocab]
+            segments = list()
+            num_errors = 0
+            for w in _vocab:
+                try:
+                    segments.append(segment_cls(w))
+                except ValueError:
+                    num_errors += 1
+            logging.error(f'Encountered {num_errors} errors when processing the vocabulary.')
             self.vocab = get_array([segment for segment in segments if _has_proper_length(segment)])
             lengths = torch.LongTensor(list(map(len, self.vocab)))
             feat_matrix = [segment.feat_matrix for segment in self.vocab]
@@ -147,15 +157,15 @@ class ExtractModel(nn.Module):
             # Get the entire set of units from vocab.
             units = set()
             for segment in self.vocab:
-                units.update(segment.segment_list)
+                units.update(segment.cv_list)
             self.id2unit = sorted(units)
             self.unit2id = {u: i for i, u in enumerate(self.id2unit)}
             # Now indexify the vocab. Gather feature matrices for units as well.
             indexed_segments = np.zeros([len(self.vocab), max_len], dtype='int64')
             unit_feat_matrix = dict()
             for i, segment in enumerate(self.vocab):
-                indexed_segments[i, range(len(segment))] = [self.unit2id[u] for u in segment.segment_list]
-                for j, u in enumerate(segment.segment_list):
+                indexed_segments[i, range(len(segment))] = [self.unit2id[u] for u in segment.cv_list]
+                for j, u in enumerate(segment.cv_list):
                     if u not in unit_feat_matrix:
                         unit_feat_matrix[u] = segment.feat_matrix[j]
             unit_feat_matrix = [unit_feat_matrix[u] for u in self.id2unit]
@@ -239,23 +249,29 @@ class ExtractModel(nn.Module):
         """
         # Prepare representations.
         alignment = None
+        char_log_probs = None
         if g.dense_input:
             # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
             with NoName(*self.unit_dense_feat_matrix.values()):
                 unit_repr = torch.cat([self.unit_dense_feat_matrix[cat] for cat in self.effective_categories], dim=-1)
             unit_repr = unit_repr.rename('batch', 'length', 'char_emb').squeeze(dim='length')
 
+            # Both input formats will undergo the same probability calculation, but representations are derived differently. For text, we use g2p; for ipa, we use adapter.
             if g.input_format == 'text':
-                ku_char_repr, word_repr = self.g2p(batch.unit_id_seqs, unit_repr)
-                char_log_probs = (ku_char_repr @ unit_repr.t()).log_softmax(dim=-1)
-                alignment = char_log_probs.exp()
+                lu_char_repr, word_repr = self.g2p(batch.unit_id_seqs, unit_repr)
             else:
+                lu_char_adapted_dfm = self.adapter(batch.lu_dfm)  # HACK(j_luo) Note that this is a hack.
+                with NoName(*lu_char_adapted_dfm.values()):
+                    lu_char_repr = torch.cat([lu_char_adapted_dfm[cat] for cat in self.effective_categories], dim=-1)
+                lu_char_repr.squeeze_(dim=1)
+
                 dfm = batch.dense_feat_matrix
-                with Rename(*self.unit_dense_feat_matrix.values(), unit='batch'):
-                    adapted_dfm = self.adapter(dfm)
+                adapted_dfm = self.adapter(dfm)
                 with NoName(*adapted_dfm.values()):
                     word_repr = torch.cat([adapted_dfm[cat] for cat in self.effective_categories], dim=-1)
                 word_repr.rename_('batch', 'length', 'char_emb')
+            char_log_probs = (lu_char_repr @ unit_repr.t()).log_softmax(dim=-1)
+            alignment = char_log_probs.exp()
         else:
             with Rename(self.unit_feat_matrix, unit='batch'):
                 word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
@@ -303,7 +319,7 @@ class ExtractModel(nn.Module):
                           extracted: Extracted,
                           word_repr: FT,
                           unit_repr: FT,
-                          char_log_probs: FT) -> Extracted:
+                          char_log_probs: Optional[FT] = None) -> Extracted:
         # Propose all span start/end positions.
         start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
         # Range from `min_word_length` to `max_word_length`.
@@ -373,7 +389,7 @@ class ExtractModel(nn.Module):
                      unit_repr: FT,
                      viable_lens: LT,
                      extracted_unit_ids: LT,
-                     char_log_probs: FT) -> Matches:
+                     char_log_probs: Optional[FT] = None) -> Matches:
         ns = extracted_word_repr.size('viable')
         len_w = extracted_word_repr.size('len_w')
         nt = len(self.vocab_feat_matrix)
@@ -381,15 +397,17 @@ class ExtractModel(nn.Module):
         mtl = self.vocab_feat_matrix.size('length')
 
         # Compute cosine distances all at once: for each viable span, compare it against all units.
-        ctx_logits = extracted_word_repr @ unit_repr.t()
-        ctx_log_probs = ctx_logits.log_softmax(dim='unit').flatten(['viable', 'len_w'], 'viable_X_len_w')
-        with NoName(char_log_probs, extracted_unit_ids):
-            global_log_probs = char_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
-        weighted_log_probs = g.context_weight * ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
-        costs = -weighted_log_probs
-
-        # Name: viable x len_w x unit
-        costs = costs.unflatten('viable_X_len_w', [('viable', ns), ('len_w', len_w)])
+        if g.input_format == 'text':
+            ctx_logits = extracted_word_repr @ unit_repr.t()
+            ctx_log_probs = ctx_logits.log_softmax(dim='unit').flatten(['viable', 'len_w'], 'viable_X_len_w')
+            with NoName(char_log_probs, extracted_unit_ids):
+                global_log_probs = char_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+            weighted_log_probs = g.context_weight * ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
+            costs = -weighted_log_probs
+            costs = costs.unflatten('viable_X_len_w', [('viable', ns), ('len_w', len_w)])
+        else:
+            logits = extracted_word_repr @ unit_repr.t()
+            costs = -logits.log_softmax(dim='unit')
 
         # NOTE(j_luo) Use dictionary to save every state.
         fs = dict()

@@ -203,10 +203,20 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     min_threshold: float = 0.99
     anneal_factor: float = 0.8
     num_steps: int = 1000
-    learning_rate: float = 1.0
     reg_hyper: float = 1.0
     learning_rate: float = 0.1
+    unextracted: float = 0.5
 
+
+@reg
+class GotDeIpaMatched(SanityCheck):
+    aligned: bool = True
+    input_format: str = 'ipa'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/got_de.shuf.ipa.100'
+        self.vocab_path: str = './data/de.matched.words'
 
 # @reg
 # class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):

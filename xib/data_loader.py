@@ -198,7 +198,7 @@ add_argument('broken_words', default=False, dtype=bool, msg='Flag to break words
 
 class UnbrokenIpaDataset(IpaDataset):
 
-    cache_suffix = 'unbroken.cache'
+    cache_suffix = 'unbroken.ipa.cache'
 
     def load_data(self, data_path: Path):
         segment_dict = self._get_segment_dict(data_path)

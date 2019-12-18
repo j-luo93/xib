@@ -5,7 +5,7 @@ import torch
 
 from dev_misc import TestCase, test_with_arguments
 
-from .process import B, I, O, Segment, SegmentWindow
+from .process import B, I, O, Segment, SegmentWindow, SegmentX
 
 
 class TestSegment(TestCase):
@@ -13,7 +13,7 @@ class TestSegment(TestCase):
     def setUp(self):
         super().setUp()
         self.seg = Segment('θɹiː')
-        test_with_arguments(min_word_length=1, _force=True)
+        test_with_arguments(min_word_length=1, max_word_length=10, _force=True)
 
     def test_basic(self):
         ans = torch.LongTensor(
@@ -60,6 +60,16 @@ class TestSegment(TestCase):
         self.assertListEqual(self.seg.cv_list, ['θ', 'ɹ', 'i'])
 
 
+class TestSegmentX(TestCase):
+
+    def test_basic(self):
+        x = SegmentX('ab')
+        self.assertTrue(x.is_noise)
+        y = SegmentX('ab|abc|ba')
+        self.assertFalse(y.is_noise)
+        self.assertEqual(len(y.aligned_segments), 2)
+
+
 class TestSegmentWindow(TestCase):
 
     def setUp(self):
@@ -67,7 +77,7 @@ class TestSegmentWindow(TestCase):
         seg1 = Segment('θɹiː')
         seg2 = Segment('θɹiː')
         self.sw = SegmentWindow([seg1, seg2])
-        test_with_arguments(min_word_length=1, _force=True)
+        test_with_arguments(min_word_length=1, max_word_length=10, _force=True)
 
     def test_basic(self):
         ans = torch.LongTensor(

@@ -10,8 +10,8 @@ from dev_misc.arglib import g, reset_repo, test_with_arguments
 from dev_misc.devlib.named_tensor import (patch_named_tensors,
                                           unpatch_named_tensors)
 
-from .data_loader import (BrokenTextDataLoader, IpaDataLoader,
-                          UnbrokenTextDataLoader)
+from .data_loader import (BrokenIpaDataLoader, IpaDataLoader,
+                          UnbrokenIpaDataLoader)
 
 
 class BaseDataLoaderTestCase(TestCase):
@@ -61,12 +61,12 @@ class TestContinuousIpaDataLoader(BaseDataLoaderTestCase):
     def test_basic(self):
         test_with_arguments(max_segment_length=10, _force=True)
         # pylint: disable=no-value-for-parameter
-        self._test_routinue(UnbrokenTextDataLoader, ('ab:c', 'a:bd'))
+        self._test_routinue(UnbrokenIpaDataLoader, ('ab:c', 'a:bd'))
 
     def test_window(self):
         test_with_arguments(max_segment_length=3, _force=True)
         # pylint: disable=no-value-for-parameter
-        dl = self._test_routinue(UnbrokenTextDataLoader, ('ab:c ab b ac bcd b', 'a:bd'))
+        dl = self._test_routinue(UnbrokenIpaDataLoader, ('ab:c ab b ac bcd b', 'a:bd'))
 
         def aeq(idx, ans):
             self.assertEqual(str(dl.dataset[idx]['segment']), ans)
@@ -81,7 +81,7 @@ class TestContinuousIpaDataLoader(BaseDataLoaderTestCase):
     def test_broken_window(self):
         test_with_arguments(max_segment_length=3, _force=True)
         # pylint: disable=no-value-for-parameter
-        dl = self._test_routinue(BrokenTextDataLoader, ('ab:c ab b a', ))
+        dl = self._test_routinue(BrokenIpaDataLoader, ('ab:c ab b a', ))
 
         def aeq(idx, ans):
             self.assertEqual(str(dl.dataset[idx]['segment']), ans)

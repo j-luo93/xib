@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from itertools import zip_longest
 from typing import (Callable, ClassVar, Iterator, List, Optional, Sequence,
-                    TextIO, Tuple, Union)
+                    TextIO, Tuple, TypeVar, Union)
 
 import numpy as np
 import pandas as pd
@@ -371,9 +371,114 @@ class Segment(BaseSegmentWithGoldTagSeq):
         return BrokenSegment(new_list_of_units, new_list_of_ipas, new_feat_matrix, new_gold_tag_seq, self)
 
 
+class SegmentX(BaseSegment):
+
+    has_gold_tag_seq: ClassVar[bool] = False
+
+    def __init__(self, raw_token: str):
+        if '|' in raw_token:
+            orig_raw_token, *aligned_raw_tokens = raw_token.split('|')
+        else:
+            # If there is no aligned information, then this token is essentially noise.
+            orig_raw_token = '#' + raw_token
+            aligned_raw_tokens = list()
+        self.orig_segment = Segment(orig_raw_token)
+        self.aligned_segments = [Segment(raw) for raw in aligned_raw_tokens]
+
+    @property
+    def feat_matrix(self) -> LT:
+        return self.orig_segment
+
+    @property
+    def is_noise(self) -> bool:
+        return self.orig_segment.is_noise
+
+    def __len__(self):
+        return len(self.orig_segment)
+
+    def __str__(self):
+        ret = [str(self.orig_segment)]
+        if self.aligned_segments:
+            ret.extend([str(segment) for segment in self.aligned_segments])
+        return '|'.join(ret)
+
+    def __getitem__(self, idx: int) -> str:
+        return self.orig_segment[idx]
+
+    @property
+    def segment_list(self) -> List[str]:
+        return self.orig_segment.segment_list
+
+    @property
+    def merged_ipa(self) -> List[IPAString]:
+        return self.orig_segment.merged_ipa
+
+    def to_span(self) -> Span:
+        return self.orig_segment.to_span()
+
+
+class BaseSpecialSegment(BaseSegment):
+
+    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feat_matrix: LT):
+        self._list_of_units = list_of_units
+        self._list_of_ipas = list_of_ipas
+        self._feat_matrix = feat_matrix
+        if len(self._list_of_units) != len(self._feat_matrix):
+            raise ValueError(f'Length mismatch.')
+
+    @property
+    def merged_ipa(self) -> List[IPAString]:
+        return self._list_of_ipas
+
+    @property
+    def feat_matrix(self):
+        return self._feat_matrix
+
+    def __len__(self):
+        return len(self._list_of_units)
+
+    def __getitem__(self, idx: int) -> str:
+        return self._list_of_units[idx]
+
+    @property
+    def segment_list(self):
+        return self._list_of_units
+
+
+class PerturbedSegment(BaseSpecialSegment):
+
+    has_gold_tag_seq: ClassVar[bool] = False
+
+    def __str__(self):
+        return '!' + '-'.join(self._list_of_units)
+
+
+class BrokenSegment(BaseSpecialSegment, BaseSegmentWithGoldTagSeq):
+
+    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feat_matrix: LT, gold_tag_seq: LT, original: Segment):
+        super().__init__(list_of_units, list_of_ipas, feat_matrix)
+        self._gold_tag_seq = gold_tag_seq
+        if len(self._gold_tag_seq) != len(list_of_units):
+            raise ValueError('Length mismatch.')
+        self.original = original
+
+    @property
+    def gold_tag_seq(self) -> LT:
+        return self._gold_tag_seq
+
+    def __str__(self):
+        return ']' + '-'.join(self._list_of_units) + '['
+
+    def to_span(self) -> None:
+        return
+
+
+S = TypeVar('S', Segment, BrokenSegment, SegmentX)
+
+
 class SegmentWindow(BaseSegmentWithGoldTagSeq):
 
-    def __init__(self, segments: List[Union[Segment, BrokenSegment]], original: Optional[SegmentWindow] = None):
+    def __init__(self, segments: List[S], original: Optional[SegmentWindow] = None):
         self._segments = segments
         self.original = original
 
@@ -545,62 +650,6 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
             middle = [self._segments[i] for i in range(start_seg_idx + 1, end_seg_idx)]
             original = SegmentWindow([start_seg] + middle + [end_seg])
             return SegmentWindow([broken_start] + middle + [broken_end], original=original)
-
-
-class BaseSpecialSegment(BaseSegment):
-
-    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feat_matrix: LT):
-        self._list_of_units = list_of_units
-        self._list_of_ipas = list_of_ipas
-        self._feat_matrix = feat_matrix
-        if len(self._list_of_units) != len(self._feat_matrix):
-            raise ValueError(f'Length mismatch.')
-
-    @property
-    def merged_ipa(self) -> List[IPAString]:
-        return self._list_of_ipas
-
-    @property
-    def feat_matrix(self):
-        return self._feat_matrix
-
-    def __len__(self):
-        return len(self._list_of_units)
-
-    def __getitem__(self, idx: int) -> str:
-        return self._list_of_units[idx]
-
-    @property
-    def segment_list(self):
-        return self._list_of_units
-
-
-class PerturbedSegment(BaseSpecialSegment):
-
-    has_gold_tag_seq: ClassVar[bool] = False
-
-    def __str__(self):
-        return '!' + '-'.join(self._list_of_units)
-
-
-class BrokenSegment(BaseSpecialSegment, BaseSegmentWithGoldTagSeq):
-
-    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feat_matrix: LT, gold_tag_seq: LT, original: Segment):
-        super().__init__(list_of_units, list_of_ipas, feat_matrix)
-        self._gold_tag_seq = gold_tag_seq
-        if len(self._gold_tag_seq) != len(list_of_units):
-            raise ValueError('Length mismatch.')
-        self.original = original
-
-    @property
-    def gold_tag_seq(self) -> LT:
-        return self._gold_tag_seq
-
-    def __str__(self):
-        return ']' + '-'.join(self._list_of_units) + '['
-
-    def to_span(self) -> None:
-        return
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):

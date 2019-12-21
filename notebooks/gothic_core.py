@@ -136,10 +136,15 @@ def save_table(folder: str, out_path: str):
     """Get tables from all html files within one folder (e.g., `got`), and then save a concatenated wikiling table."""
     folder = Path(folder)
     tables = list()
-    for filename in folder.glob('page.*.html'):
+
+    def get_page_num(path: Path) -> int:
+
+        return int(re.search(r'page\.(\d+)\.html', str(path)).group(1))
+
+    for filename in sorted(folder.glob('page.*.html'), key=get_page_num):
         table = get_table(filename)
         tables.append(table)
-    table = pd.concat(tables)
+    table = pd.concat(tables, ignore_index=True)
     table = table.reset_index(drop=True).drop(columns='#')
     table.to_csv(out_path, index=None, sep='\t')
 

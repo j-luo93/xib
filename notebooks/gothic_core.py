@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from collections import defaultdict
 from enum import Enum, auto, unique
+from itertools import chain
 from pathlib import Path
 from typing import (Container, Dict, Iterable, List, NewType, Optional,
                     Sequence, Tuple, TypeVar, Union)
@@ -680,13 +681,13 @@ class EtymologicalDictionary:
 #                  Convert html files into tsv.                  #
 # -------------------------------------------------------------- #
 
-reserved_seps = {
-    'got': ['ÜG', 'ÜE', 'Vw', 'Hw', 'Q', 'I', 'E', 'B', 'R', 'L', 'Son'],
-    'edel': ['Vw', 'Hw', 'Q', 'I', 'E', 'L', 'Son', 'GB', 'BM', 'F'],
-    'germ': ['RB', 'Vw', 'Hw', 'Q', 'I', 'E', 'W', 'B', 'L', 'Son'],
-    'idg': ['RB', 'ÜG', 'Vw', 'Hw', 'E', 'W', 'L', 'Son'],
-    'ae': ['ÜG', 'Vw', 'Hw', 'Q', 'I', 'E', 'W', 'R', 'L', 'Son']
-}
+reserved_seps = dict()
+group2col = dict()
+
+
+def register_dataset_seps(dataset: str, seps: List[str]):
+    reserved_seps[dataset] = seps
+    group2col[dataset] = ['Lemma', 'Alternative', 'Sprachen', 'Wortarten_all', 'Bedeutungen_all'] + seps
 
 
 def nm(dataset: str, sep: Optional[str] = None) -> str:  # Stands for negative match.
@@ -702,7 +703,7 @@ def get_regex(dataset: str, sep: Optional[str] = None) -> str:
     if sep is None:
         prefix = ''
     else:
-        prefix = f'{sep}\.:'
+        prefix = fr'{sep}\.:'
     return fr'({prefix}(?:{reserved_p}.)*;?\s*)?'
 
 
@@ -721,12 +722,6 @@ def get_match_regex(dataset: str) -> re.Pattern:
     patterns.append(fr'({last_sep}\.:(?:{nm(dataset, last_sep)}.)*)?\s*$')
     regex = re.compile(''.join(patterns))
     return regex
-
-
-group2col = {
-    dataset: ['Lemma', 'Alternative', 'Sprachen', 'Wortarten_all', 'Bedeutungen_all'] + seps
-    for dataset, seps in reserved_seps.items()
-}
 
 
 def remove_sep(prefix: str, s: str) -> str:
@@ -772,7 +767,7 @@ class LineIterable:
         self.doc = doc
 
     def __iter__(self):
-        for elem in chain(doc('p.MsoNormal'), doc('p.MsoPlainText')):
+        for elem in chain(self.doc('p.MsoNormal'), self.doc('p.MsoPlainText')):
             entry = pq(elem)
             text = entry.text()
             text = re.sub(r'\s', ' ', text).strip()  # EDEL has many multi-line contents.

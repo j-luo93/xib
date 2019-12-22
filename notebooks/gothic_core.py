@@ -14,7 +14,7 @@ import pandas as pd
 from lxml.html import HTMLParser, fromstring
 from pyquery import PyQuery as pq
 
-from dev_misc.utils import Singleton, concat_lists
+from dev_misc.utils import Singleton, concat_lists, deprecated
 
 CONVERT_HWAIR = True
 KEEP_AFFIX = True
@@ -113,7 +113,11 @@ def count(iterables: Iterable[str], dictionaries: Iterable[Container[str]]):
 #           Functions for dealing with wikiling tables.          #
 # -------------------------------------------------------------- #
 
+# This is extracting tables from the scraped html files.
+# But since the texts in the columns are actually truncated, this approach is abandoned.
 
+
+@deprecated
 def get_table(filename: str) -> pd.DataFrame:
     """Get a table from one html file."""
     doc = pq(filename=filename, parser='html')
@@ -134,6 +138,7 @@ def get_table(filename: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+@deprecated
 def save_table(folder: str, out_path: str):
     """Get tables from all html files within one folder (e.g., `got`), and then save a concatenated wikiling table."""
     folder = Path(folder)
@@ -195,7 +200,7 @@ def _split_into_tokens(s: str, lang: str) -> List[str]:
         try:
             token = get_token(t, lang)
             ret.append(token)
-        except (AffixDiscarded, InvalidString, DoubtfulString):
+        except (AffixDiscarded, InvalidString, DoubtfulString, InvalidHyphens):
             pass
     return list(set(ret))
 
@@ -724,10 +729,22 @@ def get_match_regex(dataset: str) -> re.Pattern:
     return regex
 
 
-def remove_sep(prefix: str, s: str) -> str:
-    """Remove separators."""
+def clean_sep(prefix: str, s: str) -> str:
     if s is not None:
-        return re.compile(fr'{prefix}\.:\s*([^;]*);?\s*').match(s).group(1)
+        # Remove leading separator.
+        s = re.sub(fr'^{prefix}\.:', '', s)
+        # Remove trailing ;
+        s = re.sub(fr';$', '', s)
+        s = s.strip()
+    return s
+
+
+def merge_alternatives(item: Tuple[str, Optional[str]]) -> str:
+    """Merge the main lemma with potential alternatives."""
+    lemma, alt = item
+    if alt is not None:
+        lemma = lemma + ', ' + alt
+    return lemma
 
 
 def get_df_from_doc(doc: Iterable[str], dataset: str) -> pd.DataFrame:
@@ -743,9 +760,10 @@ def get_df_from_doc(doc: Iterable[str], dataset: str) -> pd.DataFrame:
         data.append(tuple(row))
 
     df = pd.DataFrame(data, columns=group2col[dataset])
+    df['Lemma'] = df[['Lemma', 'Alternative']].apply(merge_alternatives, axis=1)
 
     for sep in reserved_seps[dataset]:
-        df[sep] = df[sep].apply(lambda s: remove_sep(sep, s))
+        df[sep] = df[sep].apply(lambda s: clean_sep(sep, s))
 
     return df
 

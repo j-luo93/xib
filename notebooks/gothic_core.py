@@ -19,6 +19,7 @@ from dev_misc.utils import Singleton, concat_lists, deprecated
 CONVERT_HWAIR = True
 KEEP_AFFIX = True
 KEEP_DOUBTFUL = False
+DROP_SIEHE = True
 
 Lang = NewType('Lang', str)
 
@@ -156,18 +157,41 @@ def save_table(folder: str, out_path: str):
     table.to_csv(out_path, index=None, sep='\t')
 
 
+_vorwort_abbr2note = dict()
+_vorwort_note2abbr = dict()
+
+
+def load_vorwort(vorwort_path: str):
+    """Load vorwort so that subsequent procedures can proceed."""
+    with open(vorwort_path, 'r', encoding='utf8') as fin:
+        for line in fin:
+            abbr, note = line.strip().split(' = ')
+            note = f'#@!{note}!@#'
+            _vorwort_abbr2note[abbr] = note
+            _vorwort_note2abbr[note] = abbr
+
+
 _note_group_pattern = re.compile(re.escape('#@!') + r'((?!' + re.escape('#@!') + r').)+')
 _strip_pattern = re.compile(r'[\s,]*$')
-_lang2code = {
-    'germanisch': 'gem',
-    'indogermanisch': 'idg',
-    'griechisch': 'el',
-    'lateinisch': 'lat'
+_langs_to_keep = {
+    'germanisch', 'indogermanisch', 'griechisch', 'lateinisch',
+    'altenglisch', 'althochdeutsch', 'altalemannisch',
+    'altbayerisch', 'altfriesisch', 'altfränkisch', 'altisländisch',
+    'altmittelfränkisch', 'altnordisch', 'altniederdeutsch',
+    'altniederfränkisch', 'altostniederfränkisch',
+    'altrheinfränkisch', 'altsächsisch', 'altschwedisch',
+    'altsüdmittelfränkisch', 'altsüdrheinfränkisch',
+    'altrheinfränkisch', 'burgundisch', 'krimgotisch',
+    'langobardisch', 'mittelgriechisch', 'mittelhochdeutsch',
+    'mittellateinisch', 'mittelniederdeutsch', 'neuenglisch',
+    'neuhochdeutsch', 'neuisländisch', 'runisch',
+    'swebisch', 'vulgärlateinisch', 'westgotisch',
+    'westgermanisch',
 }
 _ref = ['siehe', 'vergleiche', 'siehe unter']
 _to_keep = {
     f'#@!{note}!@#'
-    for note in list(_lang2code.keys()) + _ref
+    for note in list(_langs_to_keep) + _ref
 }
 
 
@@ -210,27 +234,28 @@ def _remove_invalid(s: str) -> str:
 
     Note that once an invalid pattern is found, everything following it is removed as well.
     """
-    # Short and capitalized words (length <= 3) are most likely to be some typo for notes provided in vorwort.
-    s = re.sub(r'\b[A-Z]\w{0,2}\b.*', '', s)
-    # Digits are removed.
-    s = re.sub(r'\b\d+\b.*', '', s)
     # If there is a phrase (of more than one word) within any group (as a result of split by comma),
     # most likely it belongs to some note or reference.
     # For instance, "Lehmann B8", "Feist 462" and "Bedeutung dunkel".
     s = re.sub(r'\w[\w]*\s+[\w\s]+.*', '', s)
+    # Short and capitalized words (length <= 3) are most likely to be some typo for notes provided in vorwort.
+    s = re.sub(r'\b[A-Z]\w{0,2}\b.*', '', s)
+    # Digits are removed.
+    s = re.sub(r'\b\d+\b.*', '', s)
     return s
 
 
-_lang2code_pattern = {
+_langs_to_keep_pattern = {
     lang: re.escape('#@!') + lang + re.escape('!@#')
-    for lang in _lang2code
+    for lang in _langs_to_keep
 }
 
 
 def _get_lang_codes(s: str) -> List[str]:
     ret = list()
-    for lang, code in _lang2code.items():
-        if re.search(_lang2code_pattern[lang], s):
+    for lang in _langs_to_keep:
+        if re.search(_langs_to_keep_pattern[lang], s):
+            code = _vorwort_note2abbr['#@!' + lang + '!@#'].strip('.')
             ret.append(code)
     return ret
 
@@ -238,8 +263,8 @@ def _get_lang_codes(s: str) -> List[str]:
 note_pattern = re.compile(re.escape('#@!') + r'.+?' + re.escape('!@#'))
 
 
-def _get_E_tokens(item: Tuple[str, List[Lang]]) -> List[_BaseToken]:
-    """Based on the E column and language codes, extract actual tokens."""
+def _get_col_tokens(item: Tuple[str, List[Lang]]) -> List[_BaseToken]:
+    """Based on the column and language codes, extract actual tokens."""
     s, lang_codes = item
     lang = 'unk' if lang_codes else 'got'
     s = re.sub(note_pattern, '', s)
@@ -273,45 +298,42 @@ def _merge_morphemes(item: Tuple[str, List[_BaseToken]]) -> List[_BaseToken]:
         return [merged]
 
 
-def process_table(tsv_path: str, vorwort_path: str) -> pd.DataFrame:
-    """Main function for processing a saved wiking table."""
-    abbr_map = dict()
-    with open(vorwort_path, 'r', encoding='utf8') as fin:
-        for line in fin:
-            abbr, note = line.strip().split(' = ')
-            note = f'#@!{note}!@#'
-            abbr_map[abbr] = note
-    abbr_sub_func = _get_sub_func(abbr_map, full_word=True)
+def process_table(tsv_path: str, column: str) -> pd.DataFrame:
+    """Main function for processing a saved tsv table."""
+    if column not in ['W', 'E']:
+        raise ValueError(f'Column can only be W or E.')
+    abbr_sub_func = _get_sub_func(_vorwort_abbr2note, full_word=True)
 
     # Load.
     table = pd.read_csv(tsv_path, sep='\t')
-    table = table[['Lemma', 'E']].dropna().reset_index(drop=True)
+    table = table[['Lemma', column]].dropna().reset_index(drop=True)
 
     # Lemmas are expanded by split into tokens.
     table['Lemma'] = table['Lemma'].apply(lambda s: _split_into_tokens(s, 'got'))
     table = table.explode('Lemma').dropna()
 
-    # Expand the E column so that each row corresponds to only one segment (i.e., piece of etymological information separated by ;).
-    table['E'] = table['E'].apply(lambda x: x.split(';'))
-    table = table.explode('E')
+    # Expand the column so that each row corresponds to only one segment (i.e., piece of etymological information separated by ;).
+    table[column] = table[column].apply(lambda x: x.split(';'))
+    table = table.explode(column)
 
-    # Organize the E column so that each segment is further split into groups (separated by different notes).
-    table['E'] = table['E'].apply(abbr_sub_func)
-    table['E'] = table['E'].apply(_split_note_groups)
-    table = pd.pivot_table(table.reset_index(), index=['index', 'Lemma'], values='E', aggfunc=concat_lists)
-    table = table.reset_index(1).explode('E')
+    # Organize the column so that each segment is further split into groups (separated by different notes).
+    table[column] = table[column].apply(abbr_sub_func)
+    table[column] = table[column].apply(_split_note_groups)
+    table = pd.pivot_table(table.reset_index(), index=['index', 'Lemma'], values=column, aggfunc=concat_lists)
+    table = table.reset_index(1).explode(column)
     table = table.dropna()
 
     # Each piece of note is now cleaned, and language codes and actual tokens are extracted from each note.
-    table['E'] = table['E'].apply(_remove_invalid)
-    table['lang_codes'] = table['E'].apply(_get_lang_codes)
-    table['E_tokens'] = table[['E', 'lang_codes']].apply(_get_E_tokens, axis=1)
+    table[column] = table[column].apply(_remove_invalid)
+    table['lang_codes'] = table[column].apply(_get_lang_codes)
+    token_col = f'{column}_tokens'
+    table[token_col] = table[[column, 'lang_codes']].apply(_get_col_tokens, axis=1)
 
     # Remove rows with empty notes.
-    table = table[table['E_tokens'].apply(len) > 0]
+    table = table[table[token_col].apply(len) > 0]
 
     # Merge morphemes.
-    table['E_tokens'] = table[['Lemma', 'E_tokens']].apply(_merge_morphemes, axis=1)
+    table[token_col] = table[['Lemma', token_col]].apply(_merge_morphemes, axis=1)
 
     return table
 
@@ -479,6 +501,12 @@ class _BaseToken:
     def __lt__(self, other: _BaseToken):
         return str(self) < str(other)
 
+    def is_same_string(self, other: str):
+        """This is different from __eq__ because it is compared against a string."""
+        if not isinstance(other, str):
+            raise TypeError(f'Can only call this against strings.')
+        return str(self) == other
+
     def __hash__(self):
         return hash(str(self))
 
@@ -643,43 +671,64 @@ class TrackableCorpus:
 # -------------------------------------------------------------- #
 
 Word = NewType('Word', str)
+RelType = NewType('RelType', str)
 LangSeq = Sequence[Lang]
 WordSeq = Sequence[Word]
+RelTypeSeq = Sequence[RelType]
 
 
 class EtymologicalDictionary:
     """Represents a dictionary that stores etymological information.
 
     This follows a list of conventions:
-    1. The information is represented by a 4-tuple:
-            (lang1, word1, lang2, word2)
+    1. The information is represented by a 5-tuple:
+            (lang1, word1, lang2, word2, rel_type)
        This means that word1 in lang1 is "connected" with word2 in lang2 where a connection might
-       mean borrowing or cognation. Note that it is not directional.
-    2. These tuples are stored in a DataFrame instance. Column names are "lang1", "word1", "lang2" and "word2".
+       mean borrowing or cognation, indicated by the value of `rel_type`. Note that it is not directional.
+    2. These tuples are stored in a DataFrame instance. Column names are "lang1", "word1", "lang2", "word2" and "rel_type".
     """
 
-    def __init__(self, lang1_seq: LangSeq, word1_seq: WordSeq, lang2_seq: LangSeq, word2_seq: WordSeq, ):
+    def __init__(self, lang1_seq: LangSeq, word1_seq: WordSeq, lang2_seq: LangSeq, word2_seq: WordSeq, rel_type_seq: RelTypeSeq):
         self.data = pd.DataFrame({
             'lang1': lang1_seq,
             'word1': word1_seq,
             'lang2': lang2_seq,
-            'word2': word2_seq
+            'word2': word2_seq,
+            'rel_type': rel_type_seq
         })
 
     @classmethod
     def from_dataframe(cls, df: pd.DataFrame, lang1: str, lang2: str) -> EtymologicalDictionary:
         """Convert a normal data frame into an EtymologicalDictionoary instance.
 
-        The input `df` must have columns corresponding to the languages in question. So for a Gothic-German dictionary,
-        you need to have a `got` column and a `de` columns in `df`. Specifying `lang1` as `got` and `lang2` as `de` will
-        convert `df` accordingly to an EtymologicalDictionary instance.
+        The input `df` must have columns corresponding to the languages in question, and also a column `rel_type`.
         """
-        word1_seq = [get_token(w) for w in df[lang1]]
-        word2_seq = [get_token(w) for w in df[lang2]]
+        word1_seq = [get_token(w, lang1) for w in df[lang1]]
+        word2_seq = [get_token(w, lang2) for w in df[lang2]]
         lang1_seq = [lang1] * len(word1_seq)
         lang2_seq = [lang2] * len(word2_seq)
-        ety_dict = EtymologicalDictionary(lang1_seq, word1_seq, lang2_seq, word2_seq)
+        rel_type_seq = df['rel_type']
+        ety_dict = EtymologicalDictionary(lang1_seq, word1_seq, lang2_seq, word2_seq, rel_type_seq)
         return ety_dict
+
+
+def get_ety_dict(table, column: str):
+    """Get an EtymologicalDictionary instance."""
+    token_col = f'{column}_tokens'
+    df = table.reset_index(drop=True).explode(token_col)
+    df = df.reset_index(drop=True).explode('lang_codes')[['Lemma', 'lang_codes', token_col]]
+
+    if DROP_SIEHE:
+        df = df.dropna()
+
+    lang1_seq = df['Lemma']
+    word1_seq = ['got'] * len(lang1_seq)
+    lang2_seq = df[token_col]
+    word2_seq = df['lang_codes']
+    rel_type = ['cog'] * len(lang1_seq)
+
+    ety_dict = EtymologicalDictionary(word1_seq, lang1_seq, word2_seq, lang2_seq, rel_type)
+    return ety_dict
 
 
 # -------------------------------------------------------------- #

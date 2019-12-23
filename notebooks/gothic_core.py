@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import tempfile
 from collections import defaultdict
+from dataclasses import dataclass, field
 from enum import Enum, auto, unique
 from itertools import chain
 from pathlib import Path
 from typing import (Container, Dict, Iterable, List, NewType, Optional,
-                    Sequence, Tuple, TypeVar, Union)
+                    Sequence, Set, Tuple, TypeVar, Union)
 
 import pandas as pd
 from lxml.html import HTMLParser, fromstring
@@ -95,20 +97,21 @@ def get_vocab_and_words(path: str, lang: Lang):
                 try:
                     token = get_token(word, lang)
                     tokens.append(token)
-                except (InvalidString, AffixDiscarded):
+                except (InvalidString, AffixDiscarded, DoubtfulString):
                     pass
             vocab.update(tokens)
             all_words.extend(tokens)
     return vocab, all_words
 
 
-def count(iterables: Iterable[str], dictionaries: Iterable[Container[str]]):
+@deprecated
+def count(iterables: Iterable[T], dictionaries: Iterable[Container[T]]):
     """Count how many words are covered by any of the provided dictionaries."""
     for iterable in iterables:
         total = len(iterable)
         covered = sum([any(w in dictionary for dictionary in dictionaries) for w in iterable])
-        ratio = total / covered
-        print(f'{total} / {covered} = {ratio:.3f}')
+        ratio = covered / total
+        print(f'{covered} / {total} = {ratio:.3f}')
 
 # -------------------------------------------------------------- #
 #           Functions for dealing with wikiling tables.          #
@@ -189,9 +192,13 @@ _langs_to_keep = {
     'westgermanisch',
 }
 _ref = ['siehe', 'vergleiche', 'siehe unter']
-_to_keep = {
+_lang_to_keep = {
     f'#@!{note}!@#'
-    for note in list(_langs_to_keep) + _ref
+    for note in _langs_to_keep
+}
+_ref_notes = {
+    f'#@!{note}!@#'
+    for note in _ref
 }
 
 
@@ -201,24 +208,36 @@ def _strip(s: str) -> str:
 
 def _split_note_groups(s: str) -> List[str]:
     """Split each segment into notes."""
-    matches = list(re.finditer(_note_group_pattern, s))
+    notes = list()
+    for segment in s.split(';'):
+        segment = segment.strip()
+        matches = list(re.finditer(_note_group_pattern, segment))
+        last_group = list()
+        for match in matches:
+            group = _strip(match.group())
+            last_group.append(group)
+            # This means this note group has something captured in addition to the note itself.
+            if not group.endswith('!@#'):
+                notes.append(' '.join(last_group))
+                last_group = list()
+        if last_group:
+            notes.append(' '.join(last_group))
     ret = list()
-    last_group = list()
-    for match in matches:
-        group = _strip(match.group())
-        last_group.append(group)
-        # This means this note group has something captured in addition to the note itself.
-        if not group.endswith('!@#'):
-            ret.append(' '.join(last_group))
-            last_group = list()
-    if last_group:
-        ret.append(' '.join(last_group))
-    ret = list(filter(lambda x: any(note in x for note in _to_keep), ret))
+    for note in notes:
+        # NOTE(j_luo) Only take the first k notes such that k + 1 is referring to something else.
+        lang_relevant = any(x in note for x in _lang_to_keep)
+        has_ref = any(x in note for x in _ref_notes)
+        if (lang_relevant and (not DROP_SIEHE or not has_ref)) or (not lang_relevant and has_ref):
+            ret.append(note)
+        else:
+            break
+    # notes = list(filter(lambda x: any(note in x for note in _to_keep), notes))
     return ret
 
 
-def _split_into_tokens(s: str, lang: str) -> List[str]:
+def _split_into_tokens(item: Tuple[str, Lang]) -> List[T]:
     """Split the lemma column into tokens."""
+    s, lang = item
     ret = list()
     for t in s.split(','):
         try:
@@ -230,7 +249,7 @@ def _split_into_tokens(s: str, lang: str) -> List[str]:
 
 
 def _remove_invalid(s: str) -> str:
-    """Remove invalid patterns found in the E columns.
+    """Remove invalid patterns found in the E/W columns.
 
     Note that once an invalid pattern is found, everything following it is removed as well.
     """
@@ -263,10 +282,14 @@ def _get_lang_codes(s: str) -> List[str]:
 note_pattern = re.compile(re.escape('#@!') + r'.+?' + re.escape('!@#'))
 
 
-def _get_col_tokens(item: Tuple[str, List[Lang]]) -> List[_BaseToken]:
+def _get_col_tokens(item: Tuple[str, Lang, List[Lang]]) -> List[T]:
     """Based on the column and language codes, extract actual tokens."""
-    s, lang_codes = item
-    lang = 'unk' if lang_codes else 'got'
+    s, default_lang, lang_codes = item
+    if len(lang_codes) > 1:
+        logging.warning('More than one language is extracted from a single note. Discarding this row.')
+        return list()
+
+    lang = lang_codes[0] if lang_codes else default_lang
     s = re.sub(note_pattern, '', s)
     ret = list()
     try:
@@ -280,7 +303,7 @@ def _get_col_tokens(item: Tuple[str, List[Lang]]) -> List[_BaseToken]:
     return ret
 
 
-def _merge_morphemes(item: Tuple[str, List[_BaseToken]]) -> List[_BaseToken]:
+def _merge_morphemes(item: Tuple[str, List[T]]) -> List[T]:
     """Merge potential morphemes together.
 
     Note that sometimes the morphemes are just variants, so a length-based heuristic is used to make sure only
@@ -306,28 +329,29 @@ def process_table(tsv_path: str, column: str) -> pd.DataFrame:
 
     # Load.
     table = pd.read_csv(tsv_path, sep='\t')
-    table = table[['Lemma', column]].dropna().reset_index(drop=True)
+    table = table[['Lemma', 'Sprachen', column]].dropna().reset_index(drop=True)
 
     # Lemmas are expanded by split into tokens.
-    table['Lemma'] = table['Lemma'].apply(lambda s: _split_into_tokens(s, 'got'))
+    table['Lemma'] = table[['Lemma', 'Sprachen']].apply(_split_into_tokens, axis=1)
     table = table.explode('Lemma').dropna()
 
-    # Expand the column so that each row corresponds to only one segment (i.e., piece of etymological information separated by ;).
-    table[column] = table[column].apply(lambda x: x.split(';'))
-    table = table.explode(column)
+    # # Expand the column so that each row corresponds to only one segment (i.e., piece of etymological information separated by ;).
+    # table[column] = table[column].apply(lambda x: x.split(';'))
+    # table = table.explode(column)
 
-    # Organize the column so that each segment is further split into groups (separated by different notes).
+    # Organize the column so that each segment is split into groups (separated by different notes).
     table[column] = table[column].apply(abbr_sub_func)
     table[column] = table[column].apply(_split_note_groups)
-    table = pd.pivot_table(table.reset_index(), index=['index', 'Lemma'], values=column, aggfunc=concat_lists)
-    table = table.reset_index(1).explode(column)
+    table = pd.pivot_table(table.reset_index(),
+                           index=['index', 'Lemma', 'Sprachen'], values=column, aggfunc=concat_lists)
+    table = table.reset_index([1, 2]).explode(column)
     table = table.dropna()
 
     # Each piece of note is now cleaned, and language codes and actual tokens are extracted from each note.
     table[column] = table[column].apply(_remove_invalid)
     table['lang_codes'] = table[column].apply(_get_lang_codes)
     token_col = f'{column}_tokens'
-    table[token_col] = table[[column, 'lang_codes']].apply(_get_col_tokens, axis=1)
+    table[token_col] = table[[column, 'Sprachen', 'lang_codes']].apply(_get_col_tokens, axis=1)
 
     # Remove rows with empty notes.
     table = table[table[token_col].apply(len) > 0]
@@ -479,7 +503,8 @@ class _BaseToken:
     More at https://github.com/pandas-dev/pandas/issues/22333.
     """
 
-    def __init__(self, raw_morphemes: List[str], canonical_morphemes: List[str], morpheme_types: List[MorphemeType]):
+    def __init__(self, lang: Lang, raw_morphemes: List[str], canonical_morphemes: List[str], morpheme_types: List[MorphemeType]):
+        self.lang = lang
         self.raw_morphemes = raw_morphemes
         self.canonical_morphemes = canonical_morphemes
         self.morpheme_types = morpheme_types
@@ -491,15 +516,19 @@ class _BaseToken:
         return len(str(self))
 
     def __repr__(self):
-        return f'Token({self})'
+        return f'Token({self}, {self.lang})'
+
+    @property
+    def signature(self) -> Tuple[str, Lang]:
+        return (str(self), self.lang)
 
     def __eq__(self, other: _BaseToken):
         if not isinstance(other, _BaseToken):
             return False
-        return str(self) == str(other)
+        return self.signature == other.signature
 
     def __lt__(self, other: _BaseToken):
-        return str(self) < str(other)
+        return self.signature < other.signature
 
     def is_same_string(self, other: str):
         """This is different from __eq__ because it is compared against a string."""
@@ -508,7 +537,7 @@ class _BaseToken:
         return str(self) == other
 
     def __hash__(self):
-        return hash(str(self))
+        return hash(self.signature)
 
     def __add__(self, other: _BaseToken) -> _BaseToken:
         token_factory = _TokenFactory()
@@ -587,10 +616,13 @@ class _TokenFactory(Singleton):
     def add_tokens(self, token1: T, token2: T) -> T:
         if not isinstance(token1, _BaseToken) or not isinstance(token2, _BaseToken):
             raise TypeError(f'Must add instances of _BaseToken (or its subclass).')
+        if token1.lang != token2.lang:
+            raise RuntimeError(f'Cannot add two tokens of different languages.')
+
         raw_morphemes = token1.raw_morphemes + token2.raw_morphemes
         canonical_morphemes = token1.canonical_morphemes + token2.canonical_morphemes
         morpheme_types = token1.morpheme_types + token2.morpheme_types
-        return self.token_cls(raw_morphemes, canonical_morphemes, morpheme_types)
+        return self.token_cls(token1.lang, raw_morphemes, canonical_morphemes, morpheme_types)
 
     @property
     def token_cls(self):
@@ -598,8 +630,9 @@ class _TokenFactory(Singleton):
 
     def get_token(self, raw_string: str, lang: Lang) -> T:
         cls = type(self)
-        if raw_string in cls._tokens:
-            token = cls._tokens[raw_string]
+        key = (raw_string, lang)
+        if key in cls._tokens:
+            token = cls._tokens[key]
         else:
             standard_string = _standardize(raw_string)
             # Deal with hyphens.
@@ -620,12 +653,18 @@ class _TokenFactory(Singleton):
                 morpheme_types = [MorphemeType.UNKNOWN] * len(raw_morphemes)
             assert len(raw_morphemes) == len(canonical_morphemes) == len(morpheme_types)
 
-            token = self.token_cls(raw_morphemes, canonical_morphemes, morpheme_types)
+            token = self.token_cls(lang, raw_morphemes, canonical_morphemes, morpheme_types)
             self._tokens[raw_string] = token
         return token
 
+    def clear_cache(self):
+        """Remove all cached tokens."""
+        cls = type(self)
+        cls._tokens.clear()
+
 
 get_token = _TokenFactory().get_token
+clear_cache = _TokenFactory().clear_cache
 
 # -------------------------------------------------------------- #
 #           Helpful classes for inspecting the corpus.           #
@@ -712,17 +751,131 @@ class EtymologicalDictionary:
         return ety_dict
 
 
+class _CognateSet:
+    """A set of cognates."""
+
+    def __init__(self):
+        self.tokens: Set[T] = set()
+        self._lang2tokens: Dict[Lang: Set[T]] = defaultdict(set)
+
+    def __repr__(self):
+        return f'CognateSet: size {len(self.tokens)}'
+
+    def add(self, token: T):
+        self.tokens.add(token)
+        self._lang2tokens[token.lang].add(token)
+
+    def __len__(self):
+        return len(self.tokens)
+
+    def __iter__(self):
+        yield from self.tokens
+
+    def __contains__(self, token: T):
+        return token in self.tokens
+
+    def has_lang(self, lang: Lang) -> bool:
+        """Return whether any token in `lang` is present in this cognate set."""
+        return lang in self._lang2tokens
+
+
+@dataclass
+class Coverage:
+    num_covered: int
+    total: int
+    covered: List[T] = field(repr=False)
+    not_covered: List[T] = field(repr=False)
+    ratio: float = field(init=False)
+
+    def __post_init__(self):
+        self.ratio = float(f'{(self.num_covered / self.total):.3f}')
+
+
+class EtymologicalGraph:
+    """A graph representing the etymological relationship."""
+
+    def __init__(self):
+        self._tokens: Set[T] = set()
+        self._edges: Dict[T, Set[T]] = defaultdict(set)
+        self._finalized = False
+        self._token2cog_set: Dict[T, _CognateSet] = dict()
+
+    def add_cognate_pair(self, token1: T, token2: T):
+        if self._finalized:
+            raise RuntimeError(f'The graph has been finalized.')
+        self._tokens.add(token1)
+        self._tokens.add(token2)
+        self._edges[token1].add(token2)
+        self._edges[token2].add(token1)
+
+    def add_etymological_dictionary(self, ety_dict: EtymologicalDictionary):
+        for i, row in ety_dict.data.iterrows():
+            self.add_cognate_pair(row['word1'], row['word2'])
+
+    def _check_exists(self, token: T):
+        if token not in self._edges:
+            raise ValueError(f'{token!r} not found in the graph.')
+
+    def __getitem__(self, token: T) -> Set[T]:
+        self._check_exists(token)
+        return self._edges[token]
+
+    def get_cognate_set(self, token: T) -> _CognateSet:
+        cog_set = self._token2cog_set.get(token, self._get_cognate_set_(token))
+        if self._finalized:
+            for cog in cog_set:
+                self._token2cog_set[cog] = cog_set
+        return cog_set
+
+    def _get_cognate_set_(self, token: T) -> _CognateSet:
+        self._check_exists(token)
+        cog_set = _CognateSet()
+        queue = [token]
+        while queue:
+            to_expand = queue.pop(0)
+            cog_set.add(to_expand)
+            for neighbor in self[to_expand]:
+                if not neighbor in cog_set:
+                    queue.append(neighbor)
+        return cog_set
+
+    def has_cognate_in(self, token: T, lang: Lang) -> bool:
+        """Return whether `token` has a cognate in `lang`."""
+        cog_set = self.get_cognate_set(token)
+        return cog_set.has_lang(lang)
+
+    def compute_coverage(self, tokens: Iterable[T], lang: Lang) -> Coverage:
+        total = len(tokens)
+        covered = list()
+        not_covered = list()
+        for token in tokens:
+            _is_covered = token in self._tokens and self.has_cognate_in(token, lang)
+            if _is_covered:
+                covered.append(token)
+            else:
+                not_covered.append(token)
+        num_covered = len(covered)
+        return Coverage(num_covered, total, covered, not_covered)
+
+    def finalize(self):
+        self._finalized = True
+
+    def definalize(self):
+        self._finalized = False
+        self._token2cog_set = dict()
+
+
 def get_ety_dict(table, column: str):
     """Get an EtymologicalDictionary instance."""
     token_col = f'{column}_tokens'
     df = table.reset_index(drop=True).explode(token_col)
-    df = df.reset_index(drop=True).explode('lang_codes')[['Lemma', 'lang_codes', token_col]]
+    df = df.reset_index(drop=True).explode('lang_codes')[['Lemma', 'Sprachen', 'lang_codes', token_col]]
 
-    if DROP_SIEHE:
-        df = df.dropna()
+    # if DROP_SIEHE:
+    #     df = df.dropna()
 
     lang1_seq = df['Lemma']
-    word1_seq = ['got'] * len(lang1_seq)
+    word1_seq = df['Sprachen']
     lang2_seq = df[token_col]
     word2_seq = df['lang_codes']
     rel_type = ['cog'] * len(lang1_seq)
@@ -731,9 +884,18 @@ def get_ety_dict(table, column: str):
     return ety_dict
 
 
+def get_ety_dict_from_tsv(tsv_path: str, column: str):
+    table = process_table(tsv_path, column)
+    ety_dict = get_ety_dict(table, column)
+    print(ety_dict.data['lang1'].value_counts(), column)
+    print('-' * 30)
+    print(ety_dict.data['lang2'].value_counts(), column)
+    return ety_dict
+
 # -------------------------------------------------------------- #
 #                  Convert html files into tsv.                  #
 # -------------------------------------------------------------- #
+
 
 reserved_seps = dict()
 group2col = dict()
@@ -763,7 +925,7 @@ def get_regex(dataset: str, sep: Optional[str] = None) -> str:
 
 def get_match_regex(dataset: str) -> re.Pattern:
     lemma_p = r'^([^,]+),?\s*'
-    alternative_p = r'((?:\b[^\.]+\b)(?!\.),?\s*)*'
+    alternative_p = r'((?:\W?[^\.]+\b)(?!\.),?\s*)*'  # r'((?:\b[^\.]+\b)(?!\.),?\s*)*'
     lang_p = r'([^\.]+\.,?\s*)'
     wortarten_p = r'([^:]+:\s*)?'
     bedeutung_p = get_regex(dataset)
@@ -779,6 +941,7 @@ def get_match_regex(dataset: str) -> re.Pattern:
 
 
 def clean_sep(prefix: str, s: str) -> str:
+    """Clean notes/separators."""
     if s is not None:
         # Remove leading separator.
         s = re.sub(fr'^{prefix}\.:', '', s)
@@ -786,6 +949,11 @@ def clean_sep(prefix: str, s: str) -> str:
         s = re.sub(fr';$', '', s)
         s = s.strip()
     return s
+
+
+def clean_lang(s: str) -> str:
+    """Clean the language/Sprachen column."""
+    return re.sub(r'[\s,\.]', '', s)
 
 
 def merge_alternatives(item: Tuple[str, Optional[str]]) -> str:
@@ -811,6 +979,7 @@ def get_df_from_doc(doc: Iterable[str], dataset: str) -> pd.DataFrame:
     df = pd.DataFrame(data, columns=group2col[dataset])
     df['Lemma'] = df[['Lemma', 'Alternative']].apply(merge_alternatives, axis=1)
 
+    df['Sprachen'] = df['Sprachen'].apply(clean_lang)
     for sep in reserved_seps[dataset]:
         df[sep] = df[sep].apply(lambda s: clean_sep(sep, s))
 

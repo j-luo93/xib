@@ -21,7 +21,6 @@ from dev_misc.utils import Singleton, concat_lists, deprecated
 CONVERT_HWAIR = True
 KEEP_AFFIX = True
 KEEP_DOUBTFUL = False
-DROP_SIEHE = True
 
 Lang = NewType('Lang', str)
 
@@ -189,9 +188,10 @@ _langs_to_keep = {
     'mittellateinisch', 'mittelniederdeutsch', 'neuenglisch',
     'neuhochdeutsch', 'neuisländisch', 'runisch',
     'swebisch', 'vulgärlateinisch', 'westgotisch',
-    'westgermanisch',
+    'westgermanisch', 'gotisch'
 }
-_ref = ['siehe', 'vergleiche', 'siehe unter']
+_ref = ['siehe', 'siehe unter']
+_compare = ['vergleiche']
 _lang_to_keep = {
     f'#@!{note}!@#'
     for note in _langs_to_keep
@@ -199,6 +199,10 @@ _lang_to_keep = {
 _ref_notes = {
     f'#@!{note}!@#'
     for note in _ref
+}
+_compare_notes = {
+    f'#@!{note}!@#'
+    for note in _compare
 }
 
 
@@ -224,14 +228,14 @@ def _split_note_groups(s: str) -> List[str]:
             notes.append(' '.join(last_group))
     ret = list()
     for note in notes:
-        # NOTE(j_luo) Only take the first k notes such that k + 1 is referring to something else.
         lang_relevant = any(x in note for x in _lang_to_keep)
         has_ref = any(x in note for x in _ref_notes)
-        if (lang_relevant and (not DROP_SIEHE or not has_ref)) or (not lang_relevant and has_ref):
+        has_compare = any(x in note for x in _compare_notes)
+        if not has_compare and (lang_relevant or has_ref):
             ret.append(note)
-        else:
+        # Whenever "vergleiche" starts, break the loop.
+        if has_compare:
             break
-    # notes = list(filter(lambda x: any(note in x for note in _to_keep), notes))
     return ret
 
 
@@ -871,9 +875,6 @@ def get_ety_dict(table, column: str):
     df = table.reset_index(drop=True).explode(token_col)
     df = df.reset_index(drop=True).explode('lang_codes')[['Lemma', 'Sprachen', 'lang_codes', token_col]]
 
-    # if DROP_SIEHE:
-    #     df = df.dropna()
-
     lang1_seq = df['Lemma']
     word1_seq = df['Sprachen']
     lang2_seq = df[token_col]
@@ -890,6 +891,7 @@ def get_ety_dict_from_tsv(tsv_path: str, column: str):
     print(ety_dict.data['lang1'].value_counts(), column)
     print('-' * 30)
     print(ety_dict.data['lang2'].value_counts(), column)
+    print('-' * 30)
     return ety_dict
 
 # -------------------------------------------------------------- #
@@ -943,8 +945,8 @@ def get_match_regex(dataset: str) -> re.Pattern:
 def clean_sep(prefix: str, s: str) -> str:
     """Clean notes/separators."""
     if s is not None:
-        # Remove leading separator.
-        s = re.sub(fr'^{prefix}\.:', '', s)
+        # Remove separators. Note that W.: might occur in the middle of the segment.
+        s = re.sub(fr'{prefix}\.:', '', s)
         # Remove trailing ;
         s = re.sub(fr';$', '', s)
         s = s.strip()

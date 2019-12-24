@@ -7,6 +7,7 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, auto, unique
+from functools import lru_cache
 from itertools import chain
 from pathlib import Path
 from typing import (Container, Dict, Iterable, List, NewType, Optional,
@@ -21,6 +22,7 @@ from dev_misc.utils import Singleton, concat_lists, deprecated
 CONVERT_HWAIR = True
 KEEP_AFFIX = True
 KEEP_DOUBTFUL = False
+IDG_PROPAGATE = False
 
 Lang = NewType('Lang', str)
 
@@ -257,14 +259,18 @@ def _remove_invalid(s: str) -> str:
 
     Note that once an invalid pattern is found, everything following it is removed as well.
     """
-    # If there is a phrase (of more than one word) within any group (as a result of split by comma),
+    # If there is a capitalized phrase (of more than one word) within any group (as a result of split by comma),
     # most likely it belongs to some note or reference.
     # For instance, "Lehmann B8", "Feist 462" and "Bedeutung dunkel".
-    s = re.sub(r'\w[\w]*\s+[\w\s]+.*', '', s)
-    # Short and capitalized words (length <= 3) are most likely to be some typo for notes provided in vorwort.
-    s = re.sub(r'\b[A-Z]\w{0,2}\b.*', '', s)
-    # Digits are removed.
-    s = re.sub(r'\b\d+\b.*', '', s)
+    s = re.sub(r'[A-Z][\w]*\s+[\w\s]+.*', '', s)
+    # Capitalized words are most likely to be some typo for notes provided in vorwort.
+    s = re.sub(r'\b[A-Z]\w*\b.*', '', s)
+    # # Short and capitalized words (length <= 3) are most likely to be some typo for notes provided in vorwort.
+    # s = re.sub(r'\b[A-Z]\w{0,2}\b.*', '', s)
+    # # Short and capitalized words (length <= 3) are most likely to be some typo for notes provided in vorwort.
+    # s = re.sub(r'\b[A-Z]\w{0,2}\b.*', '', s)
+    # # Digits are removed.
+    # s = re.sub(r'\b\d+\b.*', '', s)
     return s
 
 
@@ -296,30 +302,35 @@ def _get_col_tokens(item: Tuple[str, Lang, List[Lang]]) -> List[T]:
     lang = lang_codes[0] if lang_codes else default_lang
     s = re.sub(note_pattern, '', s)
     ret = list()
-    try:
-        for t in s.split(','):
+    for t in s.split(','):
+        try:
             t = t.strip()
             if t:
                 token = get_token(t, lang)
                 ret.append(token)
-    except (InvalidString, InvalidHyphens, DoubtfulString):
-        ret = list()
+        except (InvalidString, InvalidHyphens, DoubtfulString):
+            pass
     return ret
 
 
-def _merge_morphemes(item: Tuple[str, List[T]]) -> List[T]:
+def _merge_morphemes(item: Tuple[T, List[T]]) -> List[T]:
     """Merge potential morphemes together.
 
-    Note that sometimes the morphemes are just variants, so a length-based heuristic is used to make sure only
-    morphemes of proper lengths are merged.
+    Note that sometimes the morphemes are just variants, so two heuristics are used to make sure only
+    morphemes of proper lengths are merged:
+    1. Length makes sense
+    2. The starting characters make sense.
     """
+    # FIXME(j_luo) Only merge when it's not  ref.
     lemma, morphemes = item
     merged = sum(morphemes, None)
+    merged.sense_idx = lemma.sense_idx
 
     def diff(x, y):
         return abs(len(x) - len(y))
 
-    if diff(lemma, merged) > min(diff(lemma, morpheme) for morpheme in morphemes):
+    start_with_same_char = all(morphemes[0][0] == morpheme[0] for morpheme in morphemes)
+    if start_with_same_char or diff(lemma, merged) > min(diff(lemma, morpheme) for morpheme in morphemes):
         return morphemes
     else:
         return [merged]
@@ -334,10 +345,6 @@ def process_table(tsv_path: str, column: str) -> pd.DataFrame:
     # Load.
     table = pd.read_csv(tsv_path, sep='\t')
     table = table[['Lemma', 'Sprachen', column]].dropna().reset_index(drop=True)
-
-    # Lemmas are expanded by split into tokens.
-    table['Lemma'] = table[['Lemma', 'Sprachen']].apply(_split_into_tokens, axis=1)
-    table = table.explode('Lemma').dropna()
 
     # # Expand the column so that each row corresponds to only one segment (i.e., piece of etymological information separated by ;).
     # table[column] = table[column].apply(lambda x: x.split(';'))
@@ -359,6 +366,11 @@ def process_table(tsv_path: str, column: str) -> pd.DataFrame:
 
     # Remove rows with empty notes.
     table = table[table[token_col].apply(len) > 0]
+    table = table.reset_index(drop=True)
+
+    # Lemmas are expanded by split into tokens.
+    table['Lemma'] = table[['Lemma', 'Sprachen']].apply(_split_into_tokens, axis=1)
+    table = table.explode('Lemma').dropna()
 
     # Merge morphemes.
     table[token_col] = table[['Lemma', token_col]].apply(_merge_morphemes, axis=1)
@@ -437,18 +449,23 @@ class DoubtfulString(Exception):
     """Raise this error if "?" is in the string and `KEEP_DOUBTFUL` is False."""
 
 
-def _standardize(s: str) -> str:
+def _standardize(s: str, lang: Lang) -> str:
     """Standardize the string in a conservative fashion. This is different from canonicalization."""
     if not KEEP_DOUBTFUL and '?' in s:
         raise DoubtfulString(f'Doubtful string {s!r}.')
+    try:
+        sense_idx = re.search(r'\s\((\d+)\)', s).group(1)
+    except AttributeError:
+        sense_idx = None
+
     # Replace digits/#/*/parentheses/brackets/question marks/equal signs with whitespace.
     s = re.sub(r'[?*\d#()\[\]=]', '', s)
     s = re.sub(r'\s', ' ', s)
-    # Convert hw/hv to ƕ if specified.
-    if CONVERT_HWAIR:
+    # Convert hw/hv to ƕ if specified and the language is got.
+    if lang == 'got' and CONVERT_HWAIR:
         s = _standardize_sub(s)
     s = s.strip()
-    return s
+    return s, sense_idx
 
 
 _deaccent_map = {
@@ -507,24 +524,34 @@ class _BaseToken:
     More at https://github.com/pandas-dev/pandas/issues/22333.
     """
 
-    def __init__(self, lang: Lang, raw_morphemes: List[str], canonical_morphemes: List[str], morpheme_types: List[MorphemeType]):
+    def __init__(self,
+                 lang: Lang,
+                 raw_morphemes: List[str],
+                 canonical_morphemes: List[str],
+                 morpheme_types: List[MorphemeType],
+                 sense_idx: Optional[int] = None):
         self.lang = lang
         self.raw_morphemes = raw_morphemes
         self.canonical_morphemes = canonical_morphemes
         self.morpheme_types = morpheme_types
+        self.canonical_string = ''.join(self.canonical_morphemes)
+        self.sense_idx = sense_idx
 
     def __str__(self):
-        return ''.join(self.canonical_morphemes)
+        return self.canonical_string
 
     def __len__(self):
         return len(str(self))
 
     def __repr__(self):
-        return f'Token({self}, {self.lang})'
+        if self.sense_idx is None:
+            return f'Token({self}, {self.lang})'
+        else:
+            return f'Token({self}@{self.sense_idx}, {self.lang})'
 
     @property
-    def signature(self) -> Tuple[str, Lang]:
-        return (str(self), self.lang)
+    def signature(self) -> Tuple[str, int, Lang]:
+        return (str(self), self.sense_idx, self.lang)
 
     def __eq__(self, other: _BaseToken):
         if not isinstance(other, _BaseToken):
@@ -533,6 +560,9 @@ class _BaseToken:
 
     def __lt__(self, other: _BaseToken):
         return self.signature < other.signature
+
+    def __getitem__(self, idx: int) -> str:
+        return str(self)[idx]
 
     def is_same_string(self, other: str):
         """This is different from __eq__ because it is compared against a string."""
@@ -638,7 +668,7 @@ class _TokenFactory(Singleton):
         if key in cls._tokens:
             token = cls._tokens[key]
         else:
-            standard_string = _standardize(raw_string)
+            standard_string, sense_idx = _standardize(raw_string, lang)
             # Deal with hyphens.
             token_type = _get_token_type(standard_string)
             if token_type == TokenType.INVALID:
@@ -657,7 +687,7 @@ class _TokenFactory(Singleton):
                 morpheme_types = [MorphemeType.UNKNOWN] * len(raw_morphemes)
             assert len(raw_morphemes) == len(canonical_morphemes) == len(morpheme_types)
 
-            token = self.token_cls(lang, raw_morphemes, canonical_morphemes, morpheme_types)
+            token = self.token_cls(lang, raw_morphemes, canonical_morphemes, morpheme_types, sense_idx=sense_idx)
             self._tokens[raw_string] = token
         return token
 
@@ -731,7 +761,8 @@ class EtymologicalDictionary:
     2. These tuples are stored in a DataFrame instance. Column names are "lang1", "word1", "lang2", "word2" and "rel_type".
     """
 
-    def __init__(self, lang1_seq: LangSeq, word1_seq: WordSeq, lang2_seq: LangSeq, word2_seq: WordSeq, rel_type_seq: RelTypeSeq):
+    def __init__(self, name: str, lang1_seq: LangSeq, word1_seq: WordSeq, lang2_seq: LangSeq, word2_seq: WordSeq, rel_type_seq: RelTypeSeq):
+        self.name = name
         self.data = pd.DataFrame({
             'lang1': lang1_seq,
             'word1': word1_seq,
@@ -739,9 +770,11 @@ class EtymologicalDictionary:
             'word2': word2_seq,
             'rel_type': rel_type_seq
         })
+        # Drop duplicates.
+        self.data = self.data.drop_duplicates().reset_index(drop=True)
 
     @classmethod
-    def from_dataframe(cls, df: pd.DataFrame, lang1: str, lang2: str) -> EtymologicalDictionary:
+    def from_dataframe(cls, df: pd.DataFrame, name: str, lang1: str, lang2: str) -> EtymologicalDictionary:
         """Convert a normal data frame into an EtymologicalDictionoary instance.
 
         The input `df` must have columns corresponding to the languages in question, and also a column `rel_type`.
@@ -751,8 +784,14 @@ class EtymologicalDictionary:
         lang1_seq = [lang1] * len(word1_seq)
         lang2_seq = [lang2] * len(word2_seq)
         rel_type_seq = df['rel_type']
-        ety_dict = EtymologicalDictionary(lang1_seq, word1_seq, lang2_seq, word2_seq, rel_type_seq)
+        ety_dict = EtymologicalDictionary(name, lang1_seq, word1_seq, lang2_seq, word2_seq, rel_type_seq)
         return ety_dict
+
+    def count_langs(self):
+        print(self.data['lang1'].value_counts())
+        print('-' * 30)
+        print(self.data['lang2'].value_counts())
+        print('-' * 30)
 
 
 class _CognateSet:
@@ -795,52 +834,71 @@ class Coverage:
         self.ratio = float(f'{(self.num_covered / self.total):.3f}')
 
 
+_Edges = Dict[T, Set[str]]
+
+
+class TokenNotFound(Exception):
+    """Raise this error if a token is not found in the graph."""
+
+
 class EtymologicalGraph:
     """A graph representing the etymological relationship."""
 
     def __init__(self):
         self._tokens: Set[T] = set()
-        self._edges: Dict[T, Set[T]] = defaultdict(set)
+        self._edges: Dict[T, _Edges] = defaultdict(lambda: defaultdict(set))
         self._finalized = False
         self._token2cog_set: Dict[T, _CognateSet] = dict()
 
-    def add_cognate_pair(self, token1: T, token2: T):
+    def add_cognate_pair(self, token1: T, token2: T, source: str):
         if self._finalized:
             raise RuntimeError(f'The graph has been finalized.')
         self._tokens.add(token1)
         self._tokens.add(token2)
-        self._edges[token1].add(token2)
-        self._edges[token2].add(token1)
+        self._edges[token1][token2].add(source)
+        self._edges[token2][token1].add(source)
 
     def add_etymological_dictionary(self, ety_dict: EtymologicalDictionary):
         for i, row in ety_dict.data.iterrows():
-            self.add_cognate_pair(row['word1'], row['word2'])
+            self.add_cognate_pair(row['word1'], row['word2'], ety_dict.name)
 
     def _check_exists(self, token: T):
         if token not in self._edges:
-            raise ValueError(f'{token!r} not found in the graph.')
+            raise TokenNotFound(f'{token!r} not found in the graph.')
 
-    def __getitem__(self, token: T) -> Set[T]:
+    def __getitem__(self, token: T) -> _Edges:
         self._check_exists(token)
         return self._edges[token]
 
-    def get_cognate_set(self, token: T) -> _CognateSet:
-        cog_set = self._token2cog_set.get(token, self._get_cognate_set_(token))
-        if self._finalized:
-            for cog in cog_set:
-                self._token2cog_set[cog] = cog_set
+    def get_cognate_set(self, token: T, order: Optional[int] = None) -> _CognateSet:
+        """If `order` is specified, only expand the cognate set by this number, and no caching will be used.
+
+        For instance, `order == 1` means one edge away.
+        """
+        if order is None:
+            cog_set = self._get_cognate_set(token)
+            if self._finalized:
+                for cog in cog_set:
+                    self._token2cog_set[cog] = cog_set
+        else:
+            cog_set = self._get_cognate_set(token, order=order)
         return cog_set
 
-    def _get_cognate_set_(self, token: T) -> _CognateSet:
+    def _get_cognate_set(self, token: T, order: Optional[int] = None) -> _CognateSet:
         self._check_exists(token)
         cog_set = _CognateSet()
-        queue = [token]
+        cog_set.add(token)
+        queue: List[Tuple[T, int]] = [(token, 0)]
+        # NOTE(j_luo) Only propagate idg lemmas if this token is idg or the flag is set to True.
+        idg_propagate = IDG_PROPAGATE or token.lang == 'idg'
         while queue:
-            to_expand = queue.pop(0)
-            cog_set.add(to_expand)
-            for neighbor in self[to_expand]:
-                if not neighbor in cog_set:
-                    queue.append(neighbor)
+            to_expand, dist = queue.pop(0)
+            if to_expand.lang != 'idg' or idg_propagate:
+                for neighbor in self[to_expand]:
+                    if not neighbor in cog_set:
+                        if order is None or dist < order:
+                            queue.append((neighbor, dist + 1))
+                            cog_set.add(neighbor)
         return cog_set
 
     def has_cognate_in(self, token: T, lang: Lang) -> bool:
@@ -853,13 +911,29 @@ class EtymologicalGraph:
         covered = list()
         not_covered = list()
         for token in tokens:
-            _is_covered = token in self._tokens and self.has_cognate_in(token, lang)
-            if _is_covered:
+            try:
+                _is_covered = self.has_cognate_in(token, lang)
                 covered.append(token)
-            else:
+            except TokenNotFound:
                 not_covered.append(token)
         num_covered = len(covered)
         return Coverage(num_covered, total, covered, not_covered)
+
+    def get_all_cognate_sets(self, tokens: Iterable[T]) -> pd.DataFrame:
+        remaining = set(tokens)
+        data = list()
+        while remaining:
+            token = remaining.pop()
+            try:
+                cog_set = self.get_cognate_set(token)
+                for cog in cog_set:
+                    if cog in remaining:
+                        remaining.remove(cog)
+                data.append((token, cog_set))
+            except TokenNotFound:
+                pass
+        ret = pd.DataFrame(data, columns=['seed', 'cog_set'])
+        return ret
 
     def finalize(self):
         self._finalized = True
@@ -869,7 +943,7 @@ class EtymologicalGraph:
         self._token2cog_set = dict()
 
 
-def get_ety_dict(table, column: str):
+def get_ety_dict(table, column: str, name: str):
     """Get an EtymologicalDictionary instance."""
     token_col = f'{column}_tokens'
     df = table.reset_index(drop=True).explode(token_col)
@@ -881,17 +955,13 @@ def get_ety_dict(table, column: str):
     word2_seq = df['lang_codes']
     rel_type = ['cog'] * len(lang1_seq)
 
-    ety_dict = EtymologicalDictionary(word1_seq, lang1_seq, word2_seq, lang2_seq, rel_type)
+    ety_dict = EtymologicalDictionary(name, word1_seq, lang1_seq, word2_seq, lang2_seq, rel_type)
     return ety_dict
 
 
-def get_ety_dict_from_tsv(tsv_path: str, column: str):
+def get_ety_dict_from_tsv(tsv_path: str, column: str, name: str):
     table = process_table(tsv_path, column)
-    ety_dict = get_ety_dict(table, column)
-    print(ety_dict.data['lang1'].value_counts(), column)
-    print('-' * 30)
-    print(ety_dict.data['lang2'].value_counts(), column)
-    print('-' * 30)
+    ety_dict = get_ety_dict(table, column, name)
     return ety_dict
 
 # -------------------------------------------------------------- #

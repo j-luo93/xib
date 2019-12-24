@@ -180,10 +180,14 @@ class EtymologicalGraph:
         not_covered = list()
         for token in tokens:
             try:
-                _is_covered = self.has_cognate_in(token, lang)
-                covered.append(token)
+                is_covered = self.has_cognate_in(token, lang)
             except TokenNotFound:
-                not_covered.append(token)
+                is_covered = False
+            finally:
+                if is_covered:
+                    covered.append(token)
+                else:
+                    not_covered.append(token)
         num_covered = len(covered)
         return Coverage(num_covered, total, covered, not_covered)
 
@@ -214,15 +218,21 @@ class EtymologicalGraph:
 def get_ety_dict(table, column: str, name: str):
     """Get an EtymologicalDictionary instance."""
     token_col = f'{column}_tokens'
-    df = table.reset_index(drop=True).explode(token_col)
-    df = df.reset_index(drop=True).explode('lang_codes')[['Lemma', 'Sprachen', 'lang_codes', token_col]]
+    # Default to the lemma language if lang_codes is not present.
+    df = table[['Lemma', 'Sprachen', 'lang_codes', 'is_ref', 'is_single_ref', token_col]]
+    df['lang_codes'] = df[['Sprachen', 'lang_codes']].apply(lambda item: item[1] if item[1] else [item[0]], axis=1)
+    df = df.reset_index(drop=True).explode(token_col)
+    df = df.reset_index(drop=True).explode('lang_codes')
     df = df.dropna()
+    df = df[(~df['is_ref']) | (df['is_single_ref'])]
+    df[token_col] = df[['is_single_ref', token_col]].apply(
+        lambda item: item[1].tokens[0] if item[0] else item[1], axis=1)
 
     lang1_seq = df['Lemma']
     word1_seq = df['Sprachen']
     lang2_seq = df[token_col]
     word2_seq = df['lang_codes']
-    rel_type = ['cog'] * len(lang1_seq)
+    rel_type = df['is_ref'].apply(lambda is_ref: 'ref' if is_ref else 'cog')
 
     ety_dict = EtymologicalDictionary(name, word1_seq, lang1_seq, word2_seq, lang2_seq, rel_type)
     return ety_dict

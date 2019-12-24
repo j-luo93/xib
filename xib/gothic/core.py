@@ -266,7 +266,7 @@ def _get_col_tokens(item: Tuple[_Note, Lang, List[Lang]]) -> List[Token]:
     return ret
 
 
-def _merge_morphemes(item: Tuple[Token, _Note, List[Token]]) -> List[Token]:
+def _merge_morphemes(item: Tuple[_Note, List[Token]]) -> Union[List[Token], MergedToken]:
     # """Merge potential morphemes together.
 
     # Note that sometimes the morphemes are just variants, so two heuristics are used to make sure only
@@ -286,10 +286,9 @@ def _merge_morphemes(item: Tuple[Token, _Note, List[Token]]) -> List[Token]:
     #     return morphemes
     # else:
     #     return [merged]
-    lemma, note, morphemes = item
+    note, morphemes = item
     if note.is_ref:
-        # FIXME(j_luo) Ignore reference for now.
-        return []
+        return merge_tokens(morphemes)
     else:
         return morphemes
 
@@ -331,7 +330,9 @@ def process_table(tsv_path: str, column: str) -> pd.DataFrame:
     table = table.explode('Lemma').dropna()
 
     # Merge morphemes.
-    table[token_col] = table[['Lemma', column, token_col]].apply(_merge_morphemes, axis=1)
+    table[token_col] = table[[column, token_col]].apply(_merge_morphemes, axis=1)
+    table['is_ref'] = table[column].apply(lambda note: note.is_ref)
+    table['is_single_ref'] = table[token_col].apply(lambda t: isinstance(t, MergedToken) and t.is_single_reference)
 
     return table
 
@@ -541,6 +542,19 @@ class Token:
         yield from str(self)
 
 
+class MergedToken:
+
+    def __init__(self, tokens: Sequence[Token]):
+        self.tokens = tokens
+
+    def __str__(self):
+        return '^'.join([str(token) for token in self.tokens])
+
+    @property
+    def is_single_reference(self):
+        return len(self.tokens) == 1
+
+
 def _get_token_type(s: str) -> TokenType:
     hyphen_matches = list(re.finditer('-', s))
     if len(hyphen_matches) == 0:
@@ -597,6 +611,9 @@ class TokenFactory(Singleton):
         morpheme_types = token1.morpheme_types + token2.morpheme_types
         return Token(token1.lang, raw_morphemes, canonical_morphemes, morpheme_types)
 
+    def merge_tokens(self, tokens: Sequence[Token]) -> MergedToken:
+        return MergedToken(tokens)
+
     def get_token(self, raw_string: str, lang: Lang) -> Token:
         cls = type(self)
         key = (raw_string, lang)
@@ -633,6 +650,7 @@ class TokenFactory(Singleton):
 
 
 get_token = TokenFactory().get_token
+merge_tokens = TokenFactory().merge_tokens
 clear_cache = TokenFactory().clear_cache
 
 # -------------------------------------------------------------- #

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
+from heapq import heapify, heappop
 from typing import (Dict, Iterable, List, NewType, Optional, Sequence, Set,
                     Tuple)
 
@@ -25,7 +27,7 @@ class EtymologicalDictionary:
     1. The information is represented by a 5-tuple:
             (lang1, word1, lang2, word2, rel_type)
        This means that word1 in lang1 is "connected" with word2 in lang2 where a connection might
-       mean borrowing or cognation, indicated by the value of `rel_type`. Note that it is not directional.
+       mean borrowing or cognation, indicated by the value of `rel_type`. Note that it is directional.
     2. These tuples are stored in a DataFrame instance. Column names are "lang1", "word1", "lang2", "word2" and "rel_type".
     """
 
@@ -65,16 +67,32 @@ class EtymologicalDictionary:
 class _CognateSet:
     """A set of cognates."""
 
-    def __init__(self):
+    def __init__(self, root: Token):
+        self.root: Token = root
         self.tokens: Set[Token] = set()
         self._lang2tokens: Dict[Lang, Set[Token]] = defaultdict(set)
+        self.add(self.root)
 
     def __repr__(self):
-        return f'CognateSet: size {len(self.tokens)}'
+        return f'CognateSet(size={len(self.tokens)})'
 
     def add(self, token: Token):
         self.tokens.add(token)
         self._lang2tokens[token.lang].add(token)
+
+    def set_root(self, root: Token):
+        self.add(root)
+        self.root = root
+
+    def merge_with_root_cog_set(self, root_cog_set: _CognateSet):
+        for token in self:
+            root_cog_set.add(token)
+
+    def copy(self) -> _CognateSet:
+        obj = _CognateSet(self.root)
+        for token in self.tokens:
+            obj.add(token)
+        return obj
 
     def __len__(self):
         return len(self.tokens)
@@ -113,66 +131,100 @@ class EtymologicalGraph:
     """A graph representing the etymological relationship."""
 
     def __init__(self):
-        self._tokens: Set[Token] = set()
-        self._edges: Dict[Token, _Edges] = defaultdict(lambda: defaultdict(set))
+        self.tokens: Set[Token] = set()  # Stores all tokens
+        self.out_edges: Dict[Token, _Edges] = defaultdict(lambda: defaultdict(set))  # Stores all out-going edges
+        self.in_edges: Dict[Token, _Edges] = defaultdict(lambda: defaultdict(set))  # Stores all in-going edges.
+        # Whether this graph is finalized. Finalizing the graph will initiate the process of building cognate sets.
         self._finalized = False
-        self._token2cog_set: Dict[Token, _CognateSet] = dict()
+        # Stores the mapping from tokens to cognate sets. Note that one token can belong to several cognate sets and this is only filled in after finalization.
+        self._token2cog_sets: Dict[Token, List[_CognateSet]] = defaultdict(list)
+
+    def _check_finalized(self, value: bool):
+        if self._finalized != value:
+            if value:
+                raise RuntimeError(f'Not finalized.')
+            else:
+                raise RuntimeError(f'Already finalized.')
+
+    def finalize(self):
+        self._check_finalized(False)
+        # Propapate all tokens, in ascending order of out degree of the nodes.
+        out_degrees = {token: len(self.out_edges[token]) for token in self.tokens}
+        queue = [token for token, od in out_degrees.items() if od == 0]
+        # Stores the mapping only for recently propagated tokens.
+        token2cog_set = {token: _CognateSet(token) for token in queue}
+        visited = set()
+        while queue:
+            v = queue.pop(0)
+            visited.add(v)
+            cog_set = token2cog_set[v]
+            in_degree = len(self.in_edges[v])
+            cog_sets = [cog_set] + [cog_set.copy() for _ in range(in_degree - 1)]
+            # NOTE(j_luo) Do not propagate to idg nodes if not configured to do so.
+            # NOTE(j_luo) ga is just weird. Many entries are wrong.
+            in_edges = {u: sources for u, sources in self.in_edges[v].items() if (
+                IDG_PROPAGATE or u.lang != 'idg') and not u.is_same_string('ga')}
+            if in_edges:
+                # Remove the copy for v if v is not some root, which means it will be propagated through. Only the roots should have a copy left after all this proces.
+                del token2cog_set[v]
+                for cog_set, u in zip(cog_sets, in_edges):
+                    if u in token2cog_set:
+                        # If u is already propagated to by another child, merge with it.
+                        root_cog_set = token2cog_set[u]
+                        cog_set.merge_with_root_cog_set(root_cog_set)
+                    else:
+                        # Set u as the new root.
+                        cog_set.set_root(u)
+                        # Set cog_set as u's new cognate set.
+                        token2cog_set[u] = cog_set
+                    out_degrees[u] -= 1
+                    if out_degrees[u] == 0:
+                        queue.append(u)
+        diff = len(set(self.tokens) - set(visited))
+        if diff:
+            logging.warning(
+                f'{diff} nodes not visited. Either they are part of a cyclic graph, or isolated due to removed self loops, or not permitted to propagate through idg nodes.')
+        # Compute self._token2cog_sets.
+        for root, cog_set in token2cog_set.items():
+            for token in cog_set:
+                self._token2cog_sets[token].append(cog_set)
+
+        self._finalized = True
+
+    def definalize(self):
+        self._finalized = False
+        self._token2cog_sets = dict()
 
     def add_cognate_pair(self, token1: Token, token2: Token, source: str):
         if self._finalized:
             raise RuntimeError(f'The graph has been finalized.')
-        self._tokens.add(token1)
-        self._tokens.add(token2)
-        self._edges[token1][token2].add(source)
-        self._edges[token2][token1].add(source)
+        if token1 != token2:  # NOTE(j_luo) Avoid self loops.
+            self.tokens.add(token1)
+            self.tokens.add(token2)
+            self.out_edges[token1][token2].add(source)
+            self.in_edges[token2][token1].add(source)
 
     def add_etymological_dictionary(self, ety_dict: EtymologicalDictionary):
         for _, row in ety_dict.data.iterrows():
             self.add_cognate_pair(row['word1'], row['word2'], ety_dict.name)
 
+    def get_cognate_sets(self, token: Token) -> List[_CognateSet]:
+        self._check_finalized(True)
+        self._check_exists(token)
+        return self._token2cog_sets[token]
+
     def _check_exists(self, token: Token):
-        if token not in self._edges:
+        if token not in self.tokens:
             raise TokenNotFound(f'{token!r} not found in the graph.')
 
-    def __getitem__(self, token: Token) -> _Edges:
+    def __getitem__(self, token: Token) -> Tuple[_Edges, _Edges]:
         self._check_exists(token)
-        return self._edges[token]
-
-    def get_cognate_set(self, token: Token, order: Optional[int] = None) -> _CognateSet:
-        """If `order` is specified, only expand the cognate set by this number, and no caching will be used.
-
-        For instance, `order == 1` means one edge away.
-        """
-        if order is None:
-            cog_set = self._get_cognate_set(token)
-            if self._finalized:
-                for cog in cog_set:
-                    self._token2cog_set[cog] = cog_set
-        else:
-            cog_set = self._get_cognate_set(token, order=order)
-        return cog_set
-
-    def _get_cognate_set(self, token: Token, order: Optional[int] = None) -> _CognateSet:
-        self._check_exists(token)
-        cog_set = _CognateSet()
-        cog_set.add(token)
-        queue: List[Tuple[Token, int]] = [(token, 0)]
-        # NOTE(j_luo) Only propagate idg lemmas if this token is idg or the flag is set to True.
-        idg_propagate = IDG_PROPAGATE or token.lang == 'idg'
-        while queue:
-            to_expand, dist = queue.pop(0)
-            if to_expand.lang != 'idg' or idg_propagate:
-                for neighbor in self[to_expand]:
-                    if not neighbor in cog_set:
-                        if order is None or dist < order:
-                            queue.append((neighbor, dist + 1))
-                            cog_set.add(neighbor)
-        return cog_set
+        return (self.out_edges[token], self.in_edges[token])
 
     def has_cognate_in(self, token: Token, lang: Lang) -> bool:
         """Return whether `token` has a cognate in `lang`."""
-        cog_set = self.get_cognate_set(token)
-        return cog_set.has_lang(lang)
+        cog_sets = self.get_cognate_sets(token)
+        return any(cog_set.has_lang(lang) for cog_set in cog_sets)
 
     def compute_coverage(self, tokens: Iterable[Token], lang: Lang) -> Coverage:
         total = len(tokens)
@@ -190,29 +242,6 @@ class EtymologicalGraph:
                     not_covered.append(token)
         num_covered = len(covered)
         return Coverage(num_covered, total, covered, not_covered)
-
-    def get_all_cognate_sets(self, tokens: Iterable[Token]) -> pd.DataFrame:
-        remaining = set(tokens)
-        data = list()
-        while remaining:
-            token = remaining.pop()
-            try:
-                cog_set = self.get_cognate_set(token)
-                for cog in cog_set:
-                    if cog in remaining:
-                        remaining.remove(cog)
-                data.append((token, cog_set))
-            except TokenNotFound:
-                pass
-        ret = pd.DataFrame(data, columns=['seed', 'cog_set'])
-        return ret
-
-    def finalize(self):
-        self._finalized = True
-
-    def definalize(self):
-        self._finalized = False
-        self._token2cog_set = dict()
 
 
 def get_ety_dict(table, column: str, name: str):
@@ -233,6 +262,9 @@ def get_ety_dict(table, column: str, name: str):
     lang2_seq = df[token_col]
     word2_seq = df['lang_codes']
     rel_type = df['is_ref'].apply(lambda is_ref: 'ref' if is_ref else 'cog')
+    if column == 'E':
+        lang1_seq, lang2_seq = lang2_seq, lang1_seq
+        word1_seq, word2_seq = word2_seq, word1_seq
 
     ety_dict = EtymologicalDictionary(name, word1_seq, lang1_seq, word2_seq, lang2_seq, rel_type)
     return ety_dict

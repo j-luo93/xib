@@ -19,7 +19,7 @@ from dev_misc.utils import Singleton, concat_lists, deprecated
 
 CONVERT_HWAIR = True
 KEEP_AFFIX = True
-KEEP_DOUBTFUL = False
+KEEP_DOUBTFUL = True  # False
 
 Lang = NewType('Lang', str)
 
@@ -159,10 +159,11 @@ class _Note:
     is_ref: bool
 
 
-def _split_note_groups(s: str) -> List[_Note]:
+def _split_note_groups(item: Tuple[Lang, str]) -> List[_Note]:
     """Split each segment into notes."""
     notes = list()
-    for segment in s.split(';'):
+    lemma_lang, text = item
+    for segment in text.split(';'):
         segment = segment.strip()
         matches = list(re.finditer(_note_group_pattern, segment))
         last_group = list()
@@ -183,10 +184,9 @@ def _split_note_groups(s: str) -> List[_Note]:
         # Whenever "vergleiche" starts, break the loop.
         if has_compare:
             break
-        if lang_relevant:
-            ret.append(_Note(note, False))
-        elif has_ref:
-            ret.append(_Note(note, True))
+        is_ref = has_ref and (not lang_relevant or _vorwort_abbr2note[lemma_lang + '.'] in note)
+        if lang_relevant or has_ref:
+            ret.append(_Note(note, is_ref))
 
     return ret
 
@@ -213,9 +213,10 @@ def _remove_invalid(note: _Note) -> _Note:
     # most likely it belongs to some note or reference.
     # For instance, "Lehmann B8", "Feist 462" and "Bedeutung dunkel".
     text = note.text
+    text = re.sub(note_pattern, '', text)
     text = re.sub(r'[A-Z][\w]*\s+[\w\s]+.*', '', text)
     # Capitalized words are most likely to be some typo for notes provided in vorwort.
-    text = re.sub(r'\b[A-Z]\w*\b.*', '', text)
+    # text = re.sub(r'\b[A-Z]\w*\b.*', '', text)
     # # Short and capitalized words (length <= 3) are most likely to be some typo for notes provided in vorwort.
     # s = re.sub(r'\b[A-Z]\w{0,2}\b.*', '', s)
     # # Short and capitalized words (length <= 3) are most likely to be some typo for notes provided in vorwort.
@@ -238,6 +239,9 @@ def _get_lang_codes(note: _Note) -> List[str]:
         if re.search(_langs_to_keep_pattern[lang], text):
             code = _vorwort_note2abbr['#@!' + lang + '!@#'].strip('.')
             ret.append(code)
+    if len(ret) > 1:
+        logging.warning(f'More than one language is extracted from a single note. Discarding this row: \n{text!r}')
+        # return list()
     return ret
 
 
@@ -248,12 +252,8 @@ def _get_col_tokens(item: Tuple[_Note, Lang, List[Lang]]) -> List[Token]:
     """Based on the column and language codes, extract actual tokens."""
     note, default_lang, lang_codes = item
     text = note.text
-    if len(lang_codes) > 1:
-        logging.warning('More than one language is extracted from a single note. Discarding this row.')
-        return list()
 
     lang = lang_codes[0] if lang_codes else default_lang
-    text = re.sub(note_pattern, '', text)
     ret = list()
     for t in text.split(','):
         try:
@@ -309,15 +309,15 @@ def process_table(tsv_path: str, column: str) -> pd.DataFrame:
 
     # Organize the column so that each segment is split into groups (separated by different notes).
     table[column] = table[column].apply(abbr_sub_func)
-    table[column] = table[column].apply(_split_note_groups)
+    table[column] = table[['Sprachen', column]].apply(_split_note_groups, axis=1)
     table = pd.pivot_table(table.reset_index(),
                            index=['index', 'Lemma', 'Sprachen'], values=column, aggfunc=concat_lists)
     table = table.reset_index([1, 2]).explode(column)
     table = table.dropna()
 
     # Each piece of note is now cleaned, and language codes and actual tokens are extracted from each note.
-    table[column] = table[column].apply(_remove_invalid)
     table['lang_codes'] = table[column].apply(_get_lang_codes)
+    table[column] = table[column].apply(_remove_invalid)
     token_col = f'{column}_tokens'
     table[token_col] = table[[column, 'Sprachen', 'lang_codes']].apply(_get_col_tokens, axis=1)
 

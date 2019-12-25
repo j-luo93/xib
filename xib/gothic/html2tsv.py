@@ -34,7 +34,8 @@ def get_regex(dataset: str, sep: Optional[str] = None) -> str:
 
 def get_match_regex(dataset: str) -> re.Pattern:
     lemma_p = r'^([^,]+),?\s*'
-    alternative_p = r'((?:\W?[^\.]+\b)(?!\.),?\s*)*'  # r'((?:\b[^\.]+\b)(?!\.),?\s*)*'
+    alternative_p = r'((?:\W?[^\.]+\b)(?:(?!\.)|(?:\.\.+)),?\s*)*'  # r'((?:\b[^\.]+\b)(?!\.),?\s*)*'
+    # alternative_p = r'((?:\W?[^\.]+\b)(?!\.),?\s*)*'  # r'((?:\b[^\.]+\b)(?!\.),?\s*)*'
     lang_p = r'([^\.]+\.,?\s*)'
     wortarten_p = r'([^:]+:\s*)?'
     bedeutung_p = get_regex(dataset)

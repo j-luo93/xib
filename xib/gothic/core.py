@@ -250,7 +250,7 @@ def _get_lang_codes(note: _Note) -> List[str]:
             ret.append(code)
     if len(ret) > 1:
         logging.warning(f'More than one language is extracted from a single note. Discarding this row: \n{text!r}')
-        # return list()
+        return list()
     return ret
 
 
@@ -418,7 +418,7 @@ class DoubtfulString(Exception):
     """Raise this error if "?" is in the string and `KEEP_DOUBTFUL` is False."""
 
 
-def _standardize(s: str, lang: Lang) -> str:
+def _standardize(s: str, lang: Lang) -> Tuple[str, Optional[int]]:  # , Optional[str]]:
     """Standardize the string in a conservative fashion. This is different from canonicalization."""
     if not KEEP_DOUBTFUL and '?' in s:
         raise DoubtfulString(f'Doubtful string {s!r}.')
@@ -428,13 +428,35 @@ def _standardize(s: str, lang: Lang) -> str:
         sense_idx = None
 
     # Replace digits/#/*/parentheses/brackets/question marks/equal signs with whitespace.
-    s = re.sub(r'[?*\d#()\[\]=]', '', s)
-    s = re.sub(r'\s', ' ', s)
+    # For Greek, the transliterated form in parentheses are kept as it is.
+    # pattern = r'[?*\d#\[\]=]' if lang == 'gr' else r'[?*\d#()\[\]=]'
+    # s = re.sub(pattern, '', s)
+    s = re.sub(r'[?*\d#\[\]=]', '', s)
+    # Anything inside parentheses are removed (including the parentheses).
+    s = re.sub(r'\(.*?\)', '', s)
+
+    s = re.sub(r'\s+', ' ', s)
+    s = s.strip()
+
+    # trans_s = None
+    # if lang == 'gr':
+    #     match = re.compile(r'(\w+)(\s*\(?\w+\))*').match(s)
+    #     try:
+    #         s = match.group(1)
+    #     except AttributeError:
+    #         print(s)
+    #         raise
+    #     try:
+    #         trans_s = match.group(2).strip()[1:-1]
+    #     except (IndexError, AttributeError):
+    #         pass
+    #     finally:
+    #         trans_s = trans_s or None
+
     # Convert hw/hv to ƕ if specified and the language is got.
     if lang == 'got' and CONVERT_HWAIR:
         s = _standardize_sub(s)
-    s = s.strip()
-    return s, sense_idx
+    return s, sense_idx  # , trans_s
 
 
 _deaccent_map = {
@@ -494,13 +516,15 @@ class Token:
                  raw_morphemes: List[str],
                  canonical_morphemes: List[str],
                  morpheme_types: List[MorphemeType],
-                 sense_idx: Optional[int] = None):
+                 sense_idx: Optional[int] = None):#,
+                #  transliteration: Optional[str] = None):
         self.lang = lang
         self.raw_morphemes = raw_morphemes
         self.canonical_morphemes = canonical_morphemes
         self.morpheme_types = morpheme_types
         self.canonical_string = ''.join(self.canonical_morphemes)
         self.sense_idx = sense_idx
+        # self.transliteration = transliteration
 
     def __str__(self):
         return self.canonical_string
@@ -509,10 +533,15 @@ class Token:
         return len(str(self))
 
     def __repr__(self):
+        fields = list()
         if self.sense_idx is None:
-            return f'Token({self}, {self.lang})'
+            fields.append(str(self))
         else:
-            return f'Token({self}@{self.sense_idx}, {self.lang})'
+            fields.append(f'{self}@{self.sense_idx}')
+        # if self.transliteration is not None:
+        #     fields.append(self.transliteration)
+        fields.append(self.lang)
+        return f'Token({", ".join(fields)})'
 
     @property
     def signature(self) -> Tuple[str, int, Lang]:
@@ -634,6 +663,7 @@ class TokenFactory(Singleton):
         if key in cls._tokens:
             token = cls._tokens[key]
         else:
+            # standard_string, sense_idx, trans_s = _standardize(raw_string, lang)
             standard_string, sense_idx = _standardize(raw_string, lang)
             # Deal with hyphens.
             token_type = _get_token_type(standard_string)
@@ -653,7 +683,9 @@ class TokenFactory(Singleton):
                 morpheme_types = [MorphemeType.UNKNOWN] * len(raw_morphemes)
             assert len(raw_morphemes) == len(canonical_morphemes) == len(morpheme_types)
 
-            token = Token(lang, raw_morphemes, canonical_morphemes, morpheme_types, sense_idx=sense_idx)
+            token = Token(lang, raw_morphemes, canonical_morphemes, morpheme_types,
+                          sense_idx=sense_idx)#,
+                        #   transliteration=trans_s)
             self._tokens[raw_string] = token
         return token
 

@@ -116,6 +116,15 @@ def load_vorwort(vorwort_path: str):
             _vorwort_note2abbr[note] = abbr
 
 
+_got_prefixes = set()
+
+
+def load_got_prefixes(prefix_path: str):
+    with open(prefix_path, 'r', encoding='utf8') as fin:
+        for line in fin:
+            _got_prefixes.add(get_token(line.strip(), 'got'))
+
+
 _note_group_pattern = re.compile(re.escape('#@!') + r'((?!' + re.escape('#@!') + r').)+')
 _strip_pattern = re.compile(r'[\s,]*$')
 _langs_to_keep = {
@@ -333,6 +342,7 @@ def process_table(tsv_path: str, column: str) -> pd.DataFrame:
     table[token_col] = table[[column, token_col]].apply(_merge_morphemes, axis=1)
     table['is_ref'] = table[column].apply(lambda note: note.is_ref)
     table['is_single_ref'] = table[token_col].apply(lambda t: isinstance(t, MergedToken) and t.is_single_reference)
+    table['is_prefixed'] = table[token_col].apply(lambda t: isinstance(t, MergedToken) and t.is_prefixed)
 
     return table
 
@@ -553,6 +563,10 @@ class MergedToken:
     @property
     def is_single_reference(self):
         return len(self.tokens) == 1
+
+    @property
+    def is_prefixed(self):
+        return len(self.tokens) == 2 and self.tokens[0] in _got_prefixes
 
 
 def _get_token_type(s: str) -> TokenType:

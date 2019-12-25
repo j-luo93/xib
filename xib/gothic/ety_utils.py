@@ -248,14 +248,22 @@ def get_ety_dict(table, column: str, name: str):
     """Get an EtymologicalDictionary instance."""
     token_col = f'{column}_tokens'
     # Default to the lemma language if lang_codes is not present.
-    df = table[['Lemma', 'Sprachen', 'lang_codes', 'is_ref', 'is_single_ref', token_col]]
+    df = table[['Lemma', 'Sprachen', 'lang_codes', 'is_ref', 'is_single_ref', 'is_prefixed', token_col]]
     df['lang_codes'] = df[['Sprachen', 'lang_codes']].apply(lambda item: item[1] if item[1] else [item[0]], axis=1)
     df = df.reset_index(drop=True).explode(token_col)
     df = df.reset_index(drop=True).explode('lang_codes')
     df = df.dropna()
-    df = df[(~df['is_ref']) | (df['is_single_ref'])]
-    df[token_col] = df[['is_single_ref', token_col]].apply(
-        lambda item: item[1].tokens[0] if item[0] else item[1], axis=1)
+    df = df[(~df['is_ref']) | (df['is_single_ref']) | df['is_prefixed']]
+
+    def select_token(item: Tuple[bool, bool, Token]):
+        is_single_ref, is_prefixed, token = item
+        if is_single_ref:
+            return token.tokens[0]
+        if is_prefixed:
+            return token.tokens[1]
+        return token
+
+    df[token_col] = df[['is_single_ref', 'is_prefixed', token_col]].apply(select_token, axis=1)
 
     lang1_seq = df['Lemma']
     word1_seq = df['Sprachen']

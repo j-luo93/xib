@@ -428,30 +428,12 @@ def _standardize(s: str, lang: Lang) -> Tuple[str, Optional[int]]:  # , Optional
         sense_idx = None
 
     # Replace digits/#/*/parentheses/brackets/question marks/equal signs with whitespace.
-    # For Greek, the transliterated form in parentheses are kept as it is.
-    # pattern = r'[?*\d#\[\]=]' if lang == 'gr' else r'[?*\d#()\[\]=]'
-    # s = re.sub(pattern, '', s)
     s = re.sub(r'[?*\d#\[\]=]', '', s)
     # Anything inside parentheses are removed (including the parentheses).
     s = re.sub(r'\(.*?\)', '', s)
 
     s = re.sub(r'\s+', ' ', s)
     s = s.strip()
-
-    # trans_s = None
-    # if lang == 'gr':
-    #     match = re.compile(r'(\w+)(\s*\(?\w+\))*').match(s)
-    #     try:
-    #         s = match.group(1)
-    #     except AttributeError:
-    #         print(s)
-    #         raise
-    #     try:
-    #         trans_s = match.group(2).strip()[1:-1]
-    #     except (IndexError, AttributeError):
-    #         pass
-    #     finally:
-    #         trans_s = trans_s or None
 
     # Convert hw/hv to ƕ if specified and the language is got.
     if lang == 'got' and CONVERT_HWAIR:
@@ -516,15 +498,13 @@ class Token:
                  raw_morphemes: List[str],
                  canonical_morphemes: List[str],
                  morpheme_types: List[MorphemeType],
-                 sense_idx: Optional[int] = None):#,
-                #  transliteration: Optional[str] = None):
+                 sense_idx: Optional[int] = None):
         self.lang = lang
         self.raw_morphemes = raw_morphemes
         self.canonical_morphemes = canonical_morphemes
         self.morpheme_types = morpheme_types
         self.canonical_string = ''.join(self.canonical_morphemes)
         self.sense_idx = sense_idx
-        # self.transliteration = transliteration
 
     def __str__(self):
         return self.canonical_string
@@ -538,8 +518,6 @@ class Token:
             fields.append(str(self))
         else:
             fields.append(f'{self}@{self.sense_idx}')
-        # if self.transliteration is not None:
-        #     fields.append(self.transliteration)
         fields.append(self.lang)
         return f'Token({", ".join(fields)})'
 
@@ -596,6 +574,14 @@ class MergedToken:
     @property
     def is_prefixed(self):
         return len(self.tokens) == 2 and self.tokens[0] in _got_prefixes
+
+    def __hash__(self):
+        return hash(tuple(self.tokens))
+
+    def __eq__(self, other: MergedToken):
+        if not isinstance(other, MergedToken):
+            return False
+        return len(self.tokens) == len(other.tokens) and all(t1 == t2 for t1, t2 in zip(self.tokens, other.tokens))
 
 
 def _get_token_type(s: str) -> TokenType:
@@ -684,8 +670,7 @@ class TokenFactory(Singleton):
             assert len(raw_morphemes) == len(canonical_morphemes) == len(morpheme_types)
 
             token = Token(lang, raw_morphemes, canonical_morphemes, morpheme_types,
-                          sense_idx=sense_idx)#,
-                        #   transliteration=trans_s)
+                          sense_idx=sense_idx)
             self._tokens[raw_string] = token
         return token
 

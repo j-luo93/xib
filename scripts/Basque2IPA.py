@@ -88,7 +88,7 @@ def no_conflict(matches: List[Match]):
     for match in matches:
         for position in range(match.start, match.end):
             if position in occupied:
-            occupied.add(position)
+                occupied.add(position)
                 return False
     return True
 

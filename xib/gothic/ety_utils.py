@@ -10,6 +10,7 @@ from typing import (Any, Dict, Iterable, List, NewType, Optional, Sequence,
 
 import pandas as pd
 
+from dev_misc.utils import cached_property
 from xib.gothic.core import Lang, MergedToken, Token, get_token, process_table
 
 IDG_PROPAGATE = False
@@ -28,7 +29,7 @@ class _BaseEdge:
 
 @dataclass(eq=True, frozen=True)
 class _BaseEdgeOptional:
-    info: Optional[Any] = None
+    info: Optional[MergedToken] = None
 
 
 @dataclass(eq=True, frozen=True)
@@ -85,8 +86,8 @@ class EtymologicalDictionary:
         word2_seq = [get_token(w, lang2) for w in df[lang2]]
         lang1_seq = [lang1] * len(word1_seq)
         lang2_seq = [lang2] * len(word2_seq)
-        rel_type_seq = df['rel_type']
-        ety_dict = EtymologicalDictionary(name, lang1_seq, word1_seq, lang2_seq, word2_seq, rel_type_seq)
+        edge_seq = [_Edge(RelType.COGNATE) for _ in range(len(word1_seq))]
+        ety_dict = EtymologicalDictionary(name, lang1_seq, word1_seq, lang2_seq, word2_seq, edge_seq)
         return ety_dict
 
     def count_langs(self):
@@ -146,7 +147,7 @@ class _CognateSet:
             return set()
 
 
-@dataclass(eq=True, frozen=True)
+@dataclass
 class Coverage:
     num_covered: int
     total: int
@@ -158,11 +159,30 @@ class Coverage:
         self.ratio = float(f'{(self.num_covered / self.total):.3f}')
 
 
-_EdgeDict = Dict[Token, _EdgeWithSource]
+_EdgeDict = Dict[Token, Set[_EdgeWithSource]]
 
 
 class TokenNotFound(Exception):
     """Raise this error if a token is not found in the graph."""
+
+
+@dataclass
+class _PrefixStep:
+    src_lang: Lang
+    tgt_lang: Lang
+    prefix: Token = None
+
+
+@dataclass
+class PrefixPath:
+    path: List[_PrefixStep] = field(default_factory=list)
+
+    @cached_property
+    def is_empty(self) -> bool:
+        for ps in self.path:  # pylint: disable=not-an-iterable
+            if ps.prefix:
+                return False
+        return True
 
 
 class EtymologicalGraph:
@@ -238,7 +258,7 @@ class EtymologicalGraph:
         if token1 != token2:  # NOTE(j_luo) Avoid self loops.
             self.tokens.add(token1)
             self.tokens.add(token2)
-            edge = _EdgeWithSource(edge, source)
+            edge = _EdgeWithSource(edge.rel_type, source, info=edge.info)
             self.out_edges[token1][token2].add(edge)
             self.in_edges[token2][token1].add(edge)
 
@@ -280,17 +300,74 @@ class EtymologicalGraph:
         num_covered = len(covered)
         return Coverage(num_covered, total, covered, not_covered)
 
-    def get_cognates_in(self, token: Token, lang: Lang) -> Set[Token]:
+    def get_cognates_in(self, token: Token, lang: Lang) -> List[Tuple[_CognateSet, Set[Token]]]:
         """Get cognates for `token` in language `lang`."""
         try:
             cog_sets = self.get_cognate_sets(token)
-            ret = set()
+            ret = list()
             for cog_set in cog_sets:
+                tokens = set()
                 if cog_set.has_lang(lang):
-                    ret.update(cog_set.get_cognates_in(lang))
+                    tokens = cog_set.get_cognates_in(lang)
+                if tokens:
+                    ret.append((cog_set, tokens))
             return ret
         except TokenNotFound:
-            return set()
+            return list()
+
+    def get_paths_to_closest_common_ancestor(self, token1: Token, token2: Token, cog_set: _CognateSet) -> Tuple[List[Token], List[Token]]:
+        """Return paths to the closest common ancestory for `token1` and `token2`."""
+
+        root = cog_set.root
+
+        def get_path_to_root(token: Token, path: List[Token]):
+            path.append(token)
+            if token is root:
+                return
+            for u, edge in self.in_edges[token].items():
+                if u in cog_set:
+                    get_path_to_root(u, path)
+                    break
+
+        path1 = list()
+        get_path_to_root(token1, path1)
+        path2 = list()
+        get_path_to_root(token2, path2)
+        i = 0
+        for i, (t1, t2) in enumerate(zip(path1[::-1], path2[::-1])):
+            if t1 != t2:
+                break
+        if t1 == t2:
+            i += 1
+        path1 = path1[:len(path1) - i + 1]
+        path2 = path2[:len(path2) - i + 1]
+        return path1, path2
+
+    def get_prefixes_along_paths(self, token1: Token, token2: Token, cog_set: _CognateSet) -> Tuple[PrefixPath, PrefixPath]:
+        path1, path2 = self.get_paths_to_closest_common_ancestor(token1, token2, cog_set)
+
+        def get_prefixes(path: List[Token]) -> PrefixPath:
+            pp = PrefixPath()
+            for u, v in zip(path[:-1], path[1:]):
+                edges = self.in_edges[u][v]
+                # if len(edges) > 1:
+                #     logging.warning('u -> v has two different edges. Only one is kept.')
+                ps = _PrefixStep(u.lang, v.lang)
+                for edge in edges:
+                    if edge.rel_type == RelType.PREFIXED:
+                        prefix = edge.info.tokens[0]
+                        if ps.prefix is not None and ps.prefix != prefix:
+                            logging.warning(
+                                f'Encountered two different prefixes for the same u -> v edge. Only keeping the last one.')
+                        ps.prefix = prefix  # pylint: disable=no-member
+                pp.path.append(ps)  # pylint: disable=no-member
+
+            return pp
+
+        prefixes1 = get_prefixes(path1)
+        prefixes2 = get_prefixes(path2)
+
+        return prefixes1, prefixes2
 
 
 def get_ety_dict(table, column: str, name: str):
@@ -304,25 +381,6 @@ def get_ety_dict(table, column: str, name: str):
     df = df.dropna()
     df = df[(~df['is_ref']) | (df['is_single_ref']) | df['is_prefixed']]
 
-    # def select_token(item: Tuple[bool, bool, Token]):
-    #     is_single_ref, is_prefixed, token = item
-    #     if is_single_ref:
-    #         return token.tokens[0]
-    #     # if is_prefixed:
-    #     #     return token.tokens[1]
-    #     return token
-
-    # df[token_col] = df[['is_single_ref', 'is_prefixed', token_col]].apply(select_token, axis=1)
-
-    # def get_rel_type(item: Tuple[bool, bool]) -> str:
-    #     is_ref, is_prefixed = item
-    #     if is_prefixed:
-    #         return 'prefixed'
-    #     if is_ref:
-    #         return 'ref'
-    #     return 'cog'
-
-    # rel_type = df[['is_ref', 'is_prefixed']].apply(get_rel_type, axis=1)
     def get_token_and_edge(item: Tuple[Union[Token, MergedToken], bool, bool]) -> Tuple[Token, _Edge]:
         token, is_single_ref, is_prefixed = item
         info = None

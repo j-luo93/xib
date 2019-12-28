@@ -293,7 +293,7 @@ class AdaptLayer(nn.Module):
     def alignment(self, cat_name: str) -> FT:
         param = self.adapters[cat_name]
         if g.adapt_softmax:
-            alignment = param.log_softmax(dim=0).exp
+            alignment = param.log_softmax(dim=0).exp()
         else:
             alignment = param
         return alignment

@@ -448,7 +448,6 @@ class AlignedIpaDataLoader(UnbrokenIpaDataLoader):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        breakpoint()  # BREAKPOINT(j_luo)
         # HACK(j_luo) Dataloaders for ipas should run this.
         self.dataset.set_unit_ids()
 

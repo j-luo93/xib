@@ -526,8 +526,8 @@ def get_ety_dict(table, column: str, name: str):
     df = df.dropna()
     df = df[(~df['is_ref']) | (df['is_single_ref']) | df['is_prefixed']]
 
-    def get_token_and_edge(item: Tuple[Union[Token, MergedToken], bool, bool]) -> Tuple[Token, _Edge]:
-        token, is_single_ref, is_prefixed = item
+    def get_token_and_edge(item: Tuple[Token, Union[Token, MergedToken], bool, bool]) -> Tuple[Token, _Edge]:
+        lemma, token, is_single_ref, is_prefixed = item
         info = None
         if is_single_ref:
             rel_type = RelType.SINGLE_REF
@@ -538,10 +538,13 @@ def get_ety_dict(table, column: str, name: str):
             token = token.tokens[1]
         else:
             rel_type = RelType.COGNATE
+        if token.is_affix ^ lemma.is_affix:
+            return None, None
         return token, _Edge(rel_type, info)
 
-    token_and_edge = df[[token_col, 'is_single_ref', 'is_prefixed']].apply(get_token_and_edge, axis=1)
+    token_and_edge = df[['Lemma', token_col, 'is_single_ref', 'is_prefixed']].apply(get_token_and_edge, axis=1)
     df[token_col], df['edge'] = zip(*token_and_edge)
+    df = df.dropna()
 
     lang1_seq = df['Sprachen']
     word1_seq = df['Lemma']

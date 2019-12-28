@@ -15,7 +15,7 @@ from typing import (Container, Dict, Iterable, List, NewType, Optional,
 
 import pandas as pd
 
-from dev_misc.utils import Singleton, concat_lists, deprecated
+from dev_misc.utils import Singleton, cached_property, concat_lists, deprecated
 
 CONVERT_HWAIR = True
 KEEP_AFFIX = True
@@ -378,6 +378,10 @@ class MorphemeType(Enum):
     SUFFIX = auto()
     INFIX = auto()
 
+    @classmethod
+    def is_affix(cls, morpheme_type: MorphemeType) -> bool:
+        return morpheme_type in [MorphemeType.PREFIX, MorphemeType.SUFFIX, MorphemeType.INFIX]
+
 
 def _remove_capitalization(s: str):
     if s[0].isupper():
@@ -505,6 +509,10 @@ class Token:
         self.morpheme_types = morpheme_types
         self.canonical_string = ''.join(self.canonical_morphemes)
         self.sense_idx = sense_idx
+
+    @cached_property
+    def is_affix(self) -> bool:
+        return all(MorphemeType.is_affix(mt) for mt in self.morpheme_types)
 
     def __str__(self):
         return self.canonical_string

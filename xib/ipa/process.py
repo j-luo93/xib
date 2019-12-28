@@ -272,7 +272,7 @@ add_argument('min_word_length', default=4, dtype=int, msg='Min length of words.'
 
 class Segment(BaseSegmentWithGoldTagSeq):
 
-    def __init__(self):
+    def __init__(self, raw_token: str):
         self._raw_token = raw_token
         self.is_noise = raw_token.startswith('#')
         self.token = raw_token[1:] if self.is_noise else raw_token
@@ -311,7 +311,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
     def _apply_all(self):
         for name, dg in name2dg.items():
             setattr(self, name, get_dg_value(self.ipa, dg))
-        if self.ptype[0] not in ['consonant', 'vowel']:
+        if self.ptype[0] not in ['consonant', 'vowel']:  # pylint: disable=no-member
             raise ValueError('Invalid IPA string.')
 
     def __getitem__(self, feat_or_idx: Union[int, str]):
@@ -456,7 +456,7 @@ class AlignedIpaSegment(SegmentX):
 
         if almt.word_trans_ipa or almt.lemma_trans_ipa:
             orig_raw_token = almt.word_ipa
-            aligned_raw_tokens = set(almt.word_trans_ipa.split(',') + almt.lemma_trans_ipa.split(','))
+            aligned_raw_tokens = set(almt.word_trans_ipa + almt.lemma_trans_ipa)
         else:
             # If there is no aligned information, then this token is essentially noise.
             orig_raw_token = '#' + almt.word_ipa

@@ -441,11 +441,11 @@ class EtymologicalGraph:
                     ret.append(str(cognate))
         return set(ret)
 
-    def translate_word_lemma_pair(self, word: str, lemma: str, src_lang: Lang, tgt_lang: Lang) -> Set[str]:
+    def translate_word_lemma_pair(self, word: str, lemma: str, src_lang: Lang, tgt_lang: Lang) -> Tuple[Set[str], Set[str]]:
         try:
             word_translations = self.translate(get_token(word, src_lang), tgt_lang)
         except InvalidString:
-            return set()
+            return set(), set()
         lemma_translations = self.translate(get_token(lemma.replace('-', ''), src_lang), tgt_lang)
         stem_translations = set()
         if '-' in lemma:
@@ -456,13 +456,20 @@ class EtymologicalGraph:
                 stem_translations = {f'[{"?" * len(prefix)}]' + str(cog) for cog in stem_translations}
             except InvalidString:
                 pass
-        return word_translations | lemma_translations | stem_translations
+        return word_translations, lemma_translations | stem_translations
 
     def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang):
         word_cnt = 0
         word_covered = 0
         vocab = set()
         vocab_covered = 0
+
+        def safe_get_standardize_str(s: str) -> str:
+            try:
+                return str(get_token(s, src_lang))
+            except InvalidString:
+                return s
+
         with open(in_path, 'r', encoding='utf8') as fin, open(out_path, 'w', encoding='utf8') as fout:
             for line in fin:
                 line = line.strip()
@@ -470,14 +477,19 @@ class EtymologicalGraph:
                     word, lemma = line.split('\t')[1:3]
                     word_cnt += 1
 
-                    translations = self.translate_word_lemma_pair(word, lemma, src_lang, tgt_lang)
-                    if translations:
+                    word_translations, lemma_translations = self.translate_word_lemma_pair(
+                        word, lemma, src_lang, tgt_lang)
+                    if word_translations or lemma_translations:
                         word_covered += 1
                     if word not in vocab:
                         vocab.add(word)
-                        if translations:
+                        if word_translations or lemma_translations:
                             vocab_covered += 1
-                    fout.write('|'.join([word] + list(translations)) + ' ')
+                    wt = ','.join(word_translations)
+                    lt = ','.join(lemma_translations)
+                    w = safe_get_standardize_str(word)
+                    l = safe_get_standardize_str(lemma)
+                    fout.write('|'.join([w, l, wt, lt]) + ' ')
                 else:
                     fout.write('\n')
         word_coverage = word_covered / word_cnt

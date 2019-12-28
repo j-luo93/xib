@@ -13,6 +13,7 @@ import pandas as pd
 from dev_misc.utils import cached_property
 from xib.gothic.core import (InvalidString, Lang, MergedToken, Token,
                              get_token, process_table)
+from xib.gothic.transliterator import MultilingualTranliterator
 
 IDG_PROPAGATE = False
 
@@ -458,7 +459,7 @@ class EtymologicalGraph:
                 pass
         return word_translations, lemma_translations | stem_translations
 
-    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang):
+    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transliterator: MultilingualTranliterator):
         word_cnt = 0
         word_covered = 0
         vocab = set()
@@ -469,6 +470,12 @@ class EtymologicalGraph:
                 return str(get_token(s, src_lang))
             except InvalidString:
                 return s
+
+        def union_all(sets: Sequence[Set]) -> Set:
+            ret = set()
+            for s in sets:
+                ret.update(s)
+            return ret
 
         with open(in_path, 'r', encoding='utf8') as fin, open(out_path, 'w', encoding='utf8') as fout:
             for line in fin:
@@ -489,7 +496,17 @@ class EtymologicalGraph:
                     lt = ','.join(lemma_translations)
                     w = safe_get_standardize_str(word)
                     l = safe_get_standardize_str(lemma)
-                    fout.write('|'.join([w, l, wt, lt]) + ' ')
+
+                    try:
+                        wt_ipa = ','.join(map(str, union_all(transliterator.transliterate(_wt, tgt_lang)
+                                                             for _wt in word_translations)))
+                        lt_ipa = ','.join(map(str, union_all(transliterator.transliterate(_lt, tgt_lang)
+                                                             for _lt in word_translations)))
+                        w_ipa = ','.join(map(str, transliterator.transliterate(w, src_lang)))
+                        l_ipa = ','.join(map(str, transliterator.transliterate(l, src_lang)))
+                        fout.write('|'.join([w, w_ipa, l, l_ipa, wt, wt_ipa, lt, lt_ipa]) + ' ')
+                    except ValueError as e:
+                        logging.exception(e)
                 else:
                     fout.write('\n')
         word_coverage = word_covered / word_cnt

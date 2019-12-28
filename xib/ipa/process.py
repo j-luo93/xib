@@ -724,7 +724,7 @@ def merge_ipa(s: Union[pd.Series, Segment], ipa: IPAString, segment: str) -> Lis
     ptypes = s['ptype']
     errors = defaultdict(list)
     while i < len(ptypes):
-            # Get ptype and normal features first.
+        # Get ptype and normal features first.
         for feat in normal_feats:
             datum_cols[feat].append(de_none(s[feat][i]))
 

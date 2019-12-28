@@ -1,3 +1,4 @@
+import re
 import subprocess
 from abc import ABC, ABCMeta, abstractmethod
 from typing import Callable, ClassVar, Dict, Optional, Sequence, Set
@@ -40,6 +41,10 @@ class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
     @abstractmethod
     def _transliterate(self, grapheme: str) -> Sequence[str]: ...
 
+    def postprocess(self, ipa: IPAString) -> IPAString:
+        """Replace long vowels with two short ones."""
+        return IPAString(unicode_string=re.sub(r'(.)ː', r'\1\1', str(ipa)))
+
     def transliterate(self, grapheme: str) -> Set[IPAString]:
         cls = type(self)
         if grapheme in cls._cache:
@@ -48,7 +53,7 @@ class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
         phonemes = self._transliterate(grapheme)
         ret = set()
         for phoneme in phonemes:
-            ret.add(IPAString(unicode_string=phoneme))
+            ret.add(self.postprocess(IPAString(unicode_string=phoneme)))
 
         cls._cache[grapheme] = ret
         return ret

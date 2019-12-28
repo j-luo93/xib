@@ -218,6 +218,14 @@ class GotDeIpaMatched(SanityCheck):
         self.data_path: str = './data/got_de.shuf.ipa.100'
         self.vocab_path: str = './data/de.matched.words'
 
+@reg
+class GotDeIpaAligned(SanityCheck):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/got_nhd.shuf.ipa.200'
+        self.vocab_path: str = './data/nhd.matched.words'
+
 # @reg
 # class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):
 #     task: str = 'transfer'

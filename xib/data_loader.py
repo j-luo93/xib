@@ -23,12 +23,13 @@ from dev_misc.trainlib.tracker.tracker import Task
 from dev_misc.utils import cached_property
 from xib.batch import CbowIpaBatch
 from xib.ipa import Category, Index, conditions, get_enum_by_cat
-from xib.ipa.process import BaseSegment, Segment, SegmentWindow, SegmentX
+from xib.ipa.process import (AlignedIpaSegment, BaseSegment, Segment,
+                             SegmentWindow, SegmentX)
 from xib.training.task import Task
 
 from .batch import BaseBatch, DenseIpaBatch, IpaBatch
 
-S = TypeVar('S', Segment, SegmentX)
+S = TypeVar('S', Segment, SegmentX, AlignedIpaSegment)
 
 
 class BaseDataset(Dataset, metaclass=ABCMeta):
@@ -85,9 +86,6 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
 
 
 class IpaDataset(BaseDataset):
-
-    # add_argument('use_cached_pth', default=False, dtype=bool,
-    #              msg='Flag to use precomputed pth file instead of processing the data on the file.')
 
     def load_data(self, data_path: Path):
         segments = self._get_segment_dict(data_path)
@@ -259,7 +257,7 @@ class UnbrokenIpaDataset(IpaDataset):
 class AlignedIpaDataset(UnbrokenIpaDataset):
 
     cache_suffix = 'aligned.ipa.cache'
-    segment_cls: Type[S] = SegmentX
+    segment_cls: Type[S] = AlignedIpaSegment  # SegmentX
 
     def set_unit_ids(self):
         self.unit2fm = dict()
@@ -450,6 +448,7 @@ class AlignedIpaDataLoader(UnbrokenIpaDataLoader):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        breakpoint()  # BREAKPOINT(j_luo)
         # HACK(j_luo) Dataloaders for ipas should run this.
         self.dataset.set_unit_ids()
 

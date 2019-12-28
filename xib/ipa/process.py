@@ -5,7 +5,7 @@ import random
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import zip_longest
 from typing import (Callable, ClassVar, Iterator, List, Optional, Sequence,
                     TextIO, Tuple, TypeVar, Union)
@@ -272,7 +272,7 @@ add_argument('min_word_length', default=4, dtype=int, msg='Min length of words.'
 
 class Segment(BaseSegmentWithGoldTagSeq):
 
-    def __init__(self, raw_token: str):
+    def __init__(self):
         self._raw_token = raw_token
         self.is_noise = raw_token.startswith('#')
         self.token = raw_token[1:] if self.is_noise else raw_token
@@ -376,6 +376,7 @@ class SegmentX(BaseSegment):
 
     has_gold_tag_seq: ClassVar[bool] = True
 
+    @deprecated
     def __init__(self, raw_token: str):
         if '|' in raw_token:
             orig_raw_token, *aligned_raw_tokens = raw_token.split('|')
@@ -424,6 +425,50 @@ class SegmentX(BaseSegment):
 
     def to_span(self) -> Span:
         return self.orig_segment.to_span()
+
+
+@dataclass
+class Alignment:
+    raw_token: str
+    word: str = field(init=False)
+    word_ipa: str = field(init=False)
+    lemma: str = field(init=False)
+    lemma_ipa: str = field(init=False)
+    word_trans: List[str] = field(init=False, default_factory=list)
+    word_trans_ipa: List[str] = field(init=False, default_factory=list)
+    lemma_trans: List[str] = field(init=False, default_factory=list)
+    lemma_trans_ipa: List[str] = field(init=False, default_factory=list)
+
+    def __post_init__(self):
+        segs = self.raw_token.split('|')
+        assert len(segs) == 8
+        self.word, self.word_ipa, self.lemma, self.lemma_ipa, word_trans, word_trans_ipa, lemma_trans, lemma_trans_ipa = segs
+        self.word_trans = word_trans.split(',')
+        self.word_trans_ipa = word_trans_ipa.split(',')
+        self.lemma_trans = lemma_trans.split(',')
+        self.lemma_trans_ipa = lemma_trans_ipa.split(',')
+
+
+class AlignedIpaSegment(SegmentX):
+
+    def __init__(self, raw_token: str):
+        almt = Alignment(raw_token)
+
+        if almt.word_trans_ipa or almt.lemma_trans_ipa:
+            orig_raw_token = almt.word_ipa
+            aligned_raw_tokens = set(almt.word_trans_ipa.split(',') + almt.lemma_trans_ipa.split(','))
+        else:
+            # If there is no aligned information, then this token is essentially noise.
+            orig_raw_token = '#' + almt.word_ipa
+            aligned_raw_tokens = list()
+        self.orig_segment = Segment(orig_raw_token)
+        self.aligned_segments = [Segment(raw) for raw in aligned_raw_tokens]
+
+    def __str__(self):
+        ret = str(self.orig_segment)
+        if self.aligned_segments:
+            ret += '|' + ','.join(str(segment) for segment in self.aligned_segments)
+        return ret
 
 
 class BaseSpecialSegment(BaseSegment):

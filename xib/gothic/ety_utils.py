@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from heapq import heapify, heappop
@@ -11,7 +11,8 @@ from typing import (Any, Dict, Iterable, List, NewType, Optional, Sequence,
 import pandas as pd
 
 from dev_misc.utils import cached_property
-from xib.gothic.core import Lang, MergedToken, Token, get_token, process_table
+from xib.gothic.core import (InvalidString, Lang, MergedToken, Token,
+                             get_token, process_table)
 
 IDG_PROPAGATE = False
 
@@ -183,6 +184,18 @@ class PrefixPath:
             if ps.prefix:
                 return False
         return True
+
+
+class PrefixInOtherLanguage(Exception):
+    """Raise this error when a prefix is found in some other language rather than the reference language."""
+
+
+class UncontiguousPrefix(Exception):
+    """Raise this error when a chain of prefixes are found but they are not contiguous."""
+
+
+class UnmatchedPrefix(Exception):
+    """Raise this error when the prefix is not matched with the token."""
 
 
 class EtymologicalGraph:
@@ -368,6 +381,109 @@ class EtymologicalGraph:
         prefixes2 = get_prefixes(path2)
 
         return prefixes1, prefixes2
+
+    def translate(self, token: Token, lang: Lang) -> Set[str]:
+        cog_ret = self.get_cognates_in(token, lang)
+        ret = list()
+        src_lang = token.lang
+
+        def reconstruct(pp, src, tgt, side):
+            ref_lang = src.lang
+
+            # Avoid having prefixes in any other language.
+            for ps in pp.path:
+                if ps.prefix and (ps.src_lang != ref_lang or ps.tgt_lang != ref_lang):
+                    raise PrefixInOtherLanguage(
+                        f'Reference lang is {ref_lang}, but got u -> v ({ps.src_lang} -> {ps.tgt_lang}) with prefix {ps.prefix!r}.')
+
+            # The chain of prefixes can only be a contiguous chain from 0-th position.
+            pos = list()
+            for i, ps in enumerate(pp.path):
+                if ps.prefix:
+                    pos.append(i)
+            for i, p in enumerate(pos):
+                if i != p:
+                    raise UncontiguousPrefix(f'Uncontiguos chain of prefixes are found in {pp}.')
+
+            translation = ''
+            text = str(src) if side == 'src' else str(tgt)
+            for p in pos:
+                prefix = pp.path[p].prefix
+                if text.startswith(str(prefix)):
+                    text = text[len(prefix):]
+                    translation += f'[{"?" * len(prefix)}]' if side == 'src' else f'[{prefix}]'
+                else:
+                    raise UnmatchedPrefix(f'Prefix {prefix!r} not matched with the token {token!r}.')
+
+            translation += str(cognate)
+
+            return translation
+
+        def safe_add_translation(pp, src, tgt, side):
+            try:
+                translation = reconstruct(pp, src, tgt, side)
+                ret.append(translation)
+            except (PrefixInOtherLanguage, UncontiguousPrefix, UnmatchedPrefix) as e:
+                pass
+
+        for cog_set, cognates in cog_ret:
+            for cognate in cognates:
+                pref1, pref2 = self.get_prefixes_along_paths(token, cognate, cog_set)
+                # We don't know how to deal with them yet.
+                if not pref1.is_empty and not pref2.is_empty:
+                    #                 logging.warning(f'Skip {token!r} and {cognate!r} since both sides have prefixes.\n{pref1} and {pref2}')
+                    continue
+                if not pref1.is_empty:
+                    safe_add_translation(pref1, token, cognate, 'src')
+                elif not pref2.is_empty:
+                    safe_add_translation(pref2, token, cognate, 'tgt')
+                else:
+                    ret.append(str(cognate))
+        return set(ret)
+
+    def translate_word_lemma_pair(self, word: str, lemma: str, src_lang: Lang, tgt_lang: Lang) -> Set[str]:
+        try:
+            word_translations = self.translate(get_token(word, src_lang), tgt_lang)
+        except InvalidString:
+            return set()
+        lemma_translations = self.translate(get_token(lemma.replace('-', ''), src_lang), tgt_lang)
+        stem_translations = set()
+        if '-' in lemma:
+            prefix, *stem = lemma.split('-')
+            stem = ''.join(stem)
+            try:
+                stem_translations = self.translate(get_token(stem, src_lang), tgt_lang)
+                stem_translations = {f'[{"?" * len(prefix)}]' + str(cog) for cog in stem_translations}
+            except InvalidString:
+                pass
+        return word_translations | lemma_translations | stem_translations
+
+    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang):
+        word_cnt = 0
+        word_covered = 0
+        vocab = set()
+        vocab_covered = 0
+        with open(in_path, 'r', encoding='utf8') as fin, open(out_path, 'w', encoding='utf8') as fout:
+            for line in fin:
+                line = line.strip()
+                if line:
+                    word, lemma = line.split('\t')[1:3]
+                    word_cnt += 1
+
+                    translations = self.translate_word_lemma_pair(word, lemma, src_lang, tgt_lang)
+                    if translations:
+                        word_covered += 1
+                    if word not in vocab:
+                        vocab.add(word)
+                        if translations:
+                            vocab_covered += 1
+                    fout.write('|'.join([word] + list(translations)) + ' ')
+                else:
+                    fout.write('\n')
+        word_coverage = word_covered / word_cnt
+        vocab_coverage = vocab_covered / len(vocab)
+        print(f'{word_covered} / {word_cnt} = {word_coverage:.3f}')
+        print(f'{vocab_covered} / {len(vocab)} = {vocab_coverage:.3f}')
 
 
 def get_ety_dict(table, column: str, name: str):

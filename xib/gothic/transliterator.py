@@ -1,5 +1,5 @@
 import subprocess
-from abc import ABC, abstractmethod
+from abc import ABC, ABCMeta, abstractmethod
 from typing import Callable, ClassVar, Dict, Optional, Sequence, Set
 
 import pandas as pd
@@ -9,9 +9,33 @@ from dev_misc.utils import Singleton
 from xib.gothic.core import _get_sub_func
 
 
-class BaseTransliterator(ABC):
+class _CacheMetaclass(type):
 
-    _cache: ClassVar[Dict[str, Set[IPAString]]] = dict()
+    def __new__(cls, name, bases, attrs):
+        # NOTE(j_luo) Create a cache for each subclass.
+        attrs['_cache'] = dict()
+        return type.__new__(cls, name, bases, attrs)
+
+
+class ABCWithCacheMetaclass(ABCMeta, _CacheMetaclass):
+
+    def __new__(cls, name, bases, attrs):
+        obj = _CacheMetaclass.__new__(cls, name, bases, attrs)  # pylint: disable=too-many-function-args
+        name = obj.__name__
+        bases = tuple(obj.mro())
+        attrs = obj.__dict__.copy()
+        obj = ABCMeta.__new__(cls, name, bases, attrs)
+        return obj
+
+    def __init__(cls, name, bases, attrs):
+        # call both parents
+        ABCMeta.__init__(cls, name, bases, attrs)
+        _CacheMetaclass.__init__(cls, name, bases, attrs)
+
+
+class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
+
+    _cache: ClassVar[Dict[str, Set[IPAString]]]
 
     @abstractmethod
     def _transliterate(self, grapheme: str) -> Sequence[str]: ...

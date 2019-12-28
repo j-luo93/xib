@@ -501,7 +501,7 @@ class EtymologicalGraph:
                         wt_ipa = ','.join(map(str, union_all(transliterator.transliterate(_wt, tgt_lang)
                                                              for _wt in word_translations)))
                         lt_ipa = ','.join(map(str, union_all(transliterator.transliterate(_lt, tgt_lang)
-                                                             for _lt in word_translations)))
+                                                             for _lt in lemma_translations)))
                         w_ipa = ','.join(map(str, transliterator.transliterate(w, src_lang)))
                         l_ipa = ','.join(map(str, transliterator.transliterate(l, src_lang)))
                         fout.write('|'.join([w, w_ipa, l, l_ipa, wt, wt_ipa, lt, lt_ipa]) + ' ')

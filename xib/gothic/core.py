@@ -458,6 +458,20 @@ _deaccent_map = {
 }
 _deaccent_sub = _get_sub_func(_deaccent_map)
 
+_germ_deaccent_map = {
+    'ä': 'a',
+    'ê': 'e',
+    'ú': 'u',
+    'ā': 'a',
+    'ē': 'e',
+    'ī': 'i',
+    'ō': 'o',
+    'ū': 'u',
+    'ǣ': 'æ',
+    'ß': 's'  # HACK(j_luo)
+}
+_germ_deaccent_sub = _get_sub_func(_germ_deaccent_map)
+
 
 def _canonicalize(s: str, lang: Lang) -> str:
     """Further canonicalize the string.
@@ -471,6 +485,8 @@ def _canonicalize(s: str, lang: Lang) -> str:
     # De-accent for Gothic.
     if lang == 'got':
         s = _deaccent_sub(s)
+    elif lang == 'germ':  # HACK(j_luo)
+        s = _germ_deaccent_sub(s)
     assert len(s) == orig_len
     return s
 
@@ -479,7 +495,7 @@ class InvalidString(Exception):
     """Invalid string."""
 
 
-_to_check = {'_', '.', '·', ' '}
+_to_check = {'_', '.', '·', ' ', ':', '/'}
 
 
 def _validate(s: str):

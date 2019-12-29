@@ -34,16 +34,42 @@ class ABCWithCacheMetaclass(ABCMeta, _CacheMetaclass):
         _CacheMetaclass.__init__(cls, name, bases, attrs)
 
 
+_reverse_GVS = {
+    'aɪ': 'iː',
+    'iː': 'eː',
+    'eɪ': 'aː',
+    'aʊ': 'uː',
+    'uː': 'oː',
+    'oʊ': 'ɔː'
+}
+
+
 class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
 
     _cache: ClassVar[Dict[str, Set[IPAString]]]
 
+    def __init__(self, postprocess_mode: str = 'none'):
+        assert postprocess_mode in ['none', 'gvs', 'redup']
+        self.postprocess_mode = postprocess_mode
+
     @abstractmethod
     def _transliterate(self, grapheme: str) -> Sequence[str]: ...
 
-    def postprocess(self, ipa: IPAString) -> IPAString:
-        """Replace long vowels with two short ones."""
-        return IPAString(unicode_string=re.sub(r'(.)ː', r'\1\1', str(ipa)))
+    def postprocess(self, phoneme: str, prefix: str = '') -> str:
+        """Postprocess the phoneme."""
+        # Standardize phonemes.
+        ipa = IPAString(unicode_string=phoneme)
+        phoneme = str(ipa)
+
+        if self.postprocess_mode == 'none':
+            return prefix + phoneme
+
+        if self.postprocess_mode == 'redup':
+            return prefix + re.sub(r'(.)ː', r'\1\1', phoneme)
+
+        for k, v in _reverse_GVS.items():
+            phoneme = phoneme.replace(k, v)
+        return prefix + phoneme
 
     def transliterate(self, grapheme: str) -> Set[IPAString]:
         cls = type(self)
@@ -53,7 +79,18 @@ class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
         phonemes = self._transliterate(grapheme)
         ret = set()
         for phoneme in phonemes:
-            ret.add(self.postprocess(IPAString(unicode_string=phoneme)))
+            prefix = ''
+            if '?' in phoneme:
+                match = re.match(r'^(\[[\?\]\[]+\])(.+)$', phoneme)
+                prefix = match.group(1)
+                phoneme = match.group(2)
+            try:
+                ret.add(self.postprocess(phoneme, prefix=prefix))
+            except ValueError:
+                raise ValueError(f'IPAString creation issue for phoneme {phoneme}.')
+                import time;time.sleep(1)
+
+            # ret.add(IPAString(unicode_string=phoneme))
 
         cls._cache[grapheme] = ret
         return ret
@@ -150,13 +187,16 @@ _got2ipa_map = {
     'ƕ': 'hʷ'
 }
 _ipa_dict = {
-    'got': _got2ipa_map
+    'got': _got2ipa_map,
+    'germ': _got2ipa_map  # HACK(j_luo)
 }
 
 
 class RuleBasedTransliterator(BaseTransliterator):
 
-    def __init__(self, lang: str):
+    def __init__(self, lang: str, postprocess_mode: str = 'none'):
+        # HACK(j_luo) Some issues with using super() here due to mixin metaclasses.
+        BaseTransliterator.__init__(self, postprocess_mode=postprocess_mode)
         self._sub_func = _get_sub_func(_ipa_dict[lang])
 
     def _transliterate(self, grapheme: str) -> Sequence[str]:
@@ -173,7 +213,8 @@ class EntryNotFound(BaseTransliteratorError):
 
 class DictionaryTransliterator(BaseTransliterator):
 
-    def __init__(self, csv_path: str, converter: Optional[Callable] = None):
+    def __init__(self, csv_path: str, converter: Optional[Callable] = None, postprocess_mode: str = 'none'):
+        BaseTransliterator.__init__(self, postprocess_mode=postprocess_mode)
         df = pd.read_csv(csv_path)
         df = df.dropna()
         df['headword'] = df['headword'].str.lower()
@@ -190,11 +231,13 @@ class DictionaryTransliterator(BaseTransliterator):
 
 class SimpleTransliteratorFactory(Singleton):
 
-    def get_transliterator(self, kind: str, csv_path: Optional[str] = None, converter: Optional[Callable] = None):
+    def get_transliterator(self, kind: str, postprocess_mode: str = 'none', lang: Optional[str] = None, csv_path: Optional[str] = None, converter: Optional[Callable] = None):
         if kind == 'phonemizer':
-            obj = PhonemizerTransliterator()
+            obj = PhonemizerTransliterator(postprocess_mode=postprocess_mode)
         elif kind == 'dictionary':
-            obj = DictionaryTransliterator(csv_path, converter=converter)
+            obj = DictionaryTransliterator(csv_path, converter=converter, postprocess_mode=postprocess_mode)
+        elif kind == 'rule':
+            obj = RuleBasedTransliterator(lang, postprocess_mode=postprocess_mode)
         else:
             raise ValueError(f'Unrecognized kind {kind}.')
         return obj
@@ -213,7 +256,7 @@ class TransliteratorWithBackoff(BaseTransliterator):
             return self.backoff._transliterate(grapheme)
 
 
-class MultilingualTranliterator:
+class MultilingualTransliterator:
 
     def __init__(self):
         self._transliterators: Dict[str, BaseTransliterator] = dict()

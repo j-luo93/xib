@@ -227,6 +227,15 @@ class GotDeIpaAligned(GotDeIpaMatched):
         self.data_path: str = './data/got-nhd.shuf.cog.200'
         self.vocab_path: str = './data/nhd.matched.words'
 
+
+@reg
+class GotDeIpaAlignedReverseGvs(GotDeIpaMatched):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/got-nhd-reverse_GVS.shuf.cog.200'
+        self.vocab_path: str = './data/nhd-reverse_GVS.matched.words'
+
 # @reg
 # class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):
 #     task: str = 'transfer'

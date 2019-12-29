@@ -443,10 +443,14 @@ class Alignment:
         segs = self.raw_token.split('|')
         assert len(segs) == 8
         self.word, self.word_ipa, self.lemma, self.lemma_ipa, word_trans, word_trans_ipa, lemma_trans, lemma_trans_ipa = segs
-        self.word_trans = word_trans.split(',')
-        self.word_trans_ipa = word_trans_ipa.split(',')
-        self.lemma_trans = lemma_trans.split(',')
-        self.lemma_trans_ipa = lemma_trans_ipa.split(',')
+        if word_trans:
+            self.word_trans = word_trans.split(',')
+        if word_trans_ipa:
+            self.word_trans_ipa = word_trans_ipa.split(',')
+        if lemma_trans:
+            self.lemma_trans = lemma_trans.split(',')
+        if lemma_trans_ipa:
+            self.lemma_trans_ipa = lemma_trans_ipa.split(',')
 
 
 class AlignedIpaSegment(SegmentX):

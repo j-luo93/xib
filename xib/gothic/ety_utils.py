@@ -13,7 +13,7 @@ import pandas as pd
 from dev_misc.utils import cached_property
 from xib.gothic.core import (InvalidString, Lang, MergedToken, Token,
                              get_token, process_table)
-from xib.gothic.transliterator import MultilingualTranliterator
+from xib.gothic.transliterator import MultilingualTransliterator
 
 IDG_PROPAGATE = False
 
@@ -416,7 +416,7 @@ class EtymologicalGraph:
                 else:
                     raise UnmatchedPrefix(f'Prefix {prefix!r} not matched with the token {token!r}.')
 
-            translation += str(cognate)
+            translation += str(tgt)
 
             return translation
 
@@ -459,7 +459,7 @@ class EtymologicalGraph:
                 pass
         return word_translations, lemma_translations | stem_translations
 
-    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transliterator: MultilingualTranliterator):
+    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transliterator: MultilingualTransliterator):
         word_cnt = 0
         word_covered = 0
         vocab = set()
@@ -477,6 +477,7 @@ class EtymologicalGraph:
                 ret.update(s)
             return ret
 
+        num_errors = 0
         with open(in_path, 'r', encoding='utf8') as fin, open(out_path, 'w', encoding='utf8') as fout:
             for line in fin:
                 line = line.strip()
@@ -506,13 +507,16 @@ class EtymologicalGraph:
                         l_ipa = ','.join(map(str, transliterator.transliterate(l, src_lang)))
                         fout.write('|'.join([w, w_ipa, l, l_ipa, wt, wt_ipa, lt, lt_ipa]) + ' ')
                     except ValueError as e:
-                        logging.exception(e)
+                        num_errors += 1
+                        pass
+                        # logging.exception(e)
                 else:
                     fout.write('\n')
         word_coverage = word_covered / word_cnt
         vocab_coverage = vocab_covered / len(vocab)
         print(f'{word_covered} / {word_cnt} = {word_coverage:.3f}')
         print(f'{vocab_covered} / {len(vocab)} = {vocab_coverage:.3f}')
+        print(f"Number of errors: {num_errors}.")
 
 
 def get_ety_dict(table, column: str, name: str):

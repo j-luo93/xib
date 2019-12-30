@@ -11,9 +11,9 @@ from typing import (Any, Dict, Iterable, List, NewType, Optional, Sequence,
 import pandas as pd
 
 from dev_misc.utils import cached_property
+from xib.aligned_corpus.transcriber import MultilingualTranscriber
 from xib.gothic.core import (InvalidString, Lang, MergedToken, Token,
                              get_token, process_table)
-from xib.gothic.transliterator import MultilingualTransliterator
 
 IDG_PROPAGATE = False
 
@@ -459,7 +459,7 @@ class EtymologicalGraph:
                 pass
         return word_translations, lemma_translations | stem_translations
 
-    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transliterator: MultilingualTransliterator):
+    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transcriber: MultilingualTranscriber):
         word_cnt = 0
         word_covered = 0
         vocab = set()
@@ -499,12 +499,12 @@ class EtymologicalGraph:
                     l = safe_get_standardize_str(lemma)
 
                     try:
-                        wt_ipa = ','.join(map(str, union_all(transliterator.transliterate(_wt, tgt_lang)
+                        wt_ipa = ','.join(map(str, union_all(transcriber.transcribe(_wt, tgt_lang)
                                                              for _wt in word_translations)))
-                        lt_ipa = ','.join(map(str, union_all(transliterator.transliterate(_lt, tgt_lang)
+                        lt_ipa = ','.join(map(str, union_all(transcriber.transcribe(_lt, tgt_lang)
                                                              for _lt in lemma_translations)))
-                        w_ipa = ','.join(map(str, transliterator.transliterate(w, src_lang)))
-                        l_ipa = ','.join(map(str, transliterator.transliterate(l, src_lang)))
+                        w_ipa = ','.join(map(str, transcriber.transcribe(w, src_lang)))
+                        l_ipa = ','.join(map(str, transcriber.transcribe(l, src_lang)))
                         fout.write('|'.join([w, w_ipa, l, l_ipa, wt, wt_ipa, lt, lt_ipa]) + ' ')
                     except ValueError as e:
                         num_errors += 1

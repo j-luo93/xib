@@ -44,7 +44,7 @@ _reverse_GVS = {
 }
 
 
-class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
+class BaseTranscriber(metaclass=ABCWithCacheMetaclass):
 
     _cache: ClassVar[Dict[str, Set[IPAString]]]
 
@@ -53,7 +53,7 @@ class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
         self.postprocess_mode = postprocess_mode
 
     @abstractmethod
-    def _transliterate(self, grapheme: str) -> Sequence[str]: ...
+    def _transcribe(self, grapheme: str) -> Sequence[str]: ...
 
     def postprocess(self, phoneme: str, prefix: str = '') -> str:
         """Postprocess the phoneme."""
@@ -71,12 +71,12 @@ class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
             phoneme = phoneme.replace(k, v)
         return prefix + phoneme
 
-    def transliterate(self, grapheme: str) -> Set[IPAString]:
+    def transcribe(self, grapheme: str) -> Set[IPAString]:
         cls = type(self)
         if grapheme in cls._cache:
             return cls._cache[grapheme]
 
-        phonemes = self._transliterate(grapheme)
+        phonemes = self._transcribe(grapheme)
         ret = set()
         for phoneme in phonemes:
             prefix = ''
@@ -88,7 +88,7 @@ class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
                 ret.add(self.postprocess(phoneme, prefix=prefix))
             except ValueError:
                 raise ValueError(f'IPAString creation issue for phoneme {phoneme}.')
-                import time;time.sleep(1)
+                import time; time.sleep(1)
 
             # ret.add(IPAString(unicode_string=phoneme))
 
@@ -96,9 +96,9 @@ class BaseTransliterator(metaclass=ABCWithCacheMetaclass):
         return ret
 
 
-class PhonemizerTransliterator(BaseTransliterator):
+class PhonemizerTranscriber(BaseTranscriber):
 
-    def _transliterate(self, grapheme: str) -> Sequence[str]:
+    def _transcribe(self, grapheme: str) -> Sequence[str]:
         out = subprocess.run(f'echo "{grapheme}" | phonemize -l de', shell=True,
                              encoding='utf8', capture_output=True, check=True)
         return [out.stdout.strip()]
@@ -192,29 +192,29 @@ _ipa_dict = {
 }
 
 
-class RuleBasedTransliterator(BaseTransliterator):
+class RuleBasedTranscriber(BaseTranscriber):
 
     def __init__(self, lang: str, postprocess_mode: str = 'none'):
         # HACK(j_luo) Some issues with using super() here due to mixin metaclasses.
-        BaseTransliterator.__init__(self, postprocess_mode=postprocess_mode)
+        BaseTranscriber.__init__(self, postprocess_mode=postprocess_mode)
         self._sub_func = _get_sub_func(_ipa_dict[lang])
 
-    def _transliterate(self, grapheme: str) -> Sequence[str]:
+    def _transcribe(self, grapheme: str) -> Sequence[str]:
         return [self._sub_func(grapheme)]
 
 
-class BaseTransliteratorError(Exception):
+class BaseTranscriberError(Exception):
     """Base exception for all transliteration-related errors."""
 
 
-class EntryNotFound(BaseTransliteratorError):
+class EntryNotFound(BaseTranscriberError):
     """Raise this error if an entry is not found."""
 
 
-class DictionaryTransliterator(BaseTransliterator):
+class DictionaryTranscriber(BaseTranscriber):
 
     def __init__(self, csv_path: str, converter: Optional[Callable] = None, postprocess_mode: str = 'none'):
-        BaseTransliterator.__init__(self, postprocess_mode=postprocess_mode)
+        BaseTranscriber.__init__(self, postprocess_mode=postprocess_mode)
         df = pd.read_csv(csv_path)
         df = df.dropna()
         df['headword'] = df['headword'].str.lower()
@@ -222,50 +222,50 @@ class DictionaryTransliterator(BaseTransliterator):
             df['pronunciation'] = df['pronunciation'].apply(converter)
         self.data = pd.pivot_table(df, values='pronunciation', index='headword', aggfunc=set)
 
-    def _transliterate(self, grapheme: str) -> Sequence[str]:
+    def _transcribe(self, grapheme: str) -> Sequence[str]:
         try:
             return self.data.loc[grapheme].values[0]
         except KeyError:
             raise EntryNotFound(f'Entry not found for {grapheme}.')
 
 
-class SimpleTransliteratorFactory(Singleton):
+class SimpleTranscriberFactory(Singleton):
 
-    def get_transliterator(self, kind: str, postprocess_mode: str = 'none', lang: Optional[str] = None, csv_path: Optional[str] = None, converter: Optional[Callable] = None):
+    def get_transcriber(self, kind: str, postprocess_mode: str = 'none', lang: Optional[str] = None, csv_path: Optional[str] = None, converter: Optional[Callable] = None):
         if kind == 'phonemizer':
-            obj = PhonemizerTransliterator(postprocess_mode=postprocess_mode)
+            obj = PhonemizerTranscriber(postprocess_mode=postprocess_mode)
         elif kind == 'dictionary':
-            obj = DictionaryTransliterator(csv_path, converter=converter, postprocess_mode=postprocess_mode)
+            obj = DictionaryTranscriber(csv_path, converter=converter, postprocess_mode=postprocess_mode)
         elif kind == 'rule':
-            obj = RuleBasedTransliterator(lang, postprocess_mode=postprocess_mode)
+            obj = RuleBasedTranscriber(lang, postprocess_mode=postprocess_mode)
         else:
             raise ValueError(f'Unrecognized kind {kind}.')
         return obj
 
 
-class TransliteratorWithBackoff(BaseTransliterator):
+class TranscriberWithBackoff(BaseTranscriber):
 
-    def __init__(self, main: BaseTransliterator, backoff: BaseTransliterator):
+    def __init__(self, main: BaseTranscriber, backoff: BaseTranscriber):
         self.main = main
         self.backoff = backoff
 
-    def _transliterate(self, grapheme: str) -> Sequence[str]:
+    def _transcribe(self, grapheme: str) -> Sequence[str]:
         try:
-            return self.main._transliterate(grapheme)
-        except BaseTransliteratorError:
-            return self.backoff._transliterate(grapheme)
+            return self.main._transcribe(grapheme)
+        except BaseTranscriberError:
+            return self.backoff._transcribe(grapheme)
 
 
-class MultilingualTransliterator:
+class MultilingualTranscriber:
 
     def __init__(self):
-        self._transliterators: Dict[str, BaseTransliterator] = dict()
+        self._transcribers: Dict[str, BaseTranscriber] = dict()
 
-    def register_lang(self, lang: str, transliterator: BaseTransliterator):
-        if lang in self._transliterators:
-            raise ValueError(f'Language {lang} already has a transliterator.')
-        self._transliterators[lang] = transliterator
+    def register_lang(self, lang: str, transcriber: BaseTranscriber):
+        if lang in self._transcribers:
+            raise ValueError(f'Language {lang} already has a transcriber.')
+        self._transcribers[lang] = transcriber
 
-    def transliterate(self, grapheme: str, lang: str) -> Set[IPAString]:
-        transliterator = self._transliterators[lang]
-        return transliterator.transliterate(grapheme)
+    def transcribe(self, grapheme: str, lang: str) -> Set[IPAString]:
+        transcriber = self._transcribers[lang]
+        return transcriber.transcribe(grapheme)

@@ -23,6 +23,11 @@ class Word:
     def __len__(self):
         return len(self.form)
 
+    @property
+    def main_ipa(self) -> IpaSequence:
+        # HACK(j_luo) Only take one of them.
+        return list(self.ipa)[0]
+
 
 _Signature = Tuple[str, str]
 
@@ -68,14 +73,14 @@ class AlignedWord:
         return cls(lost_word, known_word=known_word)
 
 
-Text = TypeVar('Text', str, IpaSequence)
+Content = TypeVar('Content', str, IpaSequence)
 
 
 @dataclass
 class Segment:
     start: int
     end: int
-    aligned_text: Text
+    aligned_content: Content
 
 
 class OverlappingAnnotation(Exception):
@@ -84,19 +89,19 @@ class OverlappingAnnotation(Exception):
 
 @dataclass
 class UnsegmentedSentence(SequenceABC):
-    text: Text
+    content: Content
     is_ipa: bool
     segments: List[Segment] = field(default_factory=list)
     annotated: Set[int] = field(default_factory=set, repr=False)
 
     def __len__(self):
-        return len(self.text)
+        return len(self.content)
 
-    def __getitem__(self, idx: int) -> Text:
-        return self.text[idx]
+    def __getitem__(self, idx: int) -> Content:
+        return self.content[idx]
 
-    def annotate(self, start: int, end: int, aligned_text: Text):
-        segment = Segment(start, end, aligned_text)
+    def annotate(self, start: int, end: int, aligned_content: Content):
+        segment = Segment(start, end, aligned_content)
         idx_set = set(range(start, end + 1))
         if idx_set & self.annotated:
             raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
@@ -127,18 +132,18 @@ class AlignedSentence(SequenceABC):
         check_explicit_arg(is_ipa, annotated)
         if is_ipa:
             warnings.warn('Only one of the ipa sequences is used.')
-            text = [str(list(word.lost_word.ipa)[0]) for word in self.words]
+            content = [str(list(word.lost_word.ipa)[0]) for word in self.words]
         else:
-            text = [word.lost_word.form for word in self.words]
-        text = ''.join(text)
-        uss = UnsegmentedSentence(text, is_ipa)
+            content = [word.lost_word.form for word in self.words]
+        content = ''.join(content)
+        uss = UnsegmentedSentence(content, is_ipa)
         if annotated:
             offset = 0
             for word in self.words:
                 lwl = len(word.lost_word)
                 if word.known_word is not None:
-                    aligned_text = word.known_word.ipa if is_ipa else word.known_word.form
-                    uss.annotate(offset, offset + lwl - 1, aligned_text)
+                    aligned_content = word.known_word.ipa if is_ipa else word.known_word.form
+                    uss.annotate(offset, offset + lwl - 1, aligned_content)
                 offset += len(word.lost_word)
 
         return uss

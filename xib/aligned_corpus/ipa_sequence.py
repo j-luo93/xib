@@ -5,7 +5,8 @@ from typing import ClassVar, Dict, List, Optional
 
 from ipapy.ipastring import IPAString
 
-from dev_misc.utils import concat_lists
+from dev_misc.devlib import LT
+from dev_misc.utils import cached_property, concat_lists
 from xib.ipa.process import Segment
 
 
@@ -13,22 +14,22 @@ class IpaSequence(SequenceABC):
 
     _cache: ClassVar[Dict[str, Segment]] = dict()
 
-    def __init__(self, raw_string: Optional[str] = None, data: Optional[List[IPAString]] = None):
-        if data is not None:
-            self.data = data
-        else:
-            seg = self._get_segment(raw_string)
-            self.data: List[IPAString] = [IPAString(ipa_lst) for ipa_lst in seg.merged_ipa]
+    def __init__(self, raw_string: str):
+        self._seg = self._get_segment(raw_string)
+        self.data: List[IPAString] = [IPAString(ipa_lst) for ipa_lst in self._seg.merged_ipa]
         self._canonical_string = ''.join(map(str, concat_lists(self.data)))
 
     def save(self) -> str:
         """Save as a loadable string."""
-        return '-'.join(map(str, self.data))
+        return self._canonical_string
+
+    @property
+    def feat_matrix(self) -> LT:
+        return self._seg.feat_matrix
 
     @classmethod
-    def from_saved_string(self, saved_string: str) -> IpaSequence:
-        data = [IPAString(unicode_string=x) for x in saved_string.split('-')]
-        return IpaSequence(data=data)
+    def from_saved_string(cls, saved_string: str) -> IpaSequence:
+        return cls(saved_string)
 
     def _get_segment(self, raw_string: str) -> Segment:
         cls = type(self)

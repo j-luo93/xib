@@ -1,3 +1,4 @@
+from dev_misc.trainlib import has_gpus
 from dataclasses import field
 from typing import Any, Dict, Tuple
 
@@ -177,6 +178,33 @@ class CbowIpaBatch(IpaBatch):
         self.target_weight = self.target_weight.refine_names(self.batch_name, 'feat_group')
 
         BaseBatch._post_init_helper(self)
+
+
+total = Index.total_indices()
+_g2f = torch.LongTensor(total)
+indices = [Index.get_feature(i).value for i in range(total)]
+for index in indices:
+    _g2f[index.g_idx] = index.f_idx
+
+
+DenseFeatureMatrix = Dict[Category, torch.FloatTensor]
+
+
+def convert_to_dense(feat_matrix: LT) -> DenseFeatureMatrix:
+    names = feat_matrix.names
+    bs = feat_matrix.size('batch')
+    ml = feat_matrix.size('length')
+    fm = _g2f[feat_matrix.rename(None)].refine_names(*names)
+    dfms = dict()
+    for cat in Category:
+        e = get_enum_by_cat(cat)
+        dfm_idx = fm[..., cat.value]
+        dfm = get_zeros(bs, ml, len(e), cpu=True)
+        dfm = dfm.scatter(2, dfm_idx.rename(None).unsqueeze(dim=-1), 1.0)
+        dfms[cat] = dfm.refine_names('batch', 'length', f'{cat.name}_feat')
+    if has_gpus():
+        dfms = {k: v.cuda() for k, v in dfms.items()}
+    return dfms
 
 
 @batch_class

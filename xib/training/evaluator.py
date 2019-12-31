@@ -18,6 +18,8 @@ from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from dev_misc.trainlib.tracker.tracker import Tracker
 from dev_misc.utils import deprecated, pbar
+from xib.aligned_corpus.corpus import UnsegmentedSentence
+from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
 from xib.data_loader import (ContinuousIpaBatch, ContinuousTextDataLoader,
                              DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
@@ -244,9 +246,6 @@ class SearchSolverEvaluator(BaseEvaluator):
 
 class ExtractEvaluator(BaseEvaluator):
 
-    add_argument('matched_threshold', default=0.99, dtype=float,
-                 msg='Value of threshold to determine whether two words are matched.')
-
     def __init__(self, model: ExtractModel, dl: ContinuousTextDataLoader):
         self.model = model
         self.dl = dl
@@ -311,3 +310,91 @@ class ExtractEvaluator(BaseEvaluator):
                 matched_segments.append('')
             segmentations.append(Segmentation(spans))
         return segmentations, matched_segments
+
+
+def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int) -> Metrics:
+    ret = Metrics()
+    precision = num_match / (num_pred + 1e-8)
+    recall = num_match / (num_gold + 1e-8)
+    f1 = 2 * precision * recall / (precision + recall + 1e-8)
+    ret += Metric(f'prf_total_correct', num_gold, report_mean=False)
+    ret += Metric(f'prf_exact_span_matches', num_match, report_mean=False)
+    ret += Metric(f'prf_total_pred', num_pred, report_mean=False)
+    ret += Metric(f'prf_exact_span_precision', precision, report_mean=False)
+    ret += Metric(f'prf_exact_span_recall', recall, report_mean=False)
+    ret += Metric(f'prf_exact_span_f1', f1, report_mean=False)
+    return ret
+
+
+class AlignedExtractEvaluator(BaseEvaluator):
+
+    def __init__(self, model: ExtractModel, dl: AlignedDataLoader):
+        self.model = model
+        self.dl = dl
+        self.analyzer = ExtractAnalyzer()
+
+    def evaluate(self, stage: str) -> Metrics:
+        total_num_samples = 0
+        analyzed_metrics = Metrics()
+        annotations: List[Tuple[UnsegmentedSentence, UnsegmentedSentence]] = list()
+        for batch in pbar(self.dl, desc='eval_batch'):
+
+            if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
+                logging.imp(
+                    f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
+                break
+
+            ret = self.model(batch)
+            analyzed_metrics += self.analyzer.analyze(ret, batch)
+            total_num_samples += batch.batch_size
+            annotations.extend(self._get_annotations(ret, batch))
+
+        # Write to file.
+        data = list()
+        for gold, pred in annotations:
+            g_seg_str = ';'.join(map(str, gold.segments))
+            p_seg_str = ';'.join(map(str, pred.segments))
+            data.append((gold.content, g_seg_str, p_seg_str))
+        df = pd.DataFrame(data, columns=['content', 'gold', 'predicted'])
+        out_path = g.log_dir / 'predictions' / f'aligned.{stage}.tsv'
+        out_path.parent.mkdir(exist_ok=True, parents=True)
+        df.to_csv(out_path, index=None, sep='\t')
+
+        # Get P/R/F scores.
+        num_pred = 0
+        num_gold = 0
+        exact_match = 0
+        for gold, pred in annotations:
+            num_pred += len(pred.segments)
+            num_gold += len(gold.segments)
+            for p_seg in pred.segments:
+                for g_seg in gold.segments:
+                    if p_seg.is_same_span(g_seg):
+                        exact_match += 1
+                        break
+
+        prf_scores = _get_prf_metrics(num_pred, num_gold, exact_match)
+        return analyzed_metrics + prf_scores
+
+    def _get_annotations(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[Tuple[UnsegmentedSentence, UnsegmentedSentence]]:
+        # Get the best matched nll.
+        start = model_ret.start
+        end = model_ret.end
+        bmv = model_ret.best_matched_vocab
+        bmnll = -model_ret.best_matched_ll
+        matched = bmnll < self.model.threshold
+
+        start = start.cpu().numpy()
+        end = end.cpu().numpy()
+        bmv = bmv.cpu().numpy()
+        bmw = self.model.vocab[bmv]  # Best matched word
+
+        ret = list()
+        is_ipa = g.input_format == 'ipa'
+        for sentence, s, e, m, w in zip(batch.sentences, start, end, matched, bmw):
+            gold = sentence.to_unsegmented(is_ipa=is_ipa, annotated=True)
+            pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
+            if len(sentence) >= g.min_word_length and m:
+                pred.annotate(s, e, w)
+            ret.append((gold, pred))
+        return ret

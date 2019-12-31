@@ -37,6 +37,7 @@ def split_by_max_length(lengths: Sequence[int], max_length: int) -> List[Tuple[i
 
 @dataclass
 class AlignedDatasetItem:
+    sentence: AlignedSentence
     length: int
     feat_matrix: LT
 
@@ -64,4 +65,4 @@ class AlignedDataset(Dataset):
             [word.lost_word.main_ipa.feat_matrix for word in sentence.words],
             dim=0
         )
-        return AlignedDatasetItem(length, feat_matrix)
+        return AlignedDatasetItem(sentence, length, feat_matrix)

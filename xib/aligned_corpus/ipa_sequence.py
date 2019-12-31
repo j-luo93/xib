@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence as SequenceABC
-from typing import ClassVar, Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional, Union
 
 from ipapy.ipastring import IPAString
 
@@ -42,8 +42,12 @@ class IpaSequence(SequenceABC):
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx: int) -> str:
-        return str(self.data[idx])
+    def __getitem__(self, idx: Union[int, slice]) -> IpaSequence:
+        if isinstance(idx, int):
+            raw_string = str(self.data[idx])
+        else:
+            raw_string = str(sum(self.data[idx], IPAString()))
+        return IpaSequence(raw_string)
 
     def __str__(self):
         return self._canonical_string

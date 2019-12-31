@@ -80,7 +80,14 @@ Content = TypeVar('Content', str, IpaSequence)
 class Segment:
     start: int
     end: int
+    content: Content
     aligned_content: Content
+
+    def is_same_span(self, other: Segment) -> bool:
+        return self.start == other.start and self.end == other.end
+
+    def __str__(self):
+        return f'{self.start}~{self.end}@{self.content}|{self.aligned_content}'
 
 
 class OverlappingAnnotation(Exception):
@@ -101,7 +108,7 @@ class UnsegmentedSentence(SequenceABC):
         return self.content[idx]
 
     def annotate(self, start: int, end: int, aligned_content: Content):
-        segment = Segment(start, end, aligned_content)
+        segment = Segment(start, end, self.content[start: end + 1], aligned_content)
         idx_set = set(range(start, end + 1))
         if idx_set & self.annotated:
             raise OverlappingAnnotation(f'Overlapping locations for {segment}.')

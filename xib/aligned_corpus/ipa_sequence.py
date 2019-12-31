@@ -19,17 +19,9 @@ class IpaSequence(SequenceABC):
         self.data: List[IPAString] = [IPAString(ipa_lst) for ipa_lst in self._seg.merged_ipa]
         self._canonical_string = ''.join(map(str, concat_lists(self.data)))
 
-    def save(self) -> str:
-        """Save as a loadable string."""
-        return self._canonical_string
-
     @property
     def feat_matrix(self) -> LT:
         return self._seg.feat_matrix
-
-    @classmethod
-    def from_saved_string(cls, saved_string: str) -> IpaSequence:
-        return cls(saved_string)
 
     def _get_segment(self, raw_string: str) -> Segment:
         cls = type(self)

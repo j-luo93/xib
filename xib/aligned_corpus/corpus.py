@@ -9,13 +9,14 @@ from typing import (ClassVar, Dict, FrozenSet, List, Optional, Sequence, Set,
 
 import pandas as pd
 
+from dev_misc.devlib import BaseBatch, batch_class
 from dev_misc.utils import Singleton, check_explicit_arg
 from xib.aligned_corpus.ipa_sequence import IpaSequence
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
 
 
-@dataclass(eq=True, frozen=True)
-class Word:
+@batch_class(eq=True, frozen=True)
+class Word(BaseBatch):
     """A word with form and ipa."""
     lang: str
     form: str
@@ -23,6 +24,10 @@ class Word:
 
     def __len__(self):
         return len(self.form)
+
+    def __str__(self):
+        ipa_str = ','.join(map(str, self.ipa))
+        return f'{self.lang};{self.form};{ipa_str}'
 
     @property
     def main_ipa(self) -> IpaSequence:
@@ -60,8 +65,8 @@ class WordFactory(Singleton):
         cls._cache.clear()
 
 
-@dataclass
-class AlignedWord:
+@batch_class
+class AlignedWord(BaseBatch):
     """Represent a potentially aligned word."""
     lost_token: Word
     lost_lemma: Word
@@ -131,8 +136,8 @@ class UnsegmentedSentence(SequenceABC):
         self.annotated |= idx_set
 
 
-@dataclass
-class AlignedSentence(SequenceABC):
+@batch_class
+class AlignedSentence(SequenceABC, BaseBatch):
     """Represent a sentence with potentially aligned words."""
     words: List[AlignedWord]
 
@@ -218,9 +223,9 @@ class AlignedCorpus(SequenceABC):
                 return None
             return Word(lang, form, ipa)
 
-        df['lost_word'] = df[['lost_lang', 'lost_form', 'lost_ipa']].apply(get_word, axis=1)
-        df['known_word'] = df[['known_lang', 'known_form', 'known_ipa']].apply(get_word, axis=1)
-        df['aligned_word'] = df[['lost_word', 'known_word']].apply(lambda item: AlignedWord(*item), axis=1)
+        df['lost_token'] = df[['lost_lang', 'lost_form', 'lost_ipa']].apply(get_word, axis=1)
+        df['known_token'] = df[['known_lang', 'known_form', 'known_ipa']].apply(get_word, axis=1)
+        df['aligned_word'] = df[['lost_token', 'known_token']].apply(lambda item: AlignedWord(*item), axis=1)
 
         sentences = list()
         for sentence_idx, group in df.groupby('sentence_idx', sort=True)['word_idx', 'aligned_word']:
@@ -231,27 +236,18 @@ class AlignedCorpus(SequenceABC):
 
     def to_df(self) -> pd.DataFrame:
 
-        def safe_get_word_info(word: Union[None, Word]):
-            try:
-                lang = word.lang
-                form = word.form
-                save_ipa_str = '|'.join(x.save() for x in word.ipa)
-                return lang, form, save_ipa_str
-            except AttributeError:
-                return None, None, None
-
         data = list()
         for s_idx, sentence in enumerate(self.sentences):
             for w_idx, word in enumerate(sentence.words):
-                lw = word.lost_word
-                kw = word.known_word
-                lw_info = safe_get_word_info(lw)
-                kw_info = safe_get_word_info(kw)
-                data.append((s_idx, w_idx) + lw_info + kw_info)
+                lt = word.lost_token
+                ll = word.lost_lemma
+                kts = word.known_tokens
+                kls = word.known_lemmas
+                data.append((s_idx, w_idx, str(lt), str(ll), '|'.join(map(str, kts)), '|'.join(map(str, kls))))
         df = pd.DataFrame(data,
-                          columns=['sentence_idx', 'word_idx', 'lost_lang',
-                                   'lost_form', 'lost_ipa', 'known_lang',
-                                   'known_form', 'known_ipa'])
+                          columns=['sentence_idx', 'word_idx',
+                                   'lost_token', 'lost_lemma',
+                                   'known_tokens', 'known_lemmas'])
         return df
 
     def to_tsv(self, tsv_path: str):

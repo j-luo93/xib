@@ -459,7 +459,7 @@ class EtymologicalGraph:
                 pass
         return word_translations, lemma_translations | stem_translations
 
-    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transcriber: Optional[MultilingualTranscriber]=None):
+    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transcriber: Optional[MultilingualTranscriber] = None):
         word_cnt = 0
         word_covered = 0
         vocab = set()
@@ -499,13 +499,14 @@ class EtymologicalGraph:
                     l = safe_get_standardize_str(lemma)
 
                     try:
-                        wt_ipa = ','.join(map(str, union_all(transcriber.transcribe(_wt, tgt_lang)
-                                                             for _wt in word_translations)))
-                        lt_ipa = ','.join(map(str, union_all(transcriber.transcribe(_lt, tgt_lang)
-                                                             for _lt in lemma_translations)))
-                        w_ipa = ','.join(map(str, transcriber.transcribe(w, src_lang)))
-                        l_ipa = ','.join(map(str, transcriber.transcribe(l, src_lang)))
-                        fout.write('|'.join([w, w_ipa, l, l_ipa, wt, wt_ipa, lt, lt_ipa]) + ' ')
+                        # wt_ipa = ','.join(map(str, union_all(transcriber.transcribe(_wt, tgt_lang)
+                        #                                      for _wt in word_translations)))
+                        # lt_ipa = ','.join(map(str, union_all(transcriber.transcribe(_lt, tgt_lang)
+                        #                                      for _lt in lemma_translations)))
+                        # w_ipa = ','.join(map(str, transcriber.transcribe(w, src_lang)))
+                        # l_ipa = ','.join(map(str, transcriber.transcribe(l, src_lang)))
+                        # fout.write('|'.join([w, w_ipa, l, l_ipa, wt, wt_ipa, lt, lt_ipa]) + ' ')
+                        fout.write('|'.join([w, l, wt, lt]) + ' ')
                     except ValueError as e:
                         num_errors += 1
                         pass

@@ -23,6 +23,11 @@ class IpaSequence(SequenceABC):
     def feat_matrix(self) -> LT:
         return self._seg.feat_matrix
 
+    @property
+    def cv_list(self) -> List[IpaSequence]:
+        """Return a list of consonants and vowels. This should be the same as `cv_list` of `Segment` but done in a different way."""
+        return [IpaSequence(str(ipa_str[0])) for ipa_str in self.data]
+
     def _get_segment(self, raw_string: str) -> Segment:
         cls = type(self)
         if raw_string in cls._cache:

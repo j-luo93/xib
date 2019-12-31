@@ -21,8 +21,8 @@ class TestWord(BaseTest):
         wf = WordFactory()
         mock_transcriber = MagicMock()
         mock_transcriber.transcribe.side_effect = [
-            {IPAString(unicode_string='a')},
-            {IPAString(unicode_string='an'), IPAString(unicode_string='ann')}
+            {'a'},
+            {'an', 'ann'}
         ]
         w0 = wf.get_word('en', 'a', mock_transcriber)
         w1 = wf.get_word('en', 'an', mock_transcriber)
@@ -41,7 +41,8 @@ class TestAlignedWord(BaseTest):
                 unicode_string = 'aaaa'
             else:
                 unicode_string = 'bb'
-            return {IPAString(unicode_string=unicode_string)}
+            return {unicode_string}
+
         self.mock_transcriber.transcribe.side_effect = mock_transcribe
 
     def test_basic(self):
@@ -73,7 +74,7 @@ class TestAlignedSentence(BaseTest):
     def setUp(self):
         super().setUp()
         mock_transcriber = MagicMock()
-        mock_transcriber.transcribe.return_value = {IPAString(unicode_string='abc')}
+        mock_transcriber.transcribe.return_value = {'abc'}
         self.aligned_sentence = AlignedSentence.from_raw_string(
             'en', 'de', 'good|good|gut|gut bad|bad||', mock_transcriber)
 

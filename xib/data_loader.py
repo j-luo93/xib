@@ -512,7 +512,7 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
             dl = DenseIpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer', 'extract']:
             if g.use_new_data_loader:
-                corpus = AlignedCorpus.from_tsv(g.data_path)
+                corpus = AlignedCorpus.from_tsv(g.lost_lang, g.known_lang, g.data_path)
                 dataset = AlignedDataset(corpus)
                 dl = AlignedDataLoader(dataset, task)
             else:

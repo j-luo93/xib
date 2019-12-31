@@ -13,6 +13,7 @@ from dev_misc.devlib import (BaseBatch, batch_class, get_array,
 from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
                                           drop_names, get_named_range)
 from dev_misc.utils import WithholdKeys, cached_property, global_property
+from xib.aligned_corpus.data_loader import AlignedBatch
 from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
                              convert_to_dense)
 from xib.ipa import Category, Index, get_enum_by_cat, should_include
@@ -230,7 +231,7 @@ class ExtractModel(nn.Module):
                 ret.append(cat)
         return ret
 
-    def forward(self, batch: ExtractBatch) -> ExtractModelReturn:
+    def forward(self, batch: Union[ExtractBatch, AlignedBatch]) -> ExtractModelReturn:
         """
         The generating story is:
             v
@@ -261,7 +262,10 @@ class ExtractModel(nn.Module):
             if g.input_format == 'text':
                 lu_char_repr, word_repr = self.g2p(batch.unit_id_seqs, unit_repr)
             else:
-                lu_char_adapted_dfm = self.adapter(batch.lu_dfm)  # HACK(j_luo) Note that this is a hack.
+                try:
+                    lu_char_adapted_dfm = self.adapter(batch.lu_dfm)  # HACK(j_luo) Note that this is a hack.
+                except AttributeError:
+                    lu_char_adapted_dfm = self.adapter(batch.all_lost_dense_feat_matrix)
                 with NoName(*lu_char_adapted_dfm.values()):
                     lu_char_repr = torch.cat([lu_char_adapted_dfm[cat] for cat in self.effective_categories], dim=-1)
                 lu_char_repr.squeeze_(dim=1)

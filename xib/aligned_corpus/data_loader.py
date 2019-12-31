@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import field
 from pathlib import Path
-from typing import Dict, List
+from typing import ClassVar, Dict, List
 
 import numpy as np
 import torch
 from torch.utils.data.dataloader import default_collate
 
-from dev_misc import BT, FT, LT
+from dev_misc import BT, FT, LT, g
 from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.trainlib import Task
 from dev_misc.trainlib.base_data_loader import BaseDataLoader
@@ -27,6 +27,8 @@ class AlignedBatch(BaseBatch):
     feat_matrix: LT
     dense_feat_matrix: DenseFeatureMatrix = field(init=False)
     source_padding: BT = field(init=False)
+
+    all_lost_dense_feat_matrix: ClassVar[DenseFeatureMatrix]
 
     def __post_init__(self):
         self.source_padding = ~get_length_mask(self.lengths, self.max_length)
@@ -55,6 +57,17 @@ def collate_aligned_dataset_items(items: List[AlignedDatasetItem]) -> AlignedBat
 class AlignedDataLoader(BaseDataLoader):
 
     collate_fn = collate_aligned_dataset_items
+    dataset: AlignedDataset
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Assign class variable for AlignedBatch.
+        lost_ipa_units = self.dataset.corpus.id2unit[g.lost_lang]
+        fm = torch.cat([ipa_unit.feat_matrix for ipa_unit in lost_ipa_units], dim=0)
+        fm = fm.unsqueeze(dim=1).rename('batch', 'length', 'feat')
+        dfm = convert_to_dense(fm)
+        AlignedBatch.all_lost_dense_feat_matrix = dfm
 
     def __iter__(self) -> AlignedBatch:
         for batch in super().__iter__():

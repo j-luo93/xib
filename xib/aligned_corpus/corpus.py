@@ -188,8 +188,30 @@ class AlignedSentence(SequenceABC, BaseBatch):
 class AlignedCorpus(SequenceABC):
     """Represent a corpus with potentially aligned sentences."""
 
-    def __init__(self, sentences: Sequence[AlignedSentence]):
+    def __init__(self, lost_lang: str, known_lang: str, sentences: Sequence[AlignedSentence]):
+        self.lost_lang = lost_lang
+        self.known_lang = known_lang
         self.sentences = sentences
+
+        # Go through the dataset once to obtain all unique ipa units.
+        ipa_units = {lost_lang: set(), known_lang: set()}
+        for sentence in self.sentences:
+            for word in sentence.words:
+                ipa_units[lost_lang].update(word.lost_token.main_ipa.cv_list)
+                ipa_units[lost_lang].update(word.lost_lemma.main_ipa.cv_list)
+                for known_word in word.known_tokens | word.known_lemmas:
+                    ipa_units[known_lang].update(known_word.main_ipa.cv_list)
+        self.id2unit = {
+            lang: sorted(ipa_units[lang], key=str)
+            for lang in [lost_lang, known_lang]
+        }
+        self.unit2id = {
+            lang: {
+                u: i
+                for i, u in enumerate(self.id2unit[lang])
+            }
+            for lang in [lost_lang, known_lang]
+        }
 
     def __len__(self):
         return len(self.sentences)
@@ -204,11 +226,11 @@ class AlignedCorpus(SequenceABC):
             for line in fin:
                 sentence = AlignedSentence.from_raw_string(lost_lang, known_lang, line.strip(), transcriber)
                 sentences.append(sentence)
-        return cls(sentences)
+        return cls(lost_lang, known_lang, sentences)
 
     @classmethod
-    def from_tsv(cls, tsv_path: str) -> AlignedCorpus:
-        df = pd.read_csv(tsv_path, sep='\t')
+    def from_tsv(cls, lost_lang: str, known_lang: str, data_path: str) -> AlignedCorpus:
+        df = pd.read_csv(data_path, sep='\t')
         df['lost_token'] = df['lost_token'].apply(Word.from_saved_string)
         df['lost_lemma'] = df['lost_lemma'].apply(Word.from_saved_string)
 
@@ -232,7 +254,7 @@ class AlignedCorpus(SequenceABC):
             words = list(group.sort_values('word_idx')['aligned_word'])
             sentences.append(AlignedSentence(words))
 
-        return cls(sentences)
+        return cls(lost_lang, known_lang, sentences)
 
     def to_df(self) -> pd.DataFrame:
 
@@ -250,6 +272,6 @@ class AlignedCorpus(SequenceABC):
                                    'known_tokens', 'known_lemmas'])
         return df
 
-    def to_tsv(self, tsv_path: str):
+    def to_tsv(self, data_path: str):
         df = self.to_df()
-        df.to_csv(tsv_path, sep='\t', index=None)
+        df.to_csv(data_path, sep='\t', index=None)

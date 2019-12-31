@@ -7,7 +7,7 @@ from dev_misc.trainlib import set_random_seeds
 from xib.cfg import reg
 from xib.training.manager import (AdaptCbowManager, AdaptLMManager,
                                   BaseManager, CbowManager, DecipherManager,
-                                  ExtractManager, LMManager,
+                                  ExtractManager, LMManager, PrepareManager,
                                   SearchSolverManager)
 
 
@@ -27,6 +27,8 @@ def train():
         manager = SearchSolverManager()
     elif g.task == 'extract':
         manager = ExtractManager()
+    elif g.task == 'prepare':
+        manager = PrepareManager()
     else:
         manager = DecipherManager()
     manager.run()

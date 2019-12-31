@@ -22,6 +22,7 @@ from dev_misc.trainlib.base_data_loader import (BaseDataLoader,
 from dev_misc.trainlib.tracker.tracker import Task
 from dev_misc.utils import cached_property
 from xib.aligned_corpus.data_loader import AlignedDataLoader
+from xib.aligned_corpus.transcriber import MultilingualTranscriber
 from xib.batch import CbowIpaBatch, DenseFeatureMatrix, convert_to_dense
 from xib.ipa import Category, Index, conditions, get_enum_by_cat
 from xib.ipa.process import (AlignedIpaSegment, BaseSegment, Segment,
@@ -498,7 +499,7 @@ ContinuousTextDataLoader = Union[BrokenIpaDataLoader, UnbrokenIpaDataLoader]
 
 class DataLoaderRegistry(BaseDataLoaderRegistry):
 
-    def get_data_loader(self, task: Task, data_path: Path):
+    def get_data_loader(self, task: Task, data_path: Path, transcriber: Optional[MultilingualTranscriber] = None):
         if task.name in ['lm', 'mlm']:
             dl = IpaDataLoader(data_path, task)
         elif task.name == 'cbow':
@@ -509,19 +510,20 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
             dl = DenseIpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer', 'extract']:
             if g.use_new_data_loader:
-                dl_cls = AlignedDataLoader
-            elif g.input_format == 'text':
-                if g.aligned:
-                    dl_cls = AlignedTextDataLoader
-                else:
-                    dl_cls = UnbrokenTextDataLoader
-            elif g.aligned:
-                dl_cls = AlignedIpaDataLoader
-            elif g.broken_words:
-                dl_cls = BrokenIpaDataLoader
+                dl = AlignedDataLoader.from_data_path(data_path, task, g.lost_lang, g.known_lang, transcriber)
             else:
-                dl_cls = UnbrokenIpaDataLoader
-            dl = dl_cls(data_path, task)
+                if g.input_format == 'text':
+                    if g.aligned:
+                        dl_cls = AlignedTextDataLoader
+                    else:
+                        dl_cls = UnbrokenTextDataLoader
+                elif g.aligned:
+                    dl_cls = AlignedIpaDataLoader
+                elif g.broken_words:
+                    dl_cls = BrokenIpaDataLoader
+                else:
+                    dl_cls = UnbrokenIpaDataLoader
+                dl = dl_cls(data_path, task)
         else:
             raise ValueError(f'Unsupported task {task.name}.')
         return dl

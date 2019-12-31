@@ -236,6 +236,14 @@ class GotDeIpaAlignedReverseGvs(GotDeIpaMatched):
         self.data_path: str = './data/got-nhd-reverse_GVS.shuf.cog.200'
         self.vocab_path: str = './data/nhd-reverse_GVS.matched.words'
 
+
+@reg
+class GotDeIpaAlignedReverseGvsPrepare(GotDeIpaAlignedReverseGvs):
+    task: str = 'prepare'
+    lost_lang: str = 'got'
+    known_lang: str = 'nhd'
+
+
 # @reg
 # class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):
 #     task: str = 'transfer'

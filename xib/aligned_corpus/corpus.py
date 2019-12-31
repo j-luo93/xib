@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import (ClassVar, Dict, List, Optional, Sequence, Set, Tuple,
                     TypeVar, Union)
 
@@ -169,7 +170,16 @@ class AlignedCorpus(SequenceABC):
         return self.sentences[idx]
 
     @classmethod
-    def from_tsv(self, tsv_path: str) -> AlignedCorpus:
+    def from_data_path(cls, lost_lang: str, known_lang: str, data_path: Path, transcriber: MultilingualTranscriber) -> AlignedCorpus:
+        with data_path.open('r', encoding='utf8') as fin:
+            sentences = list()
+            for line in fin:
+                sentence = AlignedSentence.from_raw_string(lost_lang, known_lang, line.strip(), transcriber)
+                sentences.append(sentence)
+        return cls(sentences)
+
+    @classmethod
+    def from_tsv(cls, tsv_path: str) -> AlignedCorpus:
         df = pd.read_csv(tsv_path, sep='\t')
 
         def load_ipa(save_ipa_str: Union[None, str]) -> Union[None, Set[IpaSequence]]:
@@ -200,7 +210,7 @@ class AlignedCorpus(SequenceABC):
             words = list(group.sort_values('word_idx')['aligned_word'])
             sentences.append(AlignedSentence(words))
 
-        return AlignedCorpus(sentences)
+        return cls(sentences)
 
     def to_df(self) -> pd.DataFrame:
 

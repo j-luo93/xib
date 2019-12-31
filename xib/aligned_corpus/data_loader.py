@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from dataclasses import field
+from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
@@ -7,9 +10,12 @@ from torch.utils.data.dataloader import default_collate
 
 from dev_misc import BT, FT, LT
 from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
+from dev_misc.trainlib import Task
 from dev_misc.trainlib.base_data_loader import BaseDataLoader
 from dev_misc.utils import deprecated
-from xib.aligned_corpus.dataset import AlignedDatasetItem
+from xib.aligned_corpus.corpus import AlignedCorpus
+from xib.aligned_corpus.dataset import AlignedDataset, AlignedDatasetItem
+from xib.aligned_corpus.transcriber import MultilingualTranscriber
 from xib.batch import DenseFeatureMatrix, convert_to_dense
 from xib.ipa import Category
 

@@ -459,7 +459,7 @@ class EtymologicalGraph:
                 pass
         return word_translations, lemma_translations | stem_translations
 
-    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transcriber: MultilingualTranscriber):
+    def translate_conll(self, in_path: str, out_path: str, src_lang: Lang, tgt_lang: Lang, transcriber: Optional[MultilingualTranscriber]=None):
         word_cnt = 0
         word_covered = 0
         vocab = set()

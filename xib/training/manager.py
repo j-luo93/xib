@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import re
 from abc import ABC, abstractmethod
 
 import torch
@@ -13,6 +14,14 @@ from dev_misc.arglib import add_argument, init_g_attr
 from dev_misc.trainlib import Metrics, has_gpus, set_random_seeds
 from dev_misc.trainlib.trainer import freeze
 from dev_misc.utils import deprecated
+from xib.aligned_corpus.corpus import AlignedCorpus
+from xib.aligned_corpus.transcriber import (BaseTranscriber,
+                                            DictionaryTranscriber,
+                                            MultilingualTranscriber,
+                                            PhonemizerTranscriber,
+                                            RuleBasedTranscriber,
+                                            SimpleTranscriberFactory,
+                                            TranscriberWithBackoff)
 from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
                              DenseIpaDataLoader, IpaDataLoader)
 from xib.model.decipher_model import DecipherModel
@@ -29,8 +38,9 @@ from xib.training.task import (AdaptCbowTask, AdaptLMTask, CbowTask,
 from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer,
                                   ExtractTrainer, LMTrainer)
 
-add_argument('task', default='lm', dtype=str, choices=[
-             'lm', 'cbow', 'adapt_lm', 'adapt_cbow', 'decipher', 'search', 'extract'], msg='which task to run')
+add_argument('task', default='lm', dtype=str,
+             choices=['lm', 'cbow', 'adapt_lm', 'adapt_cbow', 'decipher', 'search', 'extract', 'prepare'],
+             msg='which task to run')
 
 
 class BaseManager(ABC):
@@ -246,3 +256,43 @@ class ExtractManager(BaseManager):
 
             self.trainer.train(self.dl_reg)
             self.trainer.tracker.update('round')
+
+
+class PrepareManager(BaseManager):
+
+    add_argument('lost_lang', dtype=str)
+    add_argument('known_lang', dtype=str)
+    add_argument('dictionary_path', dtype='path', default='data/de.csv')
+
+    def _get_transcriber(self, lang: str) -> BaseTranscriber:
+
+        def converter(s: str) -> str:
+            s = re.sub(r'\s+', '', s)
+            s = s.replace('ʔ', '')
+            s = s.replace('l̩', 'əl')
+            s = s.replace('n̩', 'ən')
+            s = s.replace('ç', 'ç')
+            s = s.replace('ˈ', '')
+            s = s.replace('ˌ', '')
+            return s
+
+        stf = SimpleTranscriberFactory()
+
+        if lang == 'nhd':
+            simple = stf.get_transcriber('phonemizer')
+            dt = stf.get_transcriber('dictionary', csv_path=g.dictionary_path, converter=converter)
+            tr = TranscriberWithBackoff(dt, simple)
+        elif lang in ['got', 'germ']:
+            tr = stf.get_transcriber('rule', lang='got')
+        else:
+            raise ValueError(f'Unsupported language {lang}.')
+
+        return tr
+
+    def run(self):
+        transcriber = MultilingualTranscriber()
+        transcriber.register_lang(g.lost_lang, self._get_transcriber(g.lost_lang))
+        transcriber.register_lang(g.known_lang, self._get_transcriber(g.known_lang))
+        corpus = AlignedCorpus.from_data_path(g.lost_lang, g.known_lang, g.data_path, transcriber)
+        out_path = f'data/{g.lost_lang}-{g.known_lang}.corpus.tsv'
+        corpus.to_tsv(out_path)

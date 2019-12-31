@@ -4,8 +4,8 @@ import warnings
 from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import (ClassVar, Dict, List, Optional, Sequence, Set, Tuple,
-                    TypeVar, Union)
+from typing import (ClassVar, Dict, FrozenSet, List, Optional, Sequence, Set,
+                    Tuple, TypeVar, Union)
 
 import pandas as pd
 
@@ -14,12 +14,12 @@ from xib.aligned_corpus.ipa_sequence import IpaSequence
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
 
 
-@dataclass
+@dataclass(eq=True, frozen=True)
 class Word:
     """A word with form and ipa."""
     lang: str
     form: str
-    ipa: Set[IpaSequence]
+    ipa: FrozenSet[IpaSequence]
 
     def __len__(self):
         return len(self.form)
@@ -44,7 +44,7 @@ class WordFactory(Singleton):
             return cls._cache[key]
 
         ipa = transcriber.transcribe(form, lang)
-        ipa = {IpaSequence(str(x)) for x in ipa}
+        ipa = frozenset({IpaSequence(str(x)) for x in ipa})
         word = Word(lang, form, ipa)
         cls._cache[key] = word
         return word
@@ -57,21 +57,29 @@ class WordFactory(Singleton):
 @dataclass
 class AlignedWord:
     """Represent a potentially aligned word."""
-    lost_word: Word
-    known_word: Optional[Word] = None
+    lost_token: Word
+    lost_lemma: Word
+    known_tokens: Set[Word]  # Translations for the lost token.
+    known_lemmas: Set[Word]  # Translations for the lost lemma.
 
     @classmethod
     def from_raw_string(cls, lost_lang: str, known_lang: str, raw_string: str, transcriber: MultilingualTranscriber) -> AlignedWord:
         wf = WordFactory()
-        lost_form, *known_form = raw_string.split('|')
-        if len(known_form) > 1:
-            raise ValueError(f'Raw string {raw_string} has more than one "|".')
+        lost_token, lost_lemma, known_tokens, known_lemmas = raw_string.split('|')
 
-        lost_word = wf.get_word(lost_lang, lost_form, transcriber)
-        known_word = None
-        if known_form:
-            known_word = wf.get_word(known_lang, known_form[0], transcriber)
-        return cls(lost_word, known_word=known_word)
+        lost_token = wf.get_word(lost_lang, lost_token, transcriber)
+        lost_lemma = wf.get_word(lost_lang, lost_lemma, transcriber)
+        known_tokens = {
+            wf.get_word(known_lang, known_token, transcriber)
+            for known_token in known_tokens.split(',')
+            if known_token
+        }
+        known_lemmas = {
+            wf.get_word(known_lang, known_lemma, transcriber)
+            for known_lemma in known_lemmas.split(',')
+            if known_lemma
+        }
+        return cls(lost_token, lost_lemma, known_tokens, known_lemmas)
 
 
 Content = TypeVar('Content', str, IpaSequence)
@@ -82,13 +90,13 @@ class Segment:
     start: int
     end: int
     content: Content
-    aligned_content: Content
+    aligned_contents: Set[Content]
 
     def is_same_span(self, other: Segment) -> bool:
         return self.start == other.start and self.end == other.end
 
     def __str__(self):
-        return f'{self.start}~{self.end}@{self.content}|{self.aligned_content}'
+        return f'{self.start}~{self.end}@{self.content}|{self.aligned_contents}'
 
 
 class OverlappingAnnotation(Exception):
@@ -108,8 +116,8 @@ class UnsegmentedSentence(SequenceABC):
     def __getitem__(self, idx: int) -> Content:
         return self.content[idx]
 
-    def annotate(self, start: int, end: int, aligned_content: Content):
-        segment = Segment(start, end, self.content[start: end + 1], aligned_content)
+    def annotate(self, start: int, end: int, aligned_contents: Content):
+        segment = Segment(start, end, self.content[start: end + 1], aligned_contents)
         idx_set = set(range(start, end + 1))
         if idx_set & self.annotated:
             raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
@@ -140,19 +148,22 @@ class AlignedSentence(SequenceABC):
         check_explicit_arg(is_ipa, annotated)
         if is_ipa:
             warnings.warn('Only one of the ipa sequences is used.')
-            content = [str(list(word.lost_word.ipa)[0]) for word in self.words]
+            content = [str(list(word.lost_token.ipa)[0]) for word in self.words]
         else:
-            content = [word.lost_word.form for word in self.words]
+            content = [word.lost_token.form for word in self.words]
         content = ''.join(content)
         uss = UnsegmentedSentence(content, is_ipa)
         if annotated:
             offset = 0
             for word in self.words:
-                lwl = len(word.lost_word)
-                if word.known_word is not None:
-                    aligned_content = word.known_word.ipa if is_ipa else word.known_word.form
-                    uss.annotate(offset, offset + lwl - 1, aligned_content)
-                offset += len(word.lost_word)
+                lwl = len(word.lost_token)
+                if word.known_tokens or word.known_lemmas:
+                    aligned_contents = {
+                        word.ipa if is_ipa else word.form
+                        for word in word.known_tokens | word.known_lemmas
+                    }
+                    uss.annotate(offset, offset + lwl - 1, aligned_contents)
+                offset += len(word.lost_token)
 
         return uss
 

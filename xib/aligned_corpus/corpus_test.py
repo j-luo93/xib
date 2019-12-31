@@ -45,14 +45,15 @@ class TestAlignedWord(BaseTest):
         self.mock_transcriber.transcribe.side_effect = mock_transcribe
 
     def test_basic(self):
-        aligned_word = AlignedWord.from_raw_string('en', 'de', 'good|gut', self.mock_transcriber)
-        self.assertEqual(len(list(aligned_word.lost_word.ipa)[0]), 4)
-        self.assertEqual(len(list(aligned_word.known_word.ipa)[0]), 2)
+        aligned_word = AlignedWord.from_raw_string('en', 'de', 'good|good|gut|', self.mock_transcriber)
+        self.assertEqual(len(aligned_word.lost_token.main_ipa), 4)
+        self.assertEqual(len(list(aligned_word.known_tokens)[0].main_ipa), 2)
 
     def test_missing_known_form(self):
-        aligned_word = AlignedWord.from_raw_string('en', 'de', 'good', self.mock_transcriber)
-        self.assertEqual(len(list(aligned_word.lost_word.ipa)[0]), 4)
-        self.assertEqual(aligned_word.known_word, None)
+        aligned_word = AlignedWord.from_raw_string('en', 'de', 'good|good||', self.mock_transcriber)
+        self.assertEqual(len(aligned_word.lost_token.main_ipa), 4)
+        print(aligned_word)
+        self.assertEqual(len(aligned_word.known_tokens), 0)
 
 
 class TestUnsegmentedSentence(BaseTest):
@@ -73,7 +74,8 @@ class TestAlignedSentence(BaseTest):
         super().setUp()
         mock_transcriber = MagicMock()
         mock_transcriber.transcribe.return_value = {IPAString(unicode_string='abc')}
-        self.aligned_sentence = AlignedSentence.from_raw_string('en', 'de', 'good|gut bad', mock_transcriber)
+        self.aligned_sentence = AlignedSentence.from_raw_string(
+            'en', 'de', 'good|good|gut|gut bad|bad||', mock_transcriber)
 
     def test_basic(self):
         self.assertEqual(len(self.aligned_sentence), 2)

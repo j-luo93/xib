@@ -243,6 +243,10 @@ class GotDeIpaAlignedReverseGvsPrepare(GotDeIpaAlignedReverseGvs):
     lost_lang: str = 'got'
     known_lang: str = 'nhd'
 
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/got-nhd.cog'
+
 
 # @reg
 # class TransferEsToEsWithP5GermanTest(DecipherEsToEsWithP5GermanTest):

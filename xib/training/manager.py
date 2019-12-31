@@ -271,6 +271,7 @@ class PrepareManager(BaseManager):
             s = s.replace('ʔ', '')
             s = s.replace('l̩', 'əl')
             s = s.replace('n̩', 'ən')
+            s = s.replace('m̩', 'əm')
             s = s.replace('ç', 'ç')
             s = s.replace('ˈ', '')
             s = s.replace('ˌ', '')

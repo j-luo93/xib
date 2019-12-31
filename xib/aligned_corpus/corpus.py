@@ -43,8 +43,14 @@ class WordFactory(Singleton):
         if key in cls._cache:
             return cls._cache[key]
 
-        ipa = transcriber.transcribe(form, lang)
-        ipa = frozenset({IpaSequence(str(x)) for x in ipa})
+        ipa_strings = transcriber.transcribe(form, lang)
+        ipa = set()
+        for x in ipa_strings:
+            try:
+                ipa.add(IpaSequence(x))
+            except ValueError:
+                pass
+        ipa = frozenset(ipa)
         word = Word(lang, form, ipa)
         cls._cache[key] = word
         return word

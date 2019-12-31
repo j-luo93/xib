@@ -1,3 +1,4 @@
+import logging
 import re
 import subprocess
 from abc import ABC, ABCMeta, abstractmethod
@@ -58,7 +59,11 @@ class BaseTranscriber(metaclass=ABCWithCacheMetaclass):
     def postprocess(self, phoneme: str, prefix: str = '') -> str:
         """Postprocess the phoneme."""
         # Standardize phonemes.
-        ipa = IPAString(unicode_string=phoneme)
+        try:
+            ipa = IPAString(unicode_string=phoneme)
+        except ValueError:
+            logging.exception(f'Invalid IPAString for {phoneme}. Invalid characters will be ignored.')
+            ipa = IPAString(unicode_string=phoneme, ignore=True)
         phoneme = str(ipa)
 
         if self.postprocess_mode == 'none':
@@ -71,7 +76,7 @@ class BaseTranscriber(metaclass=ABCWithCacheMetaclass):
             phoneme = phoneme.replace(k, v)
         return prefix + phoneme
 
-    def transcribe(self, grapheme: str) -> Set[IPAString]:
+    def transcribe(self, grapheme: str) -> Set[str]:
         cls = type(self)
         if grapheme in cls._cache:
             return cls._cache[grapheme]
@@ -84,11 +89,7 @@ class BaseTranscriber(metaclass=ABCWithCacheMetaclass):
                 match = re.match(r'^(\[[\?\]\[]+\])(.+)$', phoneme)
                 prefix = match.group(1)
                 phoneme = match.group(2)
-            try:
-                ret.add(self.postprocess(phoneme, prefix=prefix))
-            except ValueError:
-                raise ValueError(f'IPAString creation issue for phoneme {phoneme}.')
-                import time; time.sleep(1)
+            ret.add(self.postprocess(phoneme, prefix=prefix))
 
             # ret.add(IPAString(unicode_string=phoneme))
 
@@ -245,7 +246,8 @@ class SimpleTranscriberFactory(Singleton):
 
 class TranscriberWithBackoff(BaseTranscriber):
 
-    def __init__(self, main: BaseTranscriber, backoff: BaseTranscriber):
+    def __init__(self, main: BaseTranscriber, backoff: BaseTranscriber, postprocess_mode: str = 'none'):
+        BaseTranscriber.__init__(self, postprocess_mode=postprocess_mode)
         self.main = main
         self.backoff = backoff
 

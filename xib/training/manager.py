@@ -20,8 +20,9 @@ from xib.model.extract_model import ExtractModel
 from xib.model.lm_model import LM, AdaptLM
 from xib.search.search_solver import SearchSolver
 from xib.search.searcher import BruteForceSearcher
-from xib.training.evaluator import (DecipherEvaluator, ExtractEvaluator,
-                                    LMEvaluator, SearchSolverEvaluator)
+from xib.training.evaluator import (AlignedExtractEvaluator, DecipherEvaluator,
+                                    ExtractEvaluator, LMEvaluator,
+                                    SearchSolverEvaluator)
 from xib.training.task import (AdaptCbowTask, AdaptLMTask, CbowTask,
                                DecipherTask, ExtractTask, LMTask, MlmTask,
                                TransferTask)
@@ -202,6 +203,7 @@ class ExtractManager(BaseManager):
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
     add_argument('min_threshold', default=0.01, dtype=float, msg='Min value for threshold')
+    add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -217,7 +219,8 @@ class ExtractManager(BaseManager):
         if has_gpus():
             self.model.cuda()
 
-        self.evaluator = ExtractEvaluator(self.model, self.dl_reg[task])
+        eval_cls = AlignedExtractEvaluator if g.use_new_data_loader else ExtractEvaluator
+        self.evaluator = eval_cls(self.model, self.dl_reg[task])
 
         self.trainer = ExtractTrainer(self.model, [task], [1.0], 'total_step',
                                       stage_tnames=['round', 'total_step'],

@@ -21,6 +21,7 @@ from dev_misc.trainlib.base_data_loader import (BaseDataLoader,
                                                 BaseDataLoaderRegistry)
 from dev_misc.trainlib.tracker.tracker import Task
 from dev_misc.utils import cached_property
+from xib.aligned_corpus.data_loader import AlignedDataLoader
 from xib.batch import CbowIpaBatch, DenseFeatureMatrix, convert_to_dense
 from xib.ipa import Category, Index, conditions, get_enum_by_cat
 from xib.ipa.process import (AlignedIpaSegment, BaseSegment, Segment,
@@ -507,7 +508,9 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
         elif task.name == 'adapt_lm':
             dl = DenseIpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer', 'extract']:
-            if g.input_format == 'text':
+            if g.use_new_data_loader:
+                dl_cls = AlignedDataLoader
+            elif g.input_format == 'text':
                 if g.aligned:
                     dl_cls = AlignedTextDataLoader
                 else:

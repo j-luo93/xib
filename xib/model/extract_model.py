@@ -136,7 +136,8 @@ class ExtractModel(nn.Module):
                     segments.append(segment_cls(w))
                 except ValueError:
                     num_errors += 1
-            logging.error(f'Encountered {num_errors} errors when processing the vocabulary.')
+            if num_errors:
+                logging.error(f'Encountered {num_errors} errors when processing the vocabulary.')
             self.vocab = get_array([segment for segment in segments if _has_proper_length(segment)])
             lengths = torch.LongTensor(list(map(len, self.vocab)))
             feat_matrix = [segment.feat_matrix for segment in self.vocab]

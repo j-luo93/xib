@@ -29,8 +29,12 @@ class AlignedBatch(BaseBatch):
     source_padding: BT = field(init=False)
 
     def __post_init__(self):
-        self.dense_feat_matrix = convert_to_dense(self.feat_matrix)
         self.source_padding = ~get_length_mask(self.lengths, self.max_length)
+        self.source_padding.rename_('batch', 'length')
+        self.lengths.rename_('batch')
+
+        self.feat_matrix.rename_('batch', 'length', 'feat_group')
+        self.dense_feat_matrix = convert_to_dense(self.feat_matrix)
 
     @property
     def batch_size(self) -> int:
@@ -38,7 +42,7 @@ class AlignedBatch(BaseBatch):
 
     @property
     def max_length(self) -> int:
-        return self.lengths.size(1)
+        return self.lengths.max().item()
 
 
 def collate_aligned_dataset_items(items: List[AlignedDatasetItem]) -> AlignedBatch:
@@ -54,4 +58,4 @@ class AlignedDataLoader(BaseDataLoader):
 
     def __iter__(self) -> AlignedBatch:
         for batch in super().__iter__():
-            return batch.cuda()
+            yield batch.cuda()

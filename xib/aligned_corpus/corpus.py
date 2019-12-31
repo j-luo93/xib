@@ -29,6 +29,12 @@ class Word(BaseBatch):
         ipa_str = ','.join(map(str, self.ipa))
         return f'{self.lang};{self.form};{ipa_str}'
 
+    @classmethod
+    def from_saved_string(cls, saved_string: str) -> Word:
+        lang, form, ipa_str = saved_string.split(';')
+        ipa = frozenset({IpaSequence(s) for s in ipa_str.split(',')})
+        return cls(lang, form, ipa)
+
     @property
     def main_ipa(self) -> IpaSequence:
         # HACK(j_luo) Only take one of them.
@@ -203,29 +209,23 @@ class AlignedCorpus(SequenceABC):
     @classmethod
     def from_tsv(cls, tsv_path: str) -> AlignedCorpus:
         df = pd.read_csv(tsv_path, sep='\t')
+        df['lost_token'] = df['lost_token'].apply(Word.from_saved_string)
+        df['lost_lemma'] = df['lost_lemma'].apply(Word.from_saved_string)
 
-        def load_ipa(save_ipa_str: Union[None, str]) -> Union[None, Set[IpaSequence]]:
-            if save_ipa_str is None:
-                return None
-            ipas = save_ipa_str.split('|')
+        def get_set_of_words(saved_string: str) -> Set[Word]:
             ret = set()
-            for ipa in ipas:
-                ipa = IpaSequence.from_saved_string(ipa)
-                ret.add(ipa)
+            try:
+                for s in saved_string.split('|'):
+                    if s:
+                        ret.add(Word.from_saved_string(s))
+            except AttributeError:
+                pass
             return ret
 
-        df['lost_ipa'] = df['lost_ipa'].apply(load_ipa)
-        df['known_ipa'] = df['known_ipa'].apply(load_ipa)
-
-        def get_word(item: Tuple[Union[None, str], Union[None, str], Union[None, Set[IpaSequence]]]) -> Union[None, Word]:
-            lang, form, ipa = item
-            if lang is None or form is None or ipa is None:
-                return None
-            return Word(lang, form, ipa)
-
-        df['lost_token'] = df[['lost_lang', 'lost_form', 'lost_ipa']].apply(get_word, axis=1)
-        df['known_token'] = df[['known_lang', 'known_form', 'known_ipa']].apply(get_word, axis=1)
-        df['aligned_word'] = df[['lost_token', 'known_token']].apply(lambda item: AlignedWord(*item), axis=1)
+        df['known_tokens'] = df['known_tokens'].apply(get_set_of_words)
+        df['known_lemmas'] = df['known_lemmas'].apply(get_set_of_words)
+        df['aligned_word'] = df[['lost_token', 'lost_lemma', 'known_tokens',
+                                 'known_lemmas']].apply(lambda item: AlignedWord(*item), axis=1)
 
         sentences = list()
         for sentence_idx, group in df.groupby('sentence_idx', sort=True)['word_idx', 'aligned_word']:

@@ -49,7 +49,7 @@ class AlignedDataset(Dataset):
         self.corpus = corpus
         self.data = list()
         for sentence in self.corpus.sentences:
-            word_lengths = map(len, sentence.words)
+            word_lengths = [len(word.lost_token) for word in sentence.words]
             splits = split_by_max_length(word_lengths, g.max_segment_length)
             for start, end in splits:
                 truncated_sentence = AlignedSentence(sentence.words[start: end])
@@ -61,8 +61,8 @@ class AlignedDataset(Dataset):
     def __getitem__(self, idx: int) -> AlignedDatasetItem:
         sentence = self.data[idx]
         length = len(sentence)
-        feat_matrix = torch.stack(
-            [word.lost_word.main_ipa.feat_matrix for word in sentence.words],
+        feat_matrix = torch.cat(
+            [word.lost_token.main_ipa.feat_matrix for word in sentence.words],
             dim=0
         )
         return AlignedDatasetItem(sentence, length, feat_matrix)

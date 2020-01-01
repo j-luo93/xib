@@ -122,97 +122,10 @@ class ExtractModel(nn.Module):
     def __init__(self, lu_size: int):
         super().__init__()
 
-        def _has_proper_length(segment):
-            l = len(segment)
-            return g.min_word_length <= l <= g.max_word_length
-
-        # TODO(j_luo) This should belong in a data processing instance.
-        segment_cls = SegmentX if g.aligned else Segment
-        with open(g.vocab_path, 'r', encoding='utf8') as fin:
-            _vocab = set(line.strip() for line in fin)
-            segments = list()
-            num_errors = 0
-            for w in _vocab:
-                try:
-                    segments.append(segment_cls(w))
-                except ValueError:
-                    num_errors += 1
-            if num_errors:
-                logging.error(f'Encountered {num_errors} errors when processing the vocabulary.')
-            self.vocab = get_array([segment for segment in segments if _has_proper_length(segment)])
-            lengths = torch.LongTensor(list(map(len, self.vocab)))
-            feat_matrix = [segment.feat_matrix for segment in self.vocab]
-            feat_matrix = torch.nn.utils.rnn.pad_sequence(feat_matrix, batch_first=True)
-            max_len = lengths.max().item()
-            source_padding = ~get_length_mask(lengths, max_len)
-            self.register_buffer('vocab_feat_matrix', feat_matrix)
-            self.register_buffer('vocab_source_padding', source_padding)
-            self.register_buffer('vocab_length', lengths)
-            self.vocab_feat_matrix.rename_('vocab', 'length', 'feat_group')
-            self.vocab_source_padding.rename_('vocab', 'length')
-            self.vocab_length.rename_('vocab')
-
-            with Rename(self.vocab_feat_matrix, vocab='batch'):
-                vocab_dense_feat_matrix = convert_to_dense(self.vocab_feat_matrix)
-            self.vocab_dense_feat_matrix = {k: v.rename(batch='vocab') for k, v in vocab_dense_feat_matrix.items()}
-
-            # Get the entire set of units from vocab.
-            units = set()
-            for segment in self.vocab:
-                units.update(segment.cv_list)
-            self.id2unit = sorted(units)
-            self.unit2id = {u: i for i, u in enumerate(self.id2unit)}
-            # Now indexify the vocab. Gather feature matrices for units as well.
-            indexed_segments = np.zeros([len(self.vocab), max_len], dtype='int64')
-            unit_feat_matrix = dict()
-            for i, segment in enumerate(self.vocab):
-                indexed_segments[i, range(len(segment))] = [self.unit2id[u] for u in segment.cv_list]
-                for j, u in enumerate(segment.cv_list):
-                    if u not in unit_feat_matrix:
-                        unit_feat_matrix[u] = segment.feat_matrix[j]
-            unit_feat_matrix = [unit_feat_matrix[u] for u in self.id2unit]
-            unit_feat_matrix = torch.nn.utils.rnn.pad_sequence(unit_feat_matrix, batch_first=True)
-            self.register_buffer('unit_feat_matrix', unit_feat_matrix.unsqueeze(dim=1))
-            self.register_buffer('indexed_segments', torch.from_numpy(indexed_segments))
-            # Use dummy length to avoid the trouble later on.
-            # HACK(j_luo) Have to provide 'length'.
-            self.unit_feat_matrix.rename_('unit', 'length', 'feat_group')
-            self.indexed_segments.rename_('vocab', 'length')
-            with Rename(self.unit_feat_matrix, unit='batch'):
-                unit_dense_feat_matrix = convert_to_dense(self.unit_feat_matrix)
-            self.unit_dense_feat_matrix = {
-                k: v.rename(batch='unit')
-                for k, v in unit_dense_feat_matrix.items()
-            }
-
         self.adapter = AdaptLayer()
 
         if g.input_format == 'text':
             self.g2p = G2PLayer(lu_size, len(self.id2unit))
-
-    _special_state_keys = ['vocab', 'vocab_dense_feat_matrix', 'unit2id', 'id2unit', 'unit_dense_feat_matrix']
-
-    def state_dict(self, **kwargs):
-        state = super().state_dict(**kwargs)
-        for key in self._special_state_keys:
-            attr = drop_names(getattr(self, key))
-            state[key] = attr
-        return state
-
-    def load_state_dict(self, state_dict: Dict, **kwargs):
-        with WithholdKeys(state_dict, *self._special_state_keys):
-            super().load_state_dict(state_dict, **kwargs)
-        # HACK(j_luo) This isn't really terse.
-        for key in self._special_state_keys:
-            attr = getattr(self, key)
-            setattr(self, key, state_dict[key])
-            if torch.is_tensor(attr):
-                names = attr.names
-                getattr(self, key).rename_(*names)
-            elif isinstance(attr, dict):
-                for k, v in getattr(self, key).items():
-                    if torch.is_tensor(v):
-                        v.rename_(*attr[k].names)
 
     # IDEA(j_luo) The current api is worse than just declaring GlobalProperty(writeable=False) outright. And doesn't give proper type hints.
     @global_property
@@ -244,18 +157,15 @@ class ExtractModel(nn.Module):
               = sum_w Pr(w) theta^|ww|
               = sum_{w, v} Pr(w | v) Pr(v) theta^|ww|
 
-        Terminologies:
-        matched_: the prefix after selecting v
-        score: after multiplication with |w|
-        best_: the prefix after selecting w
         """
         # Prepare representations.
         alignment = None
         char_log_probs = None
+        vocab = batch.known_vocab
         if g.dense_input:
             # IDEA(j_luo) NoName shouldn't use reveal_name. Just keep the name in the context manager.
-            with NoName(*self.unit_dense_feat_matrix.values()):
-                unit_repr = torch.cat([self.unit_dense_feat_matrix[cat] for cat in self.effective_categories], dim=-1)
+            with NoName(*vocab.unit_dense_feat_matrix.values()):
+                unit_repr = torch.cat([vocab.unit_dense_feat_matrix[cat] for cat in self.effective_categories], dim=-1)
             unit_repr = unit_repr.rename('batch', 'length', 'char_emb').squeeze(dim='length')
 
             # Both input formats will undergo the same probability calculation, but representations are derived differently. For text, we use g2p; for ipa, we use adapter.
@@ -278,9 +188,9 @@ class ExtractModel(nn.Module):
             char_log_probs = (lu_char_repr @ unit_repr.t()).log_softmax(dim=-1)
             alignment = char_log_probs.exp()
         else:
-            with Rename(self.unit_feat_matrix, unit='batch'):
+            with Rename(vocab.unit_feat_matrix, unit='batch'):
                 word_repr = self.embedding(batch.feat_matrix, batch.source_padding)
-                unit_repr = self.embedding(self.unit_feat_matrix)
+                unit_repr = self.embedding(vocab.unit_feat_matrix)
             unit_repr = unit_repr.squeeze('length')
         unit_repr.rename_(batch='unit')
 
@@ -289,7 +199,7 @@ class ExtractModel(nn.Module):
         new_extracted = self._extract_one_span(batch, extracted, word_repr, unit_repr, char_log_probs)
         matches = new_extracted.matches
         len_e = matches.ll.size('len_e')
-        vs = len(self.vocab)
+        vs = len(vocab)
 
         # Get the best score and span.
         # NOTE(j_luo) Some segments don't have any viable spans.
@@ -320,7 +230,7 @@ class ExtractModel(nn.Module):
         return ret
 
     def _extract_one_span(self,
-                          batch: ExtractBatch,
+                          batch: Union[ExtractBatch, AlignedBatch],
                           extracted: Extracted,
                           word_repr: FT,
                           unit_repr: FT,
@@ -370,7 +280,8 @@ class ExtractModel(nn.Module):
         extracted_word_repr = nh.unflatten(extracted_word_repr, 'viable_X_len_w', ['viable', 'len_w'])
 
         # Main body: Run DP to find the best matches.
-        matches = self._get_matches(extracted_word_repr, unit_repr, viable_lens, extracted_unit_ids, char_log_probs)
+        matches = self._get_matches(batch, extracted_word_repr, unit_repr,
+                                    viable_lens, extracted_unit_ids, char_log_probs)
         # Revert to the old shape (so that invalid spans are included).
         bi = get_named_range(batch.batch_size, 'batch').expand_as(viable)
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
@@ -390,16 +301,18 @@ class ExtractModel(nn.Module):
         return new_extracted
 
     def _get_matches(self,
+                     batch: Union[ExtractBatch, AlignedBatch],
                      extracted_word_repr: FT,
                      unit_repr: FT,
                      viable_lens: LT,
                      extracted_unit_ids: LT,
                      char_log_probs: Optional[FT] = None) -> Matches:
+        vocab = batch.known_vocab
         ns = extracted_word_repr.size('viable')
         len_w = extracted_word_repr.size('len_w')
-        nt = len(self.vocab_feat_matrix)
+        nt = len(vocab.vocab_feat_matrix)
         msl = extracted_word_repr.size('len_w')
-        mtl = self.vocab_feat_matrix.size('length')
+        mtl = vocab.vocab_feat_matrix.size('length')
 
         # Compute cosine distances all at once: for each viable span, compare it against all units.
         if g.input_format == 'text':
@@ -424,7 +337,7 @@ class ExtractModel(nn.Module):
         # ------------------------ Main body: DP ----------------------- #
 
         # Transition.
-        with NoName(self.indexed_segments, costs):
+        with NoName(vocab.indexed_segments, costs):
             for ls in range(1, msl + 1):
                 min_lt = max(ls - 2, 1)
                 max_lt = min(ls + 2, mtl + 1)
@@ -435,7 +348,7 @@ class ExtractModel(nn.Module):
                     if (ls, lt - 1) in fs:
                         transitions.append(fs[(ls, lt - 1)] + self.ins_del_cost)
                     if (ls - 1, lt - 1) in fs:
-                        vocab_inds = self.indexed_segments[:, lt - 1]
+                        vocab_inds = vocab.indexed_segments[:, lt - 1]
                         sub_cost = costs[:, ls - 1, vocab_inds]
                         transitions.append(fs[(ls - 1, lt - 1)] + sub_cost)
                     if transitions:
@@ -449,15 +362,15 @@ class ExtractModel(nn.Module):
                 if (i, j) not in fs:
                     fs[(i, j)] = get_zeros(ns, nt).fill_(9999.9)
                 f_lst.append(fs[(i, j)])
-        f = torch.stack(f_lst, dim=0).view(msl + 1, mtl + 1, -1, len(self.vocab))
+        f = torch.stack(f_lst, dim=0).view(msl + 1, mtl + 1, -1, len(vocab))
         f.rename_('len_w_src', 'len_w_tgt', 'viable', 'vocab')
 
         # Get the values wanted.
-        with NoName(f, viable_lens, self.vocab_length):
+        with NoName(f, viable_lens, vocab.vocab_length):
             idx_src = viable_lens.unsqueeze(dim=-1)
-            idx_tgt = self.vocab_length
+            idx_tgt = vocab.vocab_length
             viable_i = get_range(ns, 2, 0)
-            vocab_i = get_range(len(self.vocab_length), 2, 1)
+            vocab_i = get_range(len(vocab.vocab_length), 2, 1)
             nll = f[idx_src, idx_tgt, viable_i, vocab_i]
             nll.rename_('viable', 'vocab')
 

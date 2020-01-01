@@ -13,7 +13,7 @@ from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.trainlib import Task
 from dev_misc.trainlib.base_data_loader import BaseDataLoader
 from dev_misc.utils import deprecated
-from xib.aligned_corpus.corpus import AlignedCorpus
+from xib.aligned_corpus.corpus import AlignedCorpus, Vocabulary
 from xib.aligned_corpus.dataset import AlignedDataset, AlignedDatasetItem
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
 from xib.batch import DenseFeatureMatrix, convert_to_dense
@@ -28,7 +28,8 @@ class AlignedBatch(BaseBatch):
     dense_feat_matrix: DenseFeatureMatrix = field(init=False)
     source_padding: BT = field(init=False)
 
-    all_lost_dense_feat_matrix: ClassVar[DenseFeatureMatrix]
+    all_lost_dense_feat_matrix: ClassVar[DenseFeatureMatrix] = None
+    known_vocab: ClassVar[Vocabulary] = None
 
     def __post_init__(self):
         self.source_padding = ~get_length_mask(self.lengths, self.max_length)
@@ -62,12 +63,14 @@ class AlignedDataLoader(BaseDataLoader):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Assign class variable for AlignedBatch.
+        # Assign class variables for AlignedBatch.
         lost_ipa_units = self.dataset.corpus.id2unit[g.lost_lang]
         fm = torch.cat([ipa_unit.feat_matrix for ipa_unit in lost_ipa_units], dim=0)
         fm = fm.unsqueeze(dim=1).rename('batch', 'length', 'feat')
         dfm = convert_to_dense(fm)
         AlignedBatch.all_lost_dense_feat_matrix = dfm
+        # Get vocabulary.
+        AlignedBatch.known_vocab = Vocabulary()
 
     def __iter__(self) -> AlignedBatch:
         for batch in super().__iter__():

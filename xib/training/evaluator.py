@@ -387,19 +387,15 @@ class AlignedExtractEvaluator(BaseEvaluator):
         start = start.cpu().numpy()
         end = end.cpu().numpy()
         bmv = bmv.cpu().numpy()
-        bmw = self.model.vocab[bmv]  # Best matched word
+        bmw = batch.known_vocab.vocab[bmv]  # Best matched word
 
         ret = list()
         is_ipa = g.input_format == 'ipa'
         for sentence, s, e, m, w in zip(batch.sentences, start, end, matched, bmw):
-            gold = sentence.to_unsegmented(is_ipa=is_ipa, annotated=True,
-                                           max_word_length=g.max_word_length,
-                                           min_word_length=g.min_word_length)
-            pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False,
-                                           max_word_length=g.max_word_length,
-                                           min_word_length=g.min_word_length)
+            gold = sentence.to_unsegmented(is_ipa=is_ipa, annotated=True)
+            pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
             length = sentence.lost_ipa_length if is_ipa else sentence.lost_form_length
             if length >= g.min_word_length and m:
-                pred.annotate(s, e, w)
+                pred.annotate(s, e, {w}) # NOTE(j_luo) Must annotate with sets.
             ret.append((gold, pred))
         return ret

@@ -36,6 +36,7 @@ class IpaSequence(SequenceABC):
         cls._cache[raw_string] = seg
         return seg
 
+
     def __len__(self):
         return len(self.data)
 

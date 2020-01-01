@@ -50,7 +50,7 @@ class AlignedDataset(Dataset):
         self.corpus = corpus
         self.data = list()
         for sentence in self.corpus.sentences:
-            word_lengths = [len(word.lost_token) for word in sentence.words]
+            word_lengths = [word.lost_token.form_length for word in sentence.words]
             splits = split_by_length(word_lengths, g.max_segment_length, g.min_word_length)
             for start, end in splits:
                 truncated_sentence = AlignedSentence(sentence.words[start: end])

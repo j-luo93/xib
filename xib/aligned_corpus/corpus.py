@@ -27,8 +27,14 @@ class Word:
     form: str
     ipa: FrozenSet[IpaSequence]
 
-    def __len__(self):
+    @property
+    def form_length(self) -> int:
         return len(self.form)
+
+    @property
+    def ipa_length(self) -> int:
+        assert len(self.ipa) == 1
+        return len(self.main_ipa)
 
     def __repr__(self):
         ipa_str = ','.join(map(str, self.ipa))
@@ -207,7 +213,7 @@ class AlignedSentence:
         if annotated:
             offset = 0
             for word in self.words:
-                lwl = len(word.lost_token)
+                lwl = word.lost_token.ipa_length if is_ipa else word.lost_token.form_length
                 if (word.known_tokens or word.known_lemmas) and lwl <= g.max_word_length and lwl >= g.min_word_length:
                     aligned_contents = set()
                     for known_word in (word.known_tokens | word.known_lemmas):
@@ -216,7 +222,7 @@ class AlignedSentence:
                         else:
                             aligned_contents.add(known_word.form)
                     uss.annotate(offset, offset + lwl - 1, aligned_contents)
-                offset += len(word.lost_token)
+                offset += lwl
 
         return uss
 

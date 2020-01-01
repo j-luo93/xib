@@ -230,11 +230,17 @@ class GotDeIpaAligned(GotDeIpaMatched):
 
 @reg
 class GotDeIpaAlignedReverseGvs(GotDeIpaMatched):
+    init_ins_del_cost: float = 3.5
+    context_weight: float = 0.4
+    g2p_window_size: int = 3
+    char_per_batch: int = 400
+    max_segment_length: int = 40
+    postprocess_mode: str = 'gvs'
 
     def __post_init__(self):
         super().__post_init__()
-        self.data_path: str = './data/got-nhd-reverse_GVS.shuf.cog.200'
-        self.vocab_path: str = './data/nhd-reverse_GVS.matched.words'
+        self.data_path: str = './data/got-nhd.corpus.100.tsv'
+        self.vocab_path: str = './data/nhd.matched.100.words'
 
 
 @reg

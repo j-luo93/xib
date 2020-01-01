@@ -128,7 +128,8 @@ class Segment:
         return self.start == other.start and self.end == other.end
 
     def __str__(self):
-        return f'{self.start}~{self.end}@{self.content}|{self.aligned_contents}'
+        ac_str = ','.join(map(str, self.aligned_contents))
+        return f'{self.start}~{self.end}@{self.content}|{ac_str}'
 
 
 class OverlappingAnnotation(Exception):
@@ -185,7 +186,11 @@ class AlignedSentence:
     def __getitem__(self, idx: int) -> AlignedWord:
         return self.words[idx]
 
-    def to_unsegmented(self, *, is_ipa: bool = None, annotated: bool = None) -> UnsegmentedSentence:
+    def to_unsegmented(self, *,
+                       is_ipa: bool = None,
+                       annotated: bool = None,
+                       max_word_length: int = 10,
+                       min_word_length: int = 4) -> UnsegmentedSentence:
         check_explicit_arg(is_ipa, annotated)
         if is_ipa:
             warnings.warn('Only one of the ipa sequences is used.')
@@ -198,11 +203,13 @@ class AlignedSentence:
             offset = 0
             for word in self.words:
                 lwl = len(word.lost_token)
-                if word.known_tokens or word.known_lemmas:
-                    aligned_contents = {
-                        word.ipa if is_ipa else word.form
-                        for word in word.known_tokens | word.known_lemmas
-                    }
+                if (word.known_tokens or word.known_lemmas) and lwl <= max_word_length and lwl >= min_word_length:
+                    aligned_contents = set()
+                    for known_word in (word.known_tokens | word.known_lemmas):
+                        if is_ipa:
+                            aligned_contents.update(known_word.ipa)
+                        else:
+                            aligned_contents.add(known_word.form)
                     uss.annotate(offset, offset + lwl - 1, aligned_contents)
                 offset += len(word.lost_token)
 

@@ -392,9 +392,14 @@ class AlignedExtractEvaluator(BaseEvaluator):
         ret = list()
         is_ipa = g.input_format == 'ipa'
         for sentence, s, e, m, w in zip(batch.sentences, start, end, matched, bmw):
-            gold = sentence.to_unsegmented(is_ipa=is_ipa, annotated=True)
-            pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
-            if len(sentence) >= g.min_word_length and m:
+            gold = sentence.to_unsegmented(is_ipa=is_ipa, annotated=True,
+                                           max_word_length=g.max_word_length,
+                                           min_word_length=g.min_word_length)
+            pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False,
+                                           max_word_length=g.max_word_length,
+                                           min_word_length=g.min_word_length)
+            length = sentence.lost_ipa_length if is_ipa else sentence.lost_form_length
+            if length >= g.min_word_length and m:
                 pred.annotate(s, e, w)
             ret.append((gold, pred))
         return ret

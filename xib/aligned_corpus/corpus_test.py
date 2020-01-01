@@ -79,7 +79,7 @@ class TestAlignedSentence(BaseTest):
             'en', 'de', 'good|good|gut|gut bad|bad||', mock_transcriber)
 
     def test_basic(self):
-        self.assertEqual(len(self.aligned_sentence), 2)
+        self.assertEqual(len(self.aligned_sentence.words), 2)
 
     def test_to_unsegmented(self):
         for annotated in [True, False]:

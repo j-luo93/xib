@@ -269,32 +269,33 @@ class SLength(IPAFeature):
 class SBreak(IPAFeature):
     NONE = Index(93, 10, 0)
     LINKING = Index(94, 10, 1)
-    WORD_BREAK = Index(95, 10, 2)
+    SYLLABLE_BREAK = Index(95, 10, 2)
+    WORD_BREAK = Index(96, 10, 3)
 
 
 @unique
 class TLevel(IPAFeature):
-    NONE = Index(96, 11, 0)
-    EXTRA_HIGH_LEVEL = Index(97, 11, 1)
-    EXTRA_LOW_LEVEL = Index(98, 11, 2)
-    HIGH_LEVEL = Index(99, 11, 3)
-    LOW_LEVEL = Index(100, 11, 4)
-    MID_LEVEL = Index(101, 11, 5)
+    NONE = Index(97, 11, 0)
+    EXTRA_HIGH_LEVEL = Index(98, 11, 1)
+    EXTRA_LOW_LEVEL = Index(99, 11, 2)
+    HIGH_LEVEL = Index(100, 11, 3)
+    LOW_LEVEL = Index(101, 11, 4)
+    MID_LEVEL = Index(102, 11, 5)
 
 
 @unique
 class TContour(IPAFeature):
-    NONE = Index(102, 12, 0)
-    FALLING_CONTOUR = Index(103, 12, 1)
-    HIGH_MID_FALLING_CONTOUR = Index(104, 12, 2)
-    HIGH_RISING_CONTOUR = Index(105, 12, 3)
-    LOW_RISING_CONTOUR = Index(106, 12, 4)
-    MID_LOW_FALLING_CONTOUR = Index(107, 12, 5)
-    RISING_CONTOUR = Index(108, 12, 6)
-    RISING_FALLING_CONTOUR = Index(109, 12, 7)
+    NONE = Index(103, 12, 0)
+    FALLING_CONTOUR = Index(104, 12, 1)
+    HIGH_MID_FALLING_CONTOUR = Index(105, 12, 2)
+    HIGH_RISING_CONTOUR = Index(106, 12, 3)
+    LOW_RISING_CONTOUR = Index(107, 12, 4)
+    MID_LOW_FALLING_CONTOUR = Index(108, 12, 5)
+    RISING_CONTOUR = Index(109, 12, 6)
+    RISING_FALLING_CONTOUR = Index(110, 12, 7)
 
 
 @unique
 class TGlobal(IPAFeature):
-    NONE = Index(110, 13, 0)
-    DOWNSTEP = Index(111, 13, 1)
+    NONE = Index(111, 13, 0)
+    DOWNSTEP = Index(112, 13, 1)

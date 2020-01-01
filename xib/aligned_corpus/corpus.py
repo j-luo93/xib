@@ -221,10 +221,13 @@ class AlignedCorpus(SequenceABC):
         ipa_units = {lost_lang: set(), known_lang: set()}
         for sentence in self.sentences:
             for word in sentence.words:
-                ipa_units[lost_lang].update(word.lost_token.main_ipa.cv_list)
-                ipa_units[lost_lang].update(word.lost_lemma.main_ipa.cv_list)
-                for known_word in word.known_tokens | word.known_lemmas:
-                    ipa_units[known_lang].update(known_word.main_ipa.cv_list)
+                try:
+                    ipa_units[lost_lang].update(word.lost_token.main_ipa.cv_list)
+                    ipa_units[lost_lang].update(word.lost_lemma.main_ipa.cv_list)
+                    for known_word in word.known_tokens | word.known_lemmas:
+                        ipa_units[known_lang].update(known_word.main_ipa.cv_list)
+                except IndexError:
+                    pass
         self.id2unit = {
             lang: sorted(ipa_units[lang], key=str)
             for lang in [lost_lang, known_lang]
@@ -263,7 +266,10 @@ class AlignedCorpus(SequenceABC):
             try:
                 for s in saved_string.split('|'):
                     if s:
-                        ret.add(Word.from_saved_string(s))
+                        try:
+                            ret.add(Word.from_saved_string(s))
+                        except ValueError:
+                            pass
             except AttributeError:
                 pass
             return ret

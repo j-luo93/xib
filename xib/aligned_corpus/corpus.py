@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from dev_misc import g
+from dev_misc import add_argument, g
 from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.devlib.named_tensor import NoName, Rename
 from dev_misc.utils import Singleton, check_explicit_arg
@@ -347,6 +347,8 @@ class AlignedCorpus(SequenceABC):
 
 class Vocabulary:
 
+    add_argument('add_infinitive', dtype=bool, default=False)
+
     def __init__(self):
 
         def has_proper_length(content: Content) -> bool:
@@ -361,8 +363,18 @@ class Vocabulary:
                 except ValueError:
                     pass
 
+        def expand(vocab: Iterable[Content]):
+            if g.add_infinitive:
+                for content in vocab:
+                    if str(content).endswith('ən'):
+                        yield from [content, content[:-2]]
+                    else:
+                        yield content
+            else:
+                return vocab
+
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
-            self.vocab = get_array(list(filter(has_proper_length, gen_word(fin))))
+            self.vocab = get_array(list(expand(filter(has_proper_length, gen_word(fin)))))
 
             self.vocab_length = torch.LongTensor(list(map(len, self.vocab)))
             max_len = self.vocab_length.max().item()

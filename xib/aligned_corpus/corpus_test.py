@@ -12,6 +12,7 @@ class BaseTest(TestCase):
 
     def setUp(self):
         super().setUp()
+        test_with_arguments(max_word_length=10, min_word_length=1, postprocess_mode='none', _force=True)
         WordFactory.clear_cache()
 
 
@@ -53,7 +54,6 @@ class TestAlignedWord(BaseTest):
     def test_missing_known_form(self):
         aligned_word = AlignedWord.from_raw_string('en', 'de', 'good|good||', self.mock_transcriber)
         self.assertEqual(len(aligned_word.lost_token.main_ipa), 4)
-        print(aligned_word)
         self.assertEqual(len(aligned_word.known_tokens), 0)
 
 

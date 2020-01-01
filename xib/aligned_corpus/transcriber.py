@@ -45,6 +45,18 @@ _reverse_GVS = {
 }
 
 
+def postprocess(phoneme: str, prefix: str = '', mode: str = 'none') -> str:
+    if mode == 'none':
+        return prefix + phoneme
+
+    if mode == 'redup':
+        return prefix + re.sub(r'(.)ː', r'\1\1', phoneme)
+
+    for k, v in _reverse_GVS.items():
+        phoneme = phoneme.replace(k, v)
+    return prefix + phoneme
+
+
 class BaseTranscriber(metaclass=ABCWithCacheMetaclass):
 
     _cache: ClassVar[Dict[str, Set[IPAString]]]
@@ -65,16 +77,7 @@ class BaseTranscriber(metaclass=ABCWithCacheMetaclass):
             logging.exception(f'Invalid IPAString for {phoneme}. Invalid characters will be ignored.')
             ipa = IPAString(unicode_string=phoneme, ignore=True)
         phoneme = str(ipa)
-
-        if self.postprocess_mode == 'none':
-            return prefix + phoneme
-
-        if self.postprocess_mode == 'redup':
-            return prefix + re.sub(r'(.)ː', r'\1\1', phoneme)
-
-        for k, v in _reverse_GVS.items():
-            phoneme = phoneme.replace(k, v)
-        return prefix + phoneme
+        return postprocess(phoneme, prefix=prefix, mode=self.postprocess_mode)
 
     def transcribe(self, grapheme: str) -> Set[str]:
         cls = type(self)

@@ -5,16 +5,21 @@ from typing import ClassVar, Dict, List, Optional, Union
 
 from ipapy.ipastring import IPAString
 
+from dev_misc import add_argument, g
 from dev_misc.devlib import LT
 from dev_misc.utils import cached_property, concat_lists
+from xib.aligned_corpus.transcriber import postprocess
 from xib.ipa.process import Segment
 
 
 class IpaSequence(SequenceABC):
 
+    add_argument('postprocess_mode', default='none', choices=['none', 'redup', 'gvs'], dtype=str)
+
     _cache: ClassVar[Dict[str, Segment]] = dict()
 
     def __init__(self, raw_string: str):
+        raw_string = postprocess(raw_string, mode=g.postprocess_mode)
         self._seg = self._get_segment(raw_string)
         self.data: List[IPAString] = [IPAString(ipa_lst) for ipa_lst in self._seg.merged_ipa]
         self._canonical_string = ''.join(map(str, concat_lists(self.data)))
@@ -35,7 +40,6 @@ class IpaSequence(SequenceABC):
         seg = Segment(raw_string)
         cls._cache[raw_string] = seg
         return seg
-
 
     def __len__(self):
         return len(self.data)

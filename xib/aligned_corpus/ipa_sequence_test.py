@@ -7,6 +7,10 @@ from .ipa_sequence import IpaSequence
 
 class TestIpaSequence(TestCase):
 
+    def setUp(self):
+        super().setUp()
+        test_with_arguments(postprocess_mode='none', _force=True)
+
     def test_basic(self):
         raw_string = 'a:bc'
         ipa_seq = IpaSequence(raw_string)

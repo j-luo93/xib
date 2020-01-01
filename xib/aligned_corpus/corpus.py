@@ -15,8 +15,8 @@ from xib.aligned_corpus.ipa_sequence import IpaSequence
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
 
 
-@batch_class(eq=True, frozen=True)
-class Word(BaseBatch):
+@dataclass(eq=True, frozen=True)
+class Word:
     """A word with form and ipa."""
     lang: str
     form: str
@@ -25,7 +25,7 @@ class Word(BaseBatch):
     def __len__(self):
         return len(self.form)
 
-    def __str__(self):
+    def __repr__(self):
         ipa_str = ','.join(map(str, self.ipa))
         return f'{self.lang};{self.form};{ipa_str}'
 
@@ -71,13 +71,28 @@ class WordFactory(Singleton):
         cls._cache.clear()
 
 
-@batch_class
-class AlignedWord(BaseBatch):
+@dataclass
+class AlignedWord:
     """Represent a potentially aligned word."""
     lost_token: Word
     lost_lemma: Word
     known_tokens: Set[Word]  # Translations for the lost token.
     known_lemmas: Set[Word]  # Translations for the lost lemma.
+
+    def __repr__(self):
+        """Only display the most important (form) information."""
+        ltf = self.lost_token.form
+        llf = self.lost_lemma.form
+
+        def set_str(s: Set[Word]) -> str:
+            if s:
+                return ','.join([w.form for w in s])
+            else:
+                return ''
+
+        lkts = set_str(self.known_tokens)
+        lkls = set_str(self.known_lemmas)
+        return repr(f'{ltf}/{llf}/{lkts}/{lkls}')
 
     @classmethod
     def from_raw_string(cls, lost_lang: str, known_lang: str, raw_string: str, transcriber: MultilingualTranscriber) -> AlignedWord:
@@ -142,10 +157,14 @@ class UnsegmentedSentence(SequenceABC):
         self.annotated |= idx_set
 
 
-@batch_class
-class AlignedSentence(SequenceABC, BaseBatch):
+@dataclass
+class AlignedSentence:
     """Represent a sentence with potentially aligned words."""
     words: List[AlignedWord]
+
+    def __repr__(self):
+        """Only display the lost form information."""
+        return repr(' '.join([word.lost_token.form for word in self.words]))
 
     @classmethod
     def from_raw_string(cls, lost_lang: str, known_lang: str, raw_string: str, transcriber: MultilingualTranscriber) -> AlignedSentence:
@@ -155,8 +174,13 @@ class AlignedSentence(SequenceABC, BaseBatch):
             words.append(aligned_word)
         return cls(words)
 
-    def __len__(self):
-        return len(self.words)
+    @property
+    def lost_form_length(self):
+        return sum(map(len, [word.lost_token for word in self.words]))
+
+    @property
+    def lost_ipa_length(self):
+        return sum(map(len, [word.lost_token.main_ipa for word in self.words]))
 
     def __getitem__(self, idx: int) -> AlignedWord:
         return self.words[idx]

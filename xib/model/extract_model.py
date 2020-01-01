@@ -108,7 +108,7 @@ class G2PLayer(nn.Module):
 
 class ExtractModel(nn.Module):
 
-    add_argument('max_num_words', default=3, dtype=int, msg='Max number of extracted words.')
+    add_argument('max_num_words', default=1, dtype=int, msg='Max number of extracted words.')
     add_argument('max_word_length', default=10, dtype=int, msg='Max length of extracted words.')
     add_argument('init_threshold', default=0.05, dtype=float,
                  msg='Initial value of threshold to determine whether two words are matched.')

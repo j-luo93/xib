@@ -312,17 +312,17 @@ class ExtractEvaluator(BaseEvaluator):
         return segmentations, matched_segments
 
 
-def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int) -> Metrics:
+def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int, name: str) -> Metrics:
     ret = Metrics()
     precision = num_match / (num_pred + 1e-8)
     recall = num_match / (num_gold + 1e-8)
     f1 = 2 * precision * recall / (precision + recall + 1e-8)
-    ret += Metric(f'prf_total_correct', num_gold, report_mean=False)
-    ret += Metric(f'prf_exact_span_matches', num_match, report_mean=False)
-    ret += Metric(f'prf_total_pred', num_pred, report_mean=False)
-    ret += Metric(f'prf_exact_span_precision', precision, report_mean=False)
-    ret += Metric(f'prf_exact_span_recall', recall, report_mean=False)
-    ret += Metric(f'prf_exact_span_f1', f1, report_mean=False)
+    ret += Metric(f'prf_{name}_total_correct', num_gold, report_mean=False)
+    ret += Metric(f'prf_{name}_span_matches', num_match, report_mean=False)
+    ret += Metric(f'prf_{name}_total_pred', num_pred, report_mean=False)
+    ret += Metric(f'prf_{name}_span_precision', precision, report_mean=False)
+    ret += Metric(f'prf_{name}_span_recall', recall, report_mean=False)
+    ret += Metric(f'prf_{name}_span_f1', f1, report_mean=False)
     return ret
 
 
@@ -354,8 +354,8 @@ class AlignedExtractEvaluator(BaseEvaluator):
         for gold, pred in annotations:
             g_seg_str = ';'.join(map(str, gold.segments))
             p_seg_str = ';'.join(map(str, pred.segments))
-            data.append((gold.content, g_seg_str, p_seg_str))
-        df = pd.DataFrame(data, columns=['content', 'gold', 'predicted'])
+            data.append((gold.segmented_content, g_seg_str, p_seg_str))
+        df = pd.DataFrame(data, columns=['segmented_content', 'gold', 'predicted'])
         out_path = g.log_dir / 'predictions' / f'aligned.{stage}.tsv'
         out_path.parent.mkdir(exist_ok=True, parents=True)
         df.to_csv(out_path, index=None, sep='\t')
@@ -364,17 +364,22 @@ class AlignedExtractEvaluator(BaseEvaluator):
         num_pred = 0
         num_gold = 0
         exact_match = 0
+        prefix_match = 0
         for gold, pred in annotations:
             num_pred += len(pred.segments)
-            num_gold += len(gold.segments)
+            num_gold += min(len(gold.segments), g.max_num_words)
             for p_seg in pred.segments:
                 for g_seg in gold.segments:
                     if p_seg.is_same_span(g_seg):
                         exact_match += 1
                         break
+                    elif p_seg.is_prefix_span(g_seg):
+                        prefix_match += 1
+                        break
 
-        prf_scores = _get_prf_metrics(num_pred, num_gold, exact_match)
-        return analyzed_metrics + prf_scores
+        exact_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_match, 'exact')
+        prefix_prf_scores = _get_prf_metrics(num_pred, num_gold, prefix_match, 'prefix')
+        return analyzed_metrics + exact_prf_scores + prefix_prf_scores
 
     def _get_annotations(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[Tuple[UnsegmentedSentence, UnsegmentedSentence]]:
         # Get the best matched nll.
@@ -396,6 +401,6 @@ class AlignedExtractEvaluator(BaseEvaluator):
             pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
             length = sentence.lost_ipa_length if is_ipa else sentence.lost_form_length
             if length >= g.min_word_length and m:
-                pred.annotate(s, e, {w}) # NOTE(j_luo) Must annotate with sets.
+                pred.annotate(s, e, {w})  # NOTE(j_luo) Must annotate with sets.
             ret.append((gold, pred))
         return ret

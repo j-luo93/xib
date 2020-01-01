@@ -136,7 +136,14 @@ class Segment:
     aligned_contents: Set[Content]
 
     def is_same_span(self, other: Segment) -> bool:
+        if not isinstance(other, Segment):
+            raise TypeError(f'Can only compare with Segment instances.')
         return self.start == other.start and self.end == other.end
+
+    def is_prefix_span(self, other: Segment) -> bool:
+        if not isinstance(other, Segment):
+            raise TypeError(f'Can only compare with Segment instances.')
+        return self.start == other.start and self.end <= other.end
 
     def __str__(self):
         ac_str = ','.join(map(str, self.aligned_contents))
@@ -151,6 +158,7 @@ class OverlappingAnnotation(Exception):
 class UnsegmentedSentence(SequenceABC):
     content: Content
     is_ipa: bool
+    segmented_content: Content = field(repr=False)
     segments: List[Segment] = field(default_factory=list)
     annotated: Set[int] = field(default_factory=set, repr=False)
 
@@ -203,13 +211,13 @@ class AlignedSentence:
         check_explicit_arg(is_ipa, annotated)
         if is_ipa:
             warnings.warn('Only one of the ipa sequences is used.')
-            content = [str(list(word.lost_token.ipa)[0]) for word in self.words]
-            content = ''.join(content)
-            content = IpaSequence(content)
+            content_lst = [str(list(word.lost_token.ipa)[0]) for word in self.words]
+            content = IpaSequence(''.join(content_lst))
         else:
-            content = [word.lost_token.form for word in self.words]
-            content = ''.join(content)
-        uss = UnsegmentedSentence(content, is_ipa)
+            content_lst = [word.lost_token.form for word in self.words]
+            content = ''.join(content_lst)
+        segmented_content = ' '.join(content_lst)
+        uss = UnsegmentedSentence(content, is_ipa, segmented_content)
         if annotated:
             offset = 0
             for word in self.words:

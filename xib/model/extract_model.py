@@ -37,6 +37,7 @@ class Extracted(BaseBatch):
     batch_size: int
     matches: Optional[Matches] = None
     viable: Optional[BT] = None
+    start_candidates: Optional[BT] = None
     len_candidates: Optional[LT] = None
 
 
@@ -203,13 +204,15 @@ class ExtractModel(nn.Module):
 
         # Get the best score and span.
         # NOTE(j_luo) Some segments don't have any viable spans.
-        flat_ll = matches.ll.flatten(['len_s', 'len_e', 'vocab'], 'cand')
-        flat_viable = new_extracted.viable.expand_as(matches.ll).flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        nh = NameHelper()
+        flat_ll = nh.flatten(matches.ll, ['len_s', 'len_e', 'vocab'], 'cand')
+        flat_viable = nh.flatten(new_extracted.viable.expand_as(matches.ll), ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable_ll = (~flat_viable) * (-9999.9) + flat_ll
         # Add probs for unextracted characters.
         unextracted = batch.lengths.align_as(new_extracted.len_candidates) - new_extracted.len_candidates
+        unextracted = torch.where(new_extracted.viable, unextracted, torch.zeros_like(unextracted))
         unextracted = unextracted.expand_as(matches.ll)
-        flat_unextracted = unextracted.flatten(['len_s', 'len_e', 'vocab'], 'cand')
+        flat_unextracted = nh.flatten(unextracted, ['len_s', 'len_e', 'vocab'], 'cand')
         flat_unextracted_ll = flat_unextracted * math.log(g.unextracted_prob)
         flat_total_ll = flat_viable_ll + flat_unextracted_ll
         # Get the top candiates based on total scores.
@@ -218,6 +221,19 @@ class ExtractModel(nn.Module):
         # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
         end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
         best_matched_vocab = best_span_ind % vs
+
+        if g.debug:
+            breakpoint()  # BREAKPOINT(j_luo)
+            import pandas as pd
+            pd.set_option('pprint_nest_depth', 0)
+            from dev_misc.devlib.inspector import Inspector
+            ins = Inspector()
+            ins.add_table(nh.unflatten(flat_total_ll, 'cand', ['len_s', 'len_e', 'vocab']), 'll')
+            ins.add_table(new_extracted.start_candidates, 'sc')
+            ins.add_table(new_extracted.len_candidates, 'lc')
+            ins.add_table(new_extracted.f, 'f', auto_merge=False)
+            ins.add_table(new_extracted.viable, 'viable', is_index=True)
+            ins.add_table(batch.known_vocab.vocab, 'vocab', is_index=True)
 
         if self.training:
             any_viable = new_extracted.viable.any('len_s').any('len_e')
@@ -297,7 +313,7 @@ class ExtractModel(nn.Module):
             all_ll[v_bi, v_lsi, v_lei] = matches.ll
             matches.ll = all_ll.rename('batch', 'len_s', 'len_e', 'vocab')
 
-        new_extracted = Extracted(batch.batch_size, matches, viable, len_candidates)
+        new_extracted = Extracted(batch.batch_size, matches, viable, start_candidates, len_candidates)
         return new_extracted
 
     def _get_matches(self,

@@ -374,7 +374,7 @@ class Vocabulary:
                 return vocab
 
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
-            self.vocab = get_array(list(expand(filter(has_proper_length, gen_word(fin)))))
+            self.vocab = get_array(list(set(expand(filter(has_proper_length, gen_word(fin))))))
 
             self.vocab_length = torch.LongTensor(list(map(len, self.vocab)))
             max_len = self.vocab_length.max().item()

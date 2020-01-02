@@ -231,8 +231,8 @@ class ExtractModel(nn.Module):
             ins.add_table(nh.unflatten(flat_total_ll, 'cand', ['len_s', 'len_e', 'vocab']), 'll')
             ins.add_table(new_extracted.start_candidates, 'sc')
             ins.add_table(new_extracted.len_candidates, 'lc')
-            ins.add_table(new_extracted.f, 'f', auto_merge=False)
-            ins.add_table(new_extracted.viable, 'viable', is_index=True)
+            ins.add_table(new_extracted.matches.f, 'f', auto_merge=False)
+            ins.add_table(new_extracted.viable, 'viable', is_mask_index=True)
             ins.add_table(batch.known_vocab.vocab, 'vocab', is_index=True)
 
         if self.training:

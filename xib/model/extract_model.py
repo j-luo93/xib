@@ -47,6 +47,8 @@ class ExtractModelReturn(BaseBatch):
     end: LT
     best_matched_ll: FT
     best_matched_vocab: LT
+    unmatched_ll: FT
+    marginal_ll: FT
     extracted: Extracted
     alignment: Optional[FT] = None
 
@@ -203,6 +205,7 @@ class ExtractModel(nn.Module):
         vs = len(vocab)
 
         # Get the best score and span.
+        lp_per_unmatched = math.log(g.unextracted_prob)
         # NOTE(j_luo) Some segments don't have any viable spans.
         nh = NameHelper()
         flat_ll = nh.flatten(matches.ll, ['len_s', 'len_e', 'vocab'], 'cand')
@@ -213,7 +216,7 @@ class ExtractModel(nn.Module):
         unextracted = torch.where(new_extracted.viable, unextracted, torch.zeros_like(unextracted))
         unextracted = unextracted.expand_as(matches.ll)
         flat_unextracted = nh.flatten(unextracted, ['len_s', 'len_e', 'vocab'], 'cand')
-        flat_unextracted_ll = flat_unextracted * math.log(g.unextracted_prob)
+        flat_unextracted_ll = flat_unextracted * lp_per_unmatched
         flat_total_ll = flat_viable_ll + flat_unextracted_ll
         # Get the top candiates based on total scores.
         best_matched_ll, best_span_ind = flat_total_ll.max(dim='cand')
@@ -221,9 +224,13 @@ class ExtractModel(nn.Module):
         # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
         end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
         best_matched_vocab = best_span_ind % vs
+        # Get unmatched scores -- no word is matched for the entire inscription.
+        unmatched_ll = batch.lengths * lp_per_unmatched
+        # Concatenate all.
+        marginal_ll = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
+        marginal_ll = marginal_ll.logsumexp(dim='cand')
 
         if g.debug:
-            breakpoint()  # BREAKPOINT(j_luo)
             import pandas as pd
             pd.set_option('pprint_nest_depth', 0)
             from dev_misc.devlib.inspector import Inspector
@@ -235,13 +242,8 @@ class ExtractModel(nn.Module):
             ins.add_table(new_extracted.viable, 'viable', is_mask_index=True)
             ins.add_table(batch.known_vocab.vocab, 'vocab', is_index=True)
 
-        if self.training:
-            any_viable = new_extracted.viable.any('len_s').any('len_e')
-            best_matched_ll = flat_total_ll.logsumexp(dim='cand')
-            best_matched_ll = best_matched_ll * any_viable
-
-        ret = ExtractModelReturn(start, end, best_matched_ll,
-                                 best_matched_vocab, new_extracted, alignment)
+        ret = ExtractModelReturn(start, end, best_matched_ll, best_matched_vocab,
+                                 unmatched_ll, marginal_ll, new_extracted, alignment)
 
         return ret
 

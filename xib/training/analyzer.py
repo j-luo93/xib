@@ -187,7 +187,7 @@ class ExtractAnalyzer:
 
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
-        metrics += Metric('ll', model_ret.best_matched_ll.sum(), batch.batch_size)
+        metrics += Metric('ll', model_ret.marginal_ll.sum(), batch.batch_size)
 
         almt = model_ret.alignment
         if almt is not None:

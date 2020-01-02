@@ -372,6 +372,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 for g_seg in gold.segments:
                     if p_seg.is_same_span(g_seg):
                         exact_match += 1
+                        prefix_match += 1
                         break
                     elif p_seg.is_prefix_span(g_seg):
                         prefix_match += 1
@@ -386,8 +387,9 @@ class AlignedExtractEvaluator(BaseEvaluator):
         start = model_ret.start
         end = model_ret.end
         bmv = model_ret.best_matched_vocab
-        bmnll = -model_ret.best_matched_ll
-        matched = bmnll < self.model.threshold
+        # bmnll = -model_ret.best_matched_ll
+        # matched = bmnll < self.model.threshold
+        matched = model_ret.best_matched_ll > model_ret.unmatched_ll
 
         start = start.cpu().numpy()
         end = end.cpu().numpy()

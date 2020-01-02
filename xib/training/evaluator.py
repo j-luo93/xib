@@ -288,8 +288,8 @@ class ExtractEvaluator(BaseEvaluator):
         # Get the best matched nll.
         start = model_ret.start
         end = model_ret.end
-        bmv = model_ret.best_matched_vocab
-        bmnll = -model_ret.best_matched_ll
+        bmv = model_ret.top_matched_vocab[:, 0]
+        bmnll, _ = -model_ret.top_matched_ll[:, 0]
         matched = bmnll < self.model.threshold
 
         start = start.cpu().numpy()
@@ -326,6 +326,14 @@ def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int, name: str) ->
     return ret
 
 
+@dataclass
+class _AnnotationTuple:
+    gold: UnsegmentedSentence
+    pred: UnsegmentedSentence
+    unmatched_log_prob: float
+    top_matched: List[Tuple[float, UnsegmentedSentence]]
+
+
 class AlignedExtractEvaluator(BaseEvaluator):
 
     def __init__(self, model: ExtractModel, dl: AlignedDataLoader):
@@ -336,7 +344,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
     def evaluate(self, stage: str) -> Metrics:
         total_num_samples = 0
         analyzed_metrics = Metrics()
-        annotations: List[Tuple[UnsegmentedSentence, UnsegmentedSentence]] = list()
+        annotations: List[_AnnotationTuple] = list()
         for batch in pbar(self.dl, desc='eval_batch'):
 
             if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
@@ -351,11 +359,17 @@ class AlignedExtractEvaluator(BaseEvaluator):
 
         # Write to file.
         data = list()
-        for gold, pred in annotations:
-            g_seg_str = ';'.join(map(str, gold.segments))
-            p_seg_str = ';'.join(map(str, pred.segments))
-            data.append((gold.segmented_content, g_seg_str, p_seg_str))
-        df = pd.DataFrame(data, columns=['segmented_content', 'gold', 'predicted'])
+        for anno in annotations:
+            segmented_content = anno.gold.segmented_content
+            g_seg_str = ';'.join(map(str, anno.gold.segments))
+            p_seg_str = ';'.join(map(str, anno.pred.segments))
+            top_matched_strings = list()
+            for log_prob, matched in anno.top_matched:
+                top_matched_strings.append((f'({log_prob:.3f}, ' + ';'.join(map(str, matched.segments)) + ')'))
+            top_matched_seg_str = ', '.join(map(str, top_matched_strings))
+            um = f'{anno.unmatched_log_prob:.3f}'
+            data.append((segmented_content, g_seg_str, p_seg_str, um, top_matched_seg_str))
+        df = pd.DataFrame(data, columns=['segmented_content', 'gold', 'predicted', 'unmatched_log_prob', 'top_matched'])
         out_path = g.log_dir / 'predictions' / f'aligned.{stage}.tsv'
         out_path.parent.mkdir(exist_ok=True, parents=True)
         df.to_csv(out_path, index=None, sep='\t')
@@ -365,11 +379,11 @@ class AlignedExtractEvaluator(BaseEvaluator):
         num_gold = 0
         exact_match = 0
         prefix_match = 0
-        for gold, pred in annotations:
-            num_pred += len(pred.segments)
-            num_gold += min(len(gold.segments), g.max_num_words)
-            for p_seg in pred.segments:
-                for g_seg in gold.segments:
+        for anno in annotations:
+            num_pred += len(anno.pred.segments)
+            num_gold += min(len(anno.gold.segments), g.max_num_words)
+            for p_seg in anno.pred.segments:
+                for g_seg in anno.gold.segments:
                     if p_seg.is_same_span(g_seg):
                         exact_match += 1
                         prefix_match += 1
@@ -382,27 +396,26 @@ class AlignedExtractEvaluator(BaseEvaluator):
         prefix_prf_scores = _get_prf_metrics(num_pred, num_gold, prefix_match, 'prefix')
         return analyzed_metrics + exact_prf_scores + prefix_prf_scores
 
-    def _get_annotations(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[Tuple[UnsegmentedSentence, UnsegmentedSentence]]:
-        # Get the best matched nll.
-        start = model_ret.start
-        end = model_ret.end
-        bmv = model_ret.best_matched_vocab
-        # bmnll = -model_ret.best_matched_ll
-        # matched = bmnll < self.model.threshold
-        matched = model_ret.best_matched_ll > model_ret.unmatched_ll
-
-        start = start.cpu().numpy()
-        end = end.cpu().numpy()
-        bmv = bmv.cpu().numpy()
-        bmw = batch.known_vocab.vocab[bmv]  # Best matched word
+    def _get_annotations(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
+        model_ret = model_ret.numpy()
+        tml = model_ret.top_matched_ll
+        matched = tml[:, 0] > model_ret.unmatched_ll
+        tmw = batch.known_vocab.vocab[model_ret.top_matched_vocab]  # Top matched word.
 
         ret = list()
         is_ipa = g.input_format == 'ipa'
-        for sentence, s, e, m, w in zip(batch.sentences, start, end, matched, bmw):
+        for sentence, s, e, m, ml, mw, um in zip(batch.sentences, model_ret.start, model_ret.end, matched, tml, tmw, model_ret.unmatched_ll):
             gold = sentence.to_unsegmented(is_ipa=is_ipa, annotated=True)
             pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
             length = sentence.lost_ipa_length if is_ipa else sentence.lost_form_length
             if length >= g.min_word_length and m:
-                pred.annotate(s, e, {w})  # NOTE(j_luo) Must annotate with sets.
-            ret.append((gold, pred))
+                pred.annotate(s[0], e[0], mw[0])
+
+            top_matched = list()
+            for ss, ee, ll, ww in zip(s, e, ml, mw):
+                uss = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
+                uss.annotate(ss, ee, ww)
+                top_matched.append((ll, uss))
+            annotation_tuple = _AnnotationTuple(gold, pred, um, top_matched)
+            ret.append(annotation_tuple)
         return ret

@@ -45,8 +45,8 @@ class Extracted(BaseBatch):
 class ExtractModelReturn(BaseBatch):
     start: LT
     end: LT
-    best_matched_ll: FT
-    best_matched_vocab: LT
+    top_matched_ll: FT
+    top_matched_vocab: LT
     unmatched_ll: FT
     marginal_ll: FT
     extracted: Extracted
@@ -112,6 +112,7 @@ class G2PLayer(nn.Module):
 class ExtractModel(nn.Module):
 
     add_argument('max_num_words', default=1, dtype=int, msg='Max number of extracted words.')
+    add_argument('top_k_predictions', default=10, dtype=int, msg='Number of top predictions to keep.')
     add_argument('max_word_length', default=10, dtype=int, msg='Max length of extracted words.')
     add_argument('init_threshold', default=0.05, dtype=float,
                  msg='Initial value of threshold to determine whether two words are matched.')
@@ -219,11 +220,12 @@ class ExtractModel(nn.Module):
         flat_unextracted_ll = flat_unextracted * lp_per_unmatched
         flat_total_ll = flat_viable_ll + flat_unextracted_ll
         # Get the top candiates based on total scores.
-        best_matched_ll, best_span_ind = flat_total_ll.max(dim='cand')
-        start = best_span_ind // (len_e * vs)
+        k = min(g.top_k_predictions, flat_total_ll.size('cand'))
+        top_matched_ll, top_span_ind = torch.topk(flat_total_ll, k, dim='cand')
+        start = top_span_ind // (len_e * vs)
         # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
-        end = best_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
-        best_matched_vocab = best_span_ind % vs
+        end = top_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
+        top_matched_vocab = top_span_ind % vs
         # Get unmatched scores -- no word is matched for the entire inscription.
         unmatched_ll = batch.lengths * lp_per_unmatched
         # Concatenate all.
@@ -242,7 +244,7 @@ class ExtractModel(nn.Module):
             ins.add_table(new_extracted.viable, 'viable', is_mask_index=True)
             ins.add_table(batch.known_vocab.vocab, 'vocab', is_index=True)
 
-        ret = ExtractModelReturn(start, end, best_matched_ll, best_matched_vocab,
+        ret = ExtractModelReturn(start, end, top_matched_ll, top_matched_vocab,
                                  unmatched_ll, marginal_ll, new_extracted, alignment)
 
         return ret

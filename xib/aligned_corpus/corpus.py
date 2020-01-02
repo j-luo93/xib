@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Union
 import warnings
 from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, field
@@ -168,7 +169,9 @@ class UnsegmentedSentence(SequenceABC):
     def __getitem__(self, idx: int) -> Content:
         return self.content[idx]
 
-    def annotate(self, start: int, end: int, aligned_contents: Set[Content]):
+    def annotate(self, start: int, end: int, aligned_contents: Union[Content, Set[Content]]):
+        if isinstance(aligned_contents, (str, IpaSequence)):
+            aligned_contents = {aligned_contents}
         segment = Segment(start, end, self.content[start: end + 1], aligned_contents)
         idx_set = set(range(start, end + 1))
         if idx_set & self.annotated:

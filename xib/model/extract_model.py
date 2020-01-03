@@ -49,6 +49,7 @@ class ExtractModelReturn(BaseBatch):
     top_matched_vocab: LT
     unmatched_ll: FT
     marginal_ll: FT
+    top_word_ll: FT
     extracted: Extracted
     alignment: Optional[FT] = None
 
@@ -222,6 +223,7 @@ class ExtractModel(nn.Module):
         # Get the top candiates based on total scores.
         k = min(g.top_k_predictions, flat_total_ll.size('cand'))
         top_matched_ll, top_span_ind = torch.topk(flat_total_ll, k, dim='cand')
+        top_word_ll = flat_viable_ll.gather('cand', top_span_ind)
         start = top_span_ind // (len_e * vs)
         # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
         end = top_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
@@ -245,7 +247,7 @@ class ExtractModel(nn.Module):
             ins.add_table(batch.known_vocab.vocab, 'vocab', is_index=True)
 
         ret = ExtractModelReturn(start, end, top_matched_ll, top_matched_vocab,
-                                 unmatched_ll, marginal_ll, new_extracted, alignment)
+                                 unmatched_ll, marginal_ll, top_word_ll, new_extracted, alignment)
 
         return ret
 

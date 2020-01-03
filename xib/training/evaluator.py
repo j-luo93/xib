@@ -327,11 +327,18 @@ def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int, name: str) ->
 
 
 @dataclass
+class _Match:
+    total_log_prob: float
+    word_log_prob: float
+    hypothesis: UnsegmentedSentence
+
+
+@dataclass
 class _AnnotationTuple:
     gold: UnsegmentedSentence
     pred: UnsegmentedSentence
     unmatched_log_prob: float
-    top_matched: List[Tuple[float, UnsegmentedSentence]]
+    top_matched: List[_Match]
 
 
 class AlignedExtractEvaluator(BaseEvaluator):
@@ -364,9 +371,12 @@ class AlignedExtractEvaluator(BaseEvaluator):
             g_seg_str = ';'.join(map(str, anno.gold.segments))
             p_seg_str = ';'.join(map(str, anno.pred.segments))
             top_matched_strings = list()
-            for log_prob, matched in anno.top_matched:
-                top_matched_strings.append((f'({log_prob:.3f}, ' + ';'.join(map(str, matched.segments)) + ')'))
-            top_matched_seg_str = ', '.join(map(str, top_matched_strings))
+            for match in anno.top_matched:
+                log_prob_str = f'{match.total_log_prob:.3f}'
+                word_log_prob_str = f'{match.word_log_prob:.3f}'
+                segments_str = ';'.join(map(str, match.hypothesis.segments))
+                top_matched_strings.append(f'({log_prob_str}, {word_log_prob_str}, {segments_str})')
+            top_matched_seg_str = ', '.join(top_matched_strings)
             um = f'{anno.unmatched_log_prob:.3f}'
             data.append((segmented_content, g_seg_str, p_seg_str, um, top_matched_seg_str))
         df = pd.DataFrame(data, columns=['segmented_content', 'gold', 'predicted', 'unmatched_log_prob', 'top_matched'])
@@ -399,12 +409,13 @@ class AlignedExtractEvaluator(BaseEvaluator):
     def _get_annotations(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
         model_ret = model_ret.numpy()
         tml = model_ret.top_matched_ll
+        twl = model_ret.top_word_ll
         matched = tml[:, 0] > model_ret.unmatched_ll
         tmw = batch.known_vocab.vocab[model_ret.top_matched_vocab]  # Top matched word.
 
         ret = list()
         is_ipa = g.input_format == 'ipa'
-        for sentence, s, e, m, ml, mw, um in zip(batch.sentences, model_ret.start, model_ret.end, matched, tml, tmw, model_ret.unmatched_ll):
+        for sentence, s, e, m, ml, wl, mw, um in zip(batch.sentences, model_ret.start, model_ret.end, matched, tml, twl, tmw, model_ret.unmatched_ll):
             gold = sentence.to_unsegmented(is_ipa=is_ipa, annotated=True)
             pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
             length = sentence.lost_ipa_length if is_ipa else sentence.lost_form_length
@@ -412,10 +423,11 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 pred.annotate(s[0], e[0], mw[0])
 
             top_matched = list()
-            for ss, ee, ll, ww in zip(s, e, ml, mw):
+            for ss, ee, mlml, wlwl, ww in zip(s, e, ml, wl, mw):
                 uss = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
                 uss.annotate(ss, ee, ww)
-                top_matched.append((ll, uss))
+                match = _Match(mlml, wlwl, uss)
+                top_matched.append(match)
             annotation_tuple = _AnnotationTuple(gold, pred, um, top_matched)
             ret.append(annotation_tuple)
         return ret

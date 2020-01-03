@@ -124,13 +124,13 @@ class ExtractModel(nn.Module):
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
 
-    def __init__(self, lu_size: int):
+    def __init__(self, lu_size: Optional[int] = None, ku_size: Optional[int] = None):
         super().__init__()
 
         self.adapter = AdaptLayer()
 
         if g.input_format == 'text':
-            self.g2p = G2PLayer(lu_size, len(self.id2unit))
+            self.g2p = G2PLayer(lu_size, ku_size)
 
     # IDEA(j_luo) The current api is worse than just declaring GlobalProperty(writeable=False) outright. And doesn't give proper type hints.
     @global_property

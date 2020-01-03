@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Union
 import warnings
 from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, field
@@ -199,11 +198,11 @@ class AlignedSentence:
 
     @property
     def lost_form_length(self):
-        return sum(map(len, [word.lost_token for word in self.words]))
+        return sum([word.lost_token.form_length for word in self.words])
 
     @property
     def lost_ipa_length(self):
-        return sum(map(len, [word.lost_token.main_ipa for word in self.words]))
+        return sum([word.lost_token.ipa_length for word in self.words])
 
     def __getitem__(self, idx: int) -> AlignedWord:
         return self.words[idx]

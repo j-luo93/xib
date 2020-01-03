@@ -16,6 +16,7 @@ from dev_misc.trainlib import Metrics, has_gpus, set_random_seeds
 from dev_misc.trainlib.trainer import freeze
 from dev_misc.utils import deprecated
 from xib.aligned_corpus.corpus import AlignedCorpus
+from xib.aligned_corpus.data_loader import BaseAlignedBatch
 from xib.aligned_corpus.transcriber import (BaseTranscriber,
                                             DictionaryTranscriber,
                                             MultilingualTranscriber,
@@ -223,10 +224,12 @@ class ExtractManager(BaseManager):
         self.dl_reg = DataLoaderRegistry()
         self.dl_reg.register_data_loader(task, g.data_path)
 
-        lu_size = None
+        lu_size = ku_size = None
         if g.input_format == 'text':
-            lu_size = self.dl_reg[task].dataset.unit_vocab_size
-        self.model = ExtractModel(lu_size=lu_size)
+            id2unit = self.dl_reg[task].dataset.corpus.id2unit
+            lu_size = len(id2unit[g.lost_lang])
+            ku_size = len(BaseAlignedBatch.known_vocab.unit2id)  # FIXME(j_luo)
+        self.model = ExtractModel(lu_size=lu_size, ku_size=ku_size)
         if has_gpus():
             self.model.cuda()
 

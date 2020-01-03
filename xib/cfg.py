@@ -236,6 +236,8 @@ class GotDeIpaAlignedReverseGvs(GotDeIpaMatched):
     char_per_batch: int = 400
     max_segment_length: int = 40
     postprocess_mode: str = 'gvs'
+    lost_lang: str = 'got'
+    known_lang: str = 'nhd'
 
     def __post_init__(self):
         super().__post_init__()
@@ -246,8 +248,6 @@ class GotDeIpaAlignedReverseGvs(GotDeIpaMatched):
 @reg
 class GotDeIpaAlignedReverseGvsPrepare(GotDeIpaAlignedReverseGvs):
     task: str = 'prepare'
-    lost_lang: str = 'got'
-    known_lang: str = 'nhd'
 
     def __post_init__(self):
         super().__post_init__()

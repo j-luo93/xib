@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import field
 from pathlib import Path
-from typing import ClassVar, Dict, List
+from typing import ClassVar, Dict, List, Union
 
 import numpy as np
 import torch
@@ -21,23 +21,17 @@ from xib.ipa import Category
 
 
 @batch_class
-class AlignedBatch(BaseBatch):
+class BaseAlignedBatch(BaseBatch):
     sentences: np.asarray
     lengths: LT
-    feat_matrix: LT
-    dense_feat_matrix: DenseFeatureMatrix = field(init=False)
     source_padding: BT = field(init=False)
 
-    all_lost_dense_feat_matrix: ClassVar[DenseFeatureMatrix] = None
     known_vocab: ClassVar[Vocabulary] = None
 
     def __post_init__(self):
         self.source_padding = ~get_length_mask(self.lengths, self.max_length)
         self.source_padding.rename_('batch', 'length')
         self.lengths.rename_('batch')
-
-        self.feat_matrix.rename_('batch', 'length', 'feat_group')
-        self.dense_feat_matrix = convert_to_dense(self.feat_matrix)
 
     @property
     def batch_size(self) -> int:
@@ -48,11 +42,48 @@ class AlignedBatch(BaseBatch):
         return self.lengths.max().item()
 
 
+@batch_class
+class AlignedIpaBatch(BaseAlignedBatch):
+    feat_matrix: LT
+    dense_feat_matrix: DenseFeatureMatrix = field(init=False)
+
+    all_lost_dense_feat_matrix: ClassVar[DenseFeatureMatrix] = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.feat_matrix.rename_('batch', 'length', 'feat_group')
+        self.dense_feat_matrix = convert_to_dense(self.feat_matrix)
+
+
+@batch_class
+class AlignedTextBatch(BaseAlignedBatch):
+    unit_id_seqs: LT = field(init=False)
+
+    lost_unit2id: ClassVar[Dict[str, int]] = None
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        unit_id_seqs = list()
+        for sentence in self.sentences:
+            uss = sentence.to_unsegmented(is_ipa=False, annotated=False)
+            unit_id_seq = torch.LongTensor([self.lost_unit2id[char] for char in uss.content])
+            unit_id_seqs.append(unit_id_seq)
+        self.unit_id_seqs = torch.nn.utils.rnn.pad_sequence(unit_id_seqs, batch_first=True)
+        self.unit_id_seqs.rename_('batch', 'length')
+
+
+AlignedBatch = Union[AlignedIpaBatch, AlignedTextBatch]
+
+
 def collate_aligned_dataset_items(items: List[AlignedDatasetItem]) -> AlignedBatch:
     sentences = get_array([item.sentence for item in items])
     lengths = default_collate([item.length for item in items])
-    feat_matrix = torch.nn.utils.rnn.pad_sequence([item.feat_matrix for item in items], batch_first=True)
-    return AlignedBatch(sentences, lengths, feat_matrix)
+    if g.input_format == 'ipa':
+        feat_matrix = torch.nn.utils.rnn.pad_sequence([item.feat_matrix for item in items], batch_first=True)
+        return AlignedIpaBatch(sentences, lengths, feat_matrix)
+    else:
+        return AlignedTextBatch(sentences, lengths)  # FIXME(j_luo) fill in this
 
 
 class AlignedDataLoader(BaseDataLoader):
@@ -64,13 +95,16 @@ class AlignedDataLoader(BaseDataLoader):
         super().__init__(*args, **kwargs)
 
         # Assign class variables for AlignedBatch.
-        lost_ipa_units = self.dataset.corpus.id2unit[g.lost_lang]
-        fm = torch.cat([ipa_unit.feat_matrix for ipa_unit in lost_ipa_units], dim=0)
-        fm = fm.unsqueeze(dim=1).rename('batch', 'length', 'feat')
-        dfm = convert_to_dense(fm)
-        AlignedBatch.all_lost_dense_feat_matrix = dfm
+        if g.input_format == 'ipa':
+            lost_ipa_units = self.dataset.corpus.id2unit[g.lost_lang]
+            fm = torch.cat([ipa_unit.feat_matrix for ipa_unit in lost_ipa_units], dim=0)
+            fm = fm.unsqueeze(dim=1).rename('batch', 'length', 'feat')
+            dfm = convert_to_dense(fm)
+            AlignedIpaBatch.all_lost_dense_feat_matrix = dfm
+        else:
+            AlignedTextBatch.lost_unit2id = self.dataset.corpus.unit2id[g.lost_lang]
         # Get vocabulary.
-        AlignedBatch.known_vocab = Vocabulary()
+        BaseAlignedBatch.known_vocab = Vocabulary()
 
     def __iter__(self) -> AlignedBatch:
         for batch in super().__iter__():

@@ -16,7 +16,7 @@ from dev_misc.utils import deprecated
 from xib.aligned_corpus.corpus import AlignedCorpus, Vocabulary
 from xib.aligned_corpus.dataset import AlignedDataset, AlignedDatasetItem
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
-from xib.batch import DenseFeatureMatrix, convert_to_dense
+from xib.batch import BatchSampler, DenseFeatureMatrix, convert_to_dense
 from xib.ipa import Category
 
 
@@ -89,10 +89,15 @@ def collate_aligned_dataset_items(items: List[AlignedDatasetItem]) -> AlignedBat
 class AlignedDataLoader(BaseDataLoader):
 
     collate_fn = collate_aligned_dataset_items
-    dataset: AlignedDataset
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, dataset: AlignedDataset, task: Task, *args, **kwargs):
+        is_ipa = g.input_format == 'ipa'
+        lengths = [
+            sentence.lost_ipa_length if is_ipa else sentence.lost_form_length
+            for sentence in dataset.data
+        ]
+        batch_sampler = BatchSampler(lengths, shuffle=True)
+        super().__init__(dataset, task, *args, batch_sampler=batch_sampler, **kwargs)
 
         # Assign class variables for AlignedBatch.
         if g.input_format == 'ipa':

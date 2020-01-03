@@ -9,7 +9,7 @@ from typing import (Any, Dict, List, Optional, Sequence, Tuple, Type, TypeVar,
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.utils.data import DataLoader, Dataset
 
 from dev_misc import LT, add_condition, g
 from dev_misc.arglib import add_argument, g, init_g_attr
@@ -25,7 +25,8 @@ from xib.aligned_corpus.corpus import AlignedCorpus
 from xib.aligned_corpus.data_loader import AlignedDataLoader
 from xib.aligned_corpus.dataset import AlignedDataset
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
-from xib.batch import CbowIpaBatch, DenseFeatureMatrix, convert_to_dense
+from xib.batch import (BatchSampler, CbowIpaBatch, DenseFeatureMatrix,
+                       convert_to_dense)
 from xib.ipa import Category, Index, conditions, get_enum_by_cat
 from xib.ipa.process import (AlignedIpaSegment, BaseSegment, Segment,
                              SegmentWindow, SegmentX)
@@ -135,34 +136,6 @@ def collate_fn(batch) -> CollateReturn:
     return CollateReturn(segments, lengths, matrices, gold_tag_seqs=gold_tag_seqs, unit_id_seqs=unit_id_seqs)
 
 
-class BatchSampler(Sampler):
-
-    def __init__(self, dataset: Dataset, shuffle: bool = True):
-        self.dataset = dataset
-        self.shuffle = shuffle
-        # Partition the entire dataset beforehand into batches by length.
-        lengths = np.asarray(list(map(len, self.dataset.data['matrices'])))
-        indices = lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
-        logging.info('Partitioning the data into batches.')
-        self.idx_batches = list()
-        i = 0
-        while i < len(indices):
-            max_len = lengths[indices[i]]
-            bs = g.char_per_batch // max_len
-            if bs == 0:
-                raise RuntimeError(f'Batch too small!')
-            self.idx_batches.append(indices[i: i + bs])
-            i += bs
-
-    def __len__(self):
-        return len(self.idx_batches)
-
-    def __iter__(self):
-        if self.shuffle:
-            random.shuffle(self.idx_batches)
-        yield from self.idx_batches
-
-
 class BaseIpaDataLoader(BaseDataLoader, metaclass=ABCMeta):
 
     add_argument('data_path', dtype='path', msg='path to the feat data in tsv format.')
@@ -174,7 +147,8 @@ class BaseIpaDataLoader(BaseDataLoader, metaclass=ABCMeta):
 
     def __init__(self, data_path: Path, task: Task):
         dataset = type(self).dataset_cls(data_path)
-        batch_sampler = BatchSampler(dataset, shuffle=True)
+        lengths = np.asarray(list(map(len, dataset.data['matrices'])))
+        batch_sampler = BatchSampler(lengths, shuffle=True)
         cls = type(self)
         super().__init__(dataset, task, batch_sampler=batch_sampler, pin_memory=True,
                          num_workers=g.num_workers, collate_fn=collate_fn)

@@ -1,14 +1,17 @@
-from dev_misc.trainlib import has_gpus
+import logging
+import random
 from dataclasses import field
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Iterable, Tuple
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 from dev_misc import FT, LT, g
 from dev_misc.devlib import BaseBatch as BaseBatchDev
 from dev_misc.devlib import (batch_class, get_array, get_length_mask,
                              get_range, get_zeros)
+from dev_misc.trainlib import has_gpus
 from xib.ipa import Category, Index, conditions, get_enum_by_cat
 
 
@@ -225,3 +228,30 @@ class DenseIpaBatch(IpaBatch):
             sfm = sfm.scatter(2, sfm_idx.rename(None).unsqueeze(dim=-1), 1.0)
             sfms[cat] = sfm.refine_names('batch', 'length', f'{cat.name}_feat')
         self.dense_feat_matrix = {k: v.cuda() for k, v in sfms.items()}
+
+
+class BatchSampler(Sampler):
+
+    def __init__(self, lengths: Iterable[int], shuffle: bool = True):
+        self.shuffle = shuffle
+        lengths = np.asarray(lengths)
+        # Partition the entire dataset beforehand into batches by length.
+        indices = lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
+        logging.info('Partitioning the data into batches.')
+        self.idx_batches = list()
+        i = 0
+        while i < len(indices):
+            max_len = lengths[indices[i]]
+            bs = g.char_per_batch // max_len
+            if bs == 0:
+                raise RuntimeError(f'Batch too small!')
+            self.idx_batches.append(indices[i: i + bs])
+            i += bs
+
+    def __len__(self):
+        return len(self.idx_batches)
+
+    def __iter__(self):
+        if self.shuffle:
+            random.shuffle(self.idx_batches)
+        yield from self.idx_batches

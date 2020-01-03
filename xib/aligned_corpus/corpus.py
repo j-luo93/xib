@@ -240,7 +240,10 @@ class AlignedSentence:
 def _gather_units(iterable: Iterable[Content]) -> Tuple[List[Content], Dict[Content, int]]:
     all_units = set()
     for content in iterable:
-        all_units.update(content)
+        try:
+            all_units.update(content.cv_list)
+        except:
+            all_units.update(content)
     id2unit = sorted(all_units, key=str)
     unit2id = {u: i for i, u in enumerate(id2unit)}
     return id2unit, unit2id
@@ -400,8 +403,8 @@ class Vocabulary:
             indexed_segments = np.zeros([len(self.vocab), max_len], dtype='int64')
             unit_feat_matrix = dict()
             for i, segment in enumerate(self.vocab):
-                indexed_segments[i, range(len(segment))] = [self.unit2id[u] for u in segment]
-                for j, u in enumerate(segment):
+                indexed_segments[i, range(len(segment))] = [self.unit2id[u] for u in segment.cv_list]
+                for j, u in enumerate(segment.cv_list):
                     if u not in unit_feat_matrix:
                         unit_feat_matrix[u] = segment.feat_matrix[j]
             unit_feat_matrix = [unit_feat_matrix[u] for u in self.id2unit]

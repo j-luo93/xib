@@ -123,6 +123,8 @@ class ExtractModel(nn.Module):
     add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
+    add_argument('span_candidates', dtype=str, choices=[
+                 'all', 'oracle_full'], default='all', msg='How to generate candidates for spans.')
 
     def __init__(self, lu_size: Optional[int] = None, ku_size: Optional[int] = None):
         super().__init__()
@@ -257,11 +259,18 @@ class ExtractModel(nn.Module):
                           word_repr: FT,
                           unit_repr: FT,
                           char_log_probs: Optional[FT] = None) -> Extracted:
-        # Propose all span start/end positions.
-        start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
-        # Range from `min_word_length` to `max_word_length`.
-        len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
-        len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
+        if g.span_candidates == 'all':
+            # Propose all span start/end positions.
+            start_candidates = get_named_range(batch.max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
+            # Range from `min_word_length` to `max_word_length`.
+            len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
+            len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
+        else:
+            # Start from the first position.
+            start_candidates = torch.zeros_like(batch.lengths).align_to('batch', 'len_s', 'len_e')
+            # Use full word length.
+            len_candidates = batch.lengths.align_to('batch', 'len_s', 'len_e')
+            len_candidates.clamp_(min=g.min_word_length, max=g.max_word_length)
         # This is inclusive.
         end_candidates = start_candidates + len_candidates - 1
 

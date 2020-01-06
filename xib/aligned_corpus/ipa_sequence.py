@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence as SequenceABC
 from typing import ClassVar, Dict, List, Optional, Union
 
@@ -19,6 +20,7 @@ class IpaSequence(SequenceABC):
     _cache: ClassVar[Dict[str, Segment]] = dict()
 
     def __init__(self, raw_string: str):
+        raw_string = re.sub(r'\[\?+\]', '', raw_string)  # NOTE(j_luo) Remove leading question marks.
         raw_string = postprocess(raw_string, mode=g.postprocess_mode)
         self._seg = self._get_segment(raw_string)
         self.data: List[IPAString] = [IPAString(ipa_lst) for ipa_lst in self._seg.merged_ipa]

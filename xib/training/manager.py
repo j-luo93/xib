@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import torch
 import torch.nn as nn
+from cltk.phonology.old_english.orthophonology import \
+    OldEnglishOrthophonology as oe
 from torch.optim import SGD, Adagrad, Adam
 from torch.optim.lr_scheduler import CyclicLR
 
@@ -289,6 +291,8 @@ class PrepareManager(BaseManager):
             tr = TranscriberWithBackoff(dt, simple)
         elif lang in ['got', 'germ']:
             tr = stf.get_transcriber('rule', lang='got')
+        elif lang == 'ae':
+            tr = stf.get_transcriber('third_party', func=oe)
         else:
             raise ValueError(f'Unsupported language {lang}.')
 

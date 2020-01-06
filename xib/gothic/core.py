@@ -417,6 +417,15 @@ _standardize_map = {
 }
 _standardize_sub = _get_sub_func(_standardize_map)
 
+_ae_standardize_map = {
+    'œ': 'oe',
+    '̄': '',
+    '̆': '',
+    'z': '',
+    'k': ''
+}
+_ae_standardize_sub = _get_sub_func(_ae_standardize_map)
+
 
 class DoubtfulString(Exception):
     """Raise this error if "?" is in the string and `KEEP_DOUBTFUL` is False."""
@@ -442,6 +451,8 @@ def _standardize(s: str, lang: Lang) -> Tuple[str, Optional[int]]:  # , Optional
     # Convert hw/hv to ƕ if specified and the language is got.
     if lang == 'got' and CONVERT_HWAIR:
         s = _standardize_sub(s)
+    elif lang == 'ae':
+        s = _ae_standardize_sub(s)
     return s, sense_idx  # , trans_s
 
 
@@ -472,6 +483,15 @@ _germ_deaccent_map = {
 }
 _germ_deaccent_sub = _get_sub_func(_germ_deaccent_map)
 
+_ae_deaccent_map = {
+    'ė': 'e',
+    'é': 'e',
+    'í': 'i',
+    'á': 'a',
+    'ä': 'a',
+}
+_ae_deaccent_sub = _get_sub_func(_ae_deaccent_map)
+
 
 def _canonicalize(s: str, lang: Lang) -> str:
     """Further canonicalize the string.
@@ -487,6 +507,8 @@ def _canonicalize(s: str, lang: Lang) -> str:
         s = _deaccent_sub(s)
     elif lang == 'germ':  # HACK(j_luo)
         s = _germ_deaccent_sub(s)
+    elif lang == 'ae':
+        s = _ae_deaccent_sub(s)
     assert len(s) == orig_len
     return s
 

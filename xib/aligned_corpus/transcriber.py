@@ -207,6 +207,16 @@ class RuleBasedTranscriber(BaseTranscriber):
         return [self._sub_func(grapheme)]
 
 
+class ThirdPartyTranscriber(BaseTranscriber):
+
+    def __init__(self, func, postprocess_mode: str = 'none'):
+        BaseTranscriber.__init__(self, postprocess_mode=postprocess_mode)
+        self.func = func
+
+    def _transcribe(self, grapheme: str) -> Sequence[str]:
+        return [self.func(grapheme)]
+
+
 class BaseTranscriberError(Exception):
     """Base exception for all transliteration-related errors."""
 
@@ -235,13 +245,21 @@ class DictionaryTranscriber(BaseTranscriber):
 
 class SimpleTranscriberFactory(Singleton):
 
-    def get_transcriber(self, kind: str, postprocess_mode: str = 'none', lang: Optional[str] = None, csv_path: Optional[str] = None, converter: Optional[Callable] = None):
+    def get_transcriber(self,
+                        kind: str,
+                        postprocess_mode: str = 'none',
+                        lang: Optional[str] = None,
+                        csv_path: Optional[str] = None,
+                        converter: Optional[Callable] = None,
+                        func: Optional[Callable] = None):
         if kind == 'phonemizer':
             obj = PhonemizerTranscriber(postprocess_mode=postprocess_mode)
         elif kind == 'dictionary':
             obj = DictionaryTranscriber(csv_path, converter=converter, postprocess_mode=postprocess_mode)
         elif kind == 'rule':
             obj = RuleBasedTranscriber(lang, postprocess_mode=postprocess_mode)
+        elif kind == 'third_party':
+            obj = ThirdPartyTranscriber(func, postprocess_mode=postprocess_mode)
         else:
             raise ValueError(f'Unrecognized kind {kind}.')
         return obj

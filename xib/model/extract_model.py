@@ -37,7 +37,8 @@ class Extracted(BaseBatch):
     batch_size: int
     matches: Optional[Matches] = None
     viable: Optional[BT] = None
-    start_candidates: Optional[BT] = None
+    start_candidates: Optional[LT] = None
+    end_candidates: Optional[LT] = None
     len_candidates: Optional[LT] = None
 
 
@@ -226,9 +227,13 @@ class ExtractModel(nn.Module):
         k = min(g.top_k_predictions, flat_total_ll.size('cand'))
         top_matched_ll, top_span_ind = torch.topk(flat_total_ll, k, dim='cand')
         top_word_ll = flat_viable_ll.gather('cand', top_span_ind)
-        start = top_span_ind // (len_e * vs)
-        # NOTE(j_luo) Don't forget the length is off by g.min_word_length - 1.
-        end = top_span_ind % (len_e * vs) // vs + start + g.min_word_length - 1
+        start_idx = top_span_ind // (len_e * vs)
+        end_idx = top_span_ind % (len_e * vs) // vs
+        batch_idx = torch.arange(batch.batch_size).unsqueeze(dim=-1)
+        with NoName(start_idx, end_idx, new_extracted.start_candidates, new_extracted.end_candidates):
+            # pylint: disable=unsubscriptable-object
+            start = new_extracted.start_candidates[batch_idx, start_idx, end_idx]
+            end = new_extracted.end_candidates[batch_idx, start_idx, end_idx]
         top_matched_vocab = top_span_ind % vs
         # Get unmatched scores -- no word is matched for the entire inscription.
         unmatched_ll = batch.lengths * lp_per_unmatched
@@ -277,6 +282,7 @@ class ExtractModel(nn.Module):
         # Only keep the viable/valid spans around.
         viable = (end_candidates < batch.lengths.align_as(end_candidates))
         start_candidates = start_candidates.expand_as(viable)
+        end_candidates = end_candidates.expand_as(viable)
         len_candidates = len_candidates.expand_as(viable)
         # NOTE(j_luo) Use `viable` to get the lengths. `len_candidates` has dummy axes.
         # IDEA(j_luo) Any better way of handling this? Perhaps persistent names?
@@ -328,7 +334,7 @@ class ExtractModel(nn.Module):
             all_ll[v_bi, v_lsi, v_lei] = matches.ll
             matches.ll = all_ll.rename('batch', 'len_s', 'len_e', 'vocab')
 
-        new_extracted = Extracted(batch.batch_size, matches, viable, start_candidates, len_candidates)
+        new_extracted = Extracted(batch.batch_size, matches, viable, start_candidates, end_candidates, len_candidates)
         return new_extracted
 
     def _get_matches(self,

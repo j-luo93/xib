@@ -234,6 +234,7 @@ class ExtractManager(BaseManager):
         self.model = ExtractModel(lu_size=lu_size, ku_size=ku_size)
         if has_gpus():
             self.model.cuda()
+        logging.info(str(self.model))
 
         eval_cls = AlignedExtractEvaluator if g.use_new_data_loader else ExtractEvaluator
         self.evaluator = eval_cls(self.model, self.dl_reg[task])

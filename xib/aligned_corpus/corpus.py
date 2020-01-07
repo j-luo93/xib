@@ -376,7 +376,7 @@ class Vocabulary:
                     else:
                         yield content
             else:
-                return vocab
+                yield from vocab
 
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
             self.vocab = get_array(sorted(set(expand(filter(has_proper_length, gen_word(fin)))),

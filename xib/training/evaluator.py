@@ -318,11 +318,11 @@ def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int, name: str) ->
     recall = num_match / (num_gold + 1e-8)
     f1 = 2 * precision * recall / (precision + recall + 1e-8)
     ret += Metric(f'prf_{name}_total_correct', num_gold, report_mean=False)
-    ret += Metric(f'prf_{name}_span_matches', num_match, report_mean=False)
+    ret += Metric(f'prf_{name}_matches', num_match, report_mean=False)
     ret += Metric(f'prf_{name}_total_pred', num_pred, report_mean=False)
-    ret += Metric(f'prf_{name}_span_precision', precision, report_mean=False)
-    ret += Metric(f'prf_{name}_span_recall', recall, report_mean=False)
-    ret += Metric(f'prf_{name}_span_f1', f1, report_mean=False)
+    ret += Metric(f'prf_{name}_precision', precision, report_mean=False)
+    ret += Metric(f'prf_{name}_recall', recall, report_mean=False)
+    ret += Metric(f'prf_{name}_f1', f1, report_mean=False)
     return ret
 
 
@@ -387,24 +387,38 @@ class AlignedExtractEvaluator(BaseEvaluator):
         # Get P/R/F scores.
         num_pred = 0
         num_gold = 0
-        exact_match = 0
-        prefix_match = 0
+        exact_span_match = 0
+        prefix_span_match = 0
+        exact_content_match = 0
+        # These are for segments that do have cognates. Similar to the evaluation setup of the old model.
+        logging.warning('num_positive_gold might be wrong.')
+        num_positive_gold = 0
+        num_positive_pred = 0
+        exact_positive_content_match = 0
         for anno in annotations:
             num_pred += len(anno.pred.segments)
             num_gold += min(len(anno.gold.segments), g.max_num_words)
+            has_cognate = bool(anno.gold.segments)
+            num_positive_gold += has_cognate
+            num_positive_pred += has_cognate
             for p_seg in anno.pred.segments:
                 for g_seg in anno.gold.segments:
-                    if p_seg.is_same_span(g_seg):
-                        exact_match += 1
-                        prefix_match += 1
-                        break
-                    elif p_seg.is_prefix_span(g_seg):
-                        prefix_match += 1
-                        break
+                    if p_seg.has_same_span(g_seg):
+                        exact_span_match += 1
+                        prefix_span_match += 1
+                    elif p_seg.has_prefix_span(g_seg):
+                        prefix_span_match += 1
+                    if p_seg.has_prefix_span(g_seg) and p_seg.has_same_content(g_seg):
+                        exact_content_match += 1
+                        if has_cognate:
+                            exact_positive_content_match += 1
 
-        exact_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_match, 'exact')
-        prefix_prf_scores = _get_prf_metrics(num_pred, num_gold, prefix_match, 'prefix')
-        return analyzed_metrics + exact_prf_scores + prefix_prf_scores
+        exact_span_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_span_match, 'exact_span')
+        prefix_span_prf_scores = _get_prf_metrics(num_pred, num_gold, prefix_span_match, 'prefix_span')
+        exact_content_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_content_match, 'exact_content')
+        exact_positive_content_prf_scores = _get_prf_metrics(
+            num_positive_pred, num_positive_gold, exact_positive_content_match, 'exact_positive_content')
+        return analyzed_metrics + exact_span_prf_scores + prefix_span_prf_scores + exact_content_prf_scores + exact_positive_content_prf_scores
 
     def _get_annotations(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
         model_ret = model_ret.numpy()
@@ -414,17 +428,18 @@ class AlignedExtractEvaluator(BaseEvaluator):
         tmw = batch.known_vocab.vocab[model_ret.top_matched_vocab]  # Top matched word.
 
         ret = list()
-        is_ipa = g.input_format == 'ipa'
+        is_lost_ipa = (g.input_format == 'ipa')
         for sentence, s, e, m, ml, wl, mw, um in zip(batch.sentences, model_ret.start, model_ret.end, matched, tml, twl, tmw, model_ret.unmatched_ll):
-            gold = sentence.to_unsegmented(is_ipa=is_ipa, annotated=True)
-            pred = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
-            length = sentence.lost_ipa_length if is_ipa else sentence.lost_form_length
+            # NOTE(j_luo) IPA is always used on the known side.
+            gold = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=True)
+            pred = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
+            length = sentence.lost_ipa_length if is_lost_ipa else sentence.lost_form_length
             if length >= g.min_word_length and m:
                 pred.annotate(s[0], e[0], mw[0])
 
             top_matched = list()
             for ss, ee, mlml, wlwl, ww in zip(s, e, ml, wl, mw):
-                uss = sentence.to_unsegmented(is_ipa=is_ipa, annotated=False)
+                uss = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
                 uss.annotate(ss, ee, ww)
                 match = _Match(mlml, wlwl, uss)
                 top_matched.append(match)

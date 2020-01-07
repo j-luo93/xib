@@ -135,14 +135,20 @@ class Segment:
     content: Content
     aligned_contents: Set[Content]
 
-    def is_same_span(self, other: Segment) -> bool:
+    def _check_segment_type(self, other: Segment):
         if not isinstance(other, Segment):
             raise TypeError(f'Can only compare with Segment instances.')
+
+    def has_same_span(self, other: Segment) -> bool:
+        self._check_segment_type(other)
         return self.start == other.start and self.end == other.end
 
-    def is_prefix_span(self, other: Segment) -> bool:
-        if not isinstance(other, Segment):
-            raise TypeError(f'Can only compare with Segment instances.')
+    def has_same_content(self, other: Segment) -> bool:
+        self._check_segment_type(other)
+        return bool(self.aligned_contents & other.aligned_contents)
+
+    def has_prefix_span(self, other: Segment) -> bool:
+        self._check_segment_type(other)
         return self.start == other.start and self.end <= other.end
 
     def __str__(self):
@@ -157,7 +163,8 @@ class OverlappingAnnotation(Exception):
 @dataclass
 class UnsegmentedSentence(SequenceABC):
     content: Content
-    is_ipa: bool
+    is_lost_ipa: bool
+    is_known_ipa: bool
     segmented_content: Content = field(repr=False)
     segments: List[Segment] = field(default_factory=list)
     annotated: Set[int] = field(default_factory=set, repr=False)
@@ -208,26 +215,27 @@ class AlignedSentence:
         return self.words[idx]
 
     def to_unsegmented(self, *,
-                       is_ipa: bool = None,
+                       is_lost_ipa: bool = None,
+                       is_known_ipa: bool = None,
                        annotated: bool = None) -> UnsegmentedSentence:
-        check_explicit_arg(is_ipa, annotated)
-        if is_ipa:
+        check_explicit_arg(is_lost_ipa, is_known_ipa, annotated)
+        if is_lost_ipa:
             warnings.warn('Only one of the ipa sequences is used.')
-            content_lst = [str(list(word.lost_token.ipa)[0]) for word in self.words]
+            content_lst = [str(word.lost_token.main_ipa) for word in self.words]
             content = IpaSequence(''.join(content_lst))
         else:
             content_lst = [word.lost_token.form for word in self.words]
             content = ''.join(content_lst)
         segmented_content = ' '.join(content_lst)
-        uss = UnsegmentedSentence(content, is_ipa, segmented_content)
+        uss = UnsegmentedSentence(content, is_lost_ipa, is_known_ipa, segmented_content)
         if annotated:
             offset = 0
             for word in self.words:
-                lwl = word.lost_token.ipa_length if is_ipa else word.lost_token.form_length
+                lwl = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
                 if (word.known_tokens or word.known_lemmas) and lwl <= g.max_word_length and lwl >= g.min_word_length:
                     aligned_contents = set()
                     for known_word in (word.known_tokens | word.known_lemmas):
-                        if is_ipa:
+                        if is_known_ipa:
                             aligned_contents.update(known_word.ipa)
                         else:
                             aligned_contents.add(known_word.form)

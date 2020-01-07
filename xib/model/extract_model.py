@@ -124,8 +124,8 @@ class ExtractModel(nn.Module):
     add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
-    add_argument('span_candidates', dtype=str, choices=[
-                 'all', 'oracle_full'], default='all', msg='How to generate candidates for spans.')
+    add_argument('span_candidates', dtype=str,
+                 choices=['all', 'oracle_full'], default='all', msg='How to generate candidates for spans.')
 
     def __init__(self, lu_size: Optional[int] = None, ku_size: Optional[int] = None):
         super().__init__()

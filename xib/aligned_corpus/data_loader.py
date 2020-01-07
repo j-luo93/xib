@@ -66,7 +66,7 @@ class AlignedTextBatch(BaseAlignedBatch):
 
         unit_id_seqs = list()
         for sentence in self.sentences:
-            uss = sentence.to_unsegmented(is_ipa=False, annotated=False)
+            uss = sentence.to_unsegmented(is_known_ipa=True, is_lost_ipa=False, annotated=False)
             unit_id_seq = torch.LongTensor([self.lost_unit2id[char] for char in uss.content])
             unit_id_seqs.append(unit_id_seq)
         self.unit_id_seqs = torch.nn.utils.rnn.pad_sequence(unit_id_seqs, batch_first=True)

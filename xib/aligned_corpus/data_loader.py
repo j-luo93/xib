@@ -13,9 +13,10 @@ from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.trainlib import Task
 from dev_misc.trainlib.base_data_loader import BaseDataLoader
 from dev_misc.utils import deprecated
-from xib.aligned_corpus.corpus import AlignedCorpus, Vocabulary
+from xib.aligned_corpus.corpus import AlignedCorpus
 from xib.aligned_corpus.dataset import AlignedDataset, AlignedDatasetItem
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
+from xib.aligned_corpus.vocabulary import Vocabulary
 from xib.batch import BatchSampler, DenseFeatureMatrix, convert_to_dense
 from xib.ipa import Category
 
@@ -83,7 +84,7 @@ def collate_aligned_dataset_items(items: List[AlignedDatasetItem]) -> AlignedBat
         feat_matrix = torch.nn.utils.rnn.pad_sequence([item.feat_matrix for item in items], batch_first=True)
         return AlignedIpaBatch(sentences, lengths, feat_matrix)
     else:
-        return AlignedTextBatch(sentences, lengths)  # FIXME(j_luo) fill in this
+        return AlignedTextBatch(sentences, lengths)
 
 
 class AlignedDataLoader(BaseDataLoader):

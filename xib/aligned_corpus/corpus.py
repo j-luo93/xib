@@ -246,6 +246,7 @@ class AlignedSentence:
 
 
 def gather_units(iterable: Iterable[Content]) -> Tuple[List[Content], Dict[Content, int]]:
+    """Get `id2unit` and `unit2id` mappings from an iterable of contents."""
     all_units = set()
     for content in iterable:
         try:
@@ -255,6 +256,20 @@ def gather_units(iterable: Iterable[Content]) -> Tuple[List[Content], Dict[Conte
     id2unit = sorted(all_units, key=str)
     unit2id = {u: i for i, u in enumerate(id2unit)}
     return id2unit, unit2id
+
+
+def get_set_of_words(saved_string: str) -> Set[Word]:
+    """Get a set of words from a saved_string optionally separated by '|'."""
+    ret = set()
+    try:
+        for s in saved_string.split('|'):
+            try:
+                ret.add(Word.from_saved_string(s))
+            except ValueError:
+                pass
+    except AttributeError:
+        pass
+    return ret
 
 
 class AlignedCorpus(SequenceABC):
@@ -312,19 +327,6 @@ class AlignedCorpus(SequenceABC):
         df = pd.read_csv(data_path, sep='\t')
         df['lost_token'] = df['lost_token'].apply(Word.from_saved_string)
         df['lost_lemma'] = df['lost_lemma'].apply(Word.from_saved_string)
-
-        def get_set_of_words(saved_string: str) -> Set[Word]:
-            ret = set()
-            try:
-                for s in saved_string.split('|'):
-                    try:
-                        ret.add(Word.from_saved_string(s))
-                    except ValueError:
-                        pass
-            except AttributeError:
-                pass
-            return ret
-
         df['known_tokens'] = df['known_tokens'].apply(get_set_of_words)
         df['known_lemmas'] = df['known_lemmas'].apply(get_set_of_words)
         df['aligned_word'] = df[['lost_token', 'lost_lemma', 'known_tokens',

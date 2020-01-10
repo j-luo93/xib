@@ -357,6 +357,9 @@ class ExtractModel(nn.Module):
             ctx_log_probs = ctx_logits.log_softmax(dim='unit').flatten(['viable', 'len_w'], 'viable_X_len_w')
             with NoName(char_log_probs, extracted_unit_ids):
                 global_log_probs = char_log_probs[extracted_unit_ids].rename('viable_X_len_w', 'unit')
+            # lp1 = math.log(g.context_weight) + ctx_log_probs
+            # lp2 = math.log(1.0 - g.context_weight) + global_log_probs
+            # weighted_log_probs = torch.stack([lp1, lp2], new_name='mixture').logsumexp(dim='mixture')
             weighted_log_probs = g.context_weight * ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
             costs = -weighted_log_probs
             costs = costs.unflatten('viable_X_len_w', [('viable', ns), ('len_w', len_w)])

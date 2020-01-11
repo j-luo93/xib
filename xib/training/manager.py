@@ -228,9 +228,9 @@ class ExtractManager(BaseManager):
 
         lu_size = ku_size = None
         if g.input_format == 'text':
-            id2unit = self.dl_reg[task].dataset.corpus.id2unit
-            lu_size = len(id2unit[g.lost_lang])
-            ku_size = len(BaseAlignedBatch.known_vocab.unit2id)  # FIXME(j_luo)
+            char_sets = self.dl_reg[task].dataset.corpus.char_sets
+            lu_size = len(char_sets[g.lost_lang])
+            ku_size = len(BaseAlignedBatch.known_vocab.char_set)
         self.model = ExtractModel(lu_size=lu_size, ku_size=ku_size)
         if has_gpus():
             self.model.cuda()

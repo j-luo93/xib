@@ -15,7 +15,8 @@ from dev_misc import add_argument, g
 from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.devlib.named_tensor import NoName, Rename
 from dev_misc.utils import Singleton, check_explicit_arg
-from xib.aligned_corpus.ipa_sequence import IpaSequence
+from xib.aligned_corpus.char_set import CharSet, CharSetFactory
+from xib.aligned_corpus.ipa_sequence import Content, IpaSequence
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
 from xib.batch import convert_to_dense
 
@@ -123,9 +124,6 @@ class AlignedWord:
             if known_lemma
         }
         return cls(lost_token, lost_lemma, known_tokens, known_lemmas)
-
-
-Content = TypeVar('Content', str, IpaSequence)
 
 
 @dataclass
@@ -245,21 +243,6 @@ class AlignedSentence:
         return uss
 
 
-def gather_units(iterable: Iterable[Content], is_ipa: bool) -> Tuple[List[Content], Dict[Content, int]]:
-    """Get `id2unit` and `unit2id` mappings from an iterable of contents."""
-    all_units = set()
-    for content in iterable:
-        if is_ipa:
-            all_units.update(content.cv_list)
-        else:
-            all_units.update(content)
-    id2unit = sorted(all_units, key=str)
-    if g.use_empty_symbol:
-        id2unit = ['<EMPTY>'] + id2unit
-    unit2id = {u: i for i, u in enumerate(id2unit)}
-    return id2unit, unit2id
-
-
 def get_set_of_words(saved_string: str) -> Set[Word]:
     """Get a set of words from a saved_string optionally separated by '|'."""
     ret = set()
@@ -303,11 +286,11 @@ class AlignedCorpus(SequenceABC):
                     for known_word in word.known_tokens | word.known_lemmas:
                         yield from yield_content(known_word)
 
-        lost_id2unit, lost_unit2id = gather_units(gen_lost_word(), is_ipa)
-        known_id2unit, known_unit2id = gather_units(gen_known_word(), is_ipa)
-
-        self.id2unit = {lost_lang: lost_id2unit, known_lang: known_id2unit}
-        self.unit2id = {lost_lang: lost_unit2id, known_lang: known_unit2id}
+        csf = CharSetFactory()
+        self.char_sets = {
+            lost_lang: csf.get_char_set(gen_lost_word(), lost_lang, is_ipa),
+            known_lang: csf.get_char_set(gen_known_word(), known_lang, is_ipa)
+        }
 
     def __len__(self):
         return len(self.sentences)

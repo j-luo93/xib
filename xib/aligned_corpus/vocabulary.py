@@ -6,7 +6,8 @@ import torch
 from dev_misc import add_argument, g
 from dev_misc.devlib import get_array, get_length_mask
 from dev_misc.devlib.named_tensor import Rename
-from xib.aligned_corpus.corpus import Content, Word, gather_units
+from xib.aligned_corpus.char_set import CharSetFactory
+from xib.aligned_corpus.corpus import Content, Word
 from xib.batch import convert_to_dense
 
 
@@ -57,7 +58,8 @@ class Vocabulary:
             self.vocab_dense_feat_matrix = {k: v.rename(batch='vocab') for k, v in vocab_dense_feat_matrix.items()}
 
             # Get the entire set of units from vocab. Always use IPA for the known vocab.
-            self.id2unit, self.unit2id = gather_units(self.vocab, True)
+            csf = CharSetFactory()
+            self.char_set = csf.get_char_set(self.vocab, g.known_lang, True)
 
             # Now indexify the vocab. Gather feature matrices for units as well.
             indexed_segments = np.zeros([len(self.vocab), max_len], dtype='int64')
@@ -66,11 +68,11 @@ class Vocabulary:
             else:
                 unit_feat_matrix = dict()
             for i, segment in enumerate(self.vocab):
-                indexed_segments[i, range(len(segment))] = [self.unit2id[u] for u in segment.cv_list]
+                indexed_segments[i, range(len(segment))] = [self.char_set.to_id(u) for u in segment.cv_list]
                 for j, u in enumerate(segment.cv_list):
                     if u not in unit_feat_matrix:
                         unit_feat_matrix[u] = segment.feat_matrix[j]
-            unit_feat_matrix = [unit_feat_matrix[u] for u in self.id2unit]
+            unit_feat_matrix = [unit_feat_matrix[u] for u in self.char_set]
             unit_feat_matrix = torch.nn.utils.rnn.pad_sequence(unit_feat_matrix, batch_first=True)
             self.unit_feat_matrix = unit_feat_matrix.unsqueeze(dim=1)
             self.indexed_segments = torch.from_numpy(indexed_segments)

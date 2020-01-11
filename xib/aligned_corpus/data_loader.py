@@ -13,6 +13,7 @@ from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.trainlib import Task
 from dev_misc.trainlib.base_data_loader import BaseDataLoader
 from dev_misc.utils import deprecated
+from xib.aligned_corpus.char_set import CharSet
 from xib.aligned_corpus.corpus import AlignedCorpus
 from xib.aligned_corpus.dataset import AlignedDataset, AlignedDatasetItem
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
@@ -27,6 +28,7 @@ class BaseAlignedBatch(BaseBatch):
     lengths: LT
     source_padding: BT = field(init=False)
 
+    # TODO(j_luo) Get rid of class vars.
     known_vocab: ClassVar[Vocabulary] = None
 
     def __post_init__(self):
@@ -60,7 +62,8 @@ class AlignedIpaBatch(BaseAlignedBatch):
 class AlignedTextBatch(BaseAlignedBatch):
     unit_id_seqs: LT = field(init=False)
 
-    lost_unit2id: ClassVar[Dict[str, int]] = None
+    lost_char_set: ClassVar[CharSet] = None
+    # lost_unit2id: ClassVar[Dict[str, int]] = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -68,7 +71,7 @@ class AlignedTextBatch(BaseAlignedBatch):
         unit_id_seqs = list()
         for sentence in self.sentences:
             uss = sentence.to_unsegmented(is_known_ipa=True, is_lost_ipa=False, annotated=False)
-            unit_id_seq = torch.LongTensor([self.lost_unit2id[char] for char in uss.content])
+            unit_id_seq = torch.LongTensor([self.lost_char_set.to_id(char) for char in uss.content])
             unit_id_seqs.append(unit_id_seq)
         self.unit_id_seqs = torch.nn.utils.rnn.pad_sequence(unit_id_seqs, batch_first=True)
         self.unit_id_seqs.rename_('batch', 'length')
@@ -90,6 +93,7 @@ def collate_aligned_dataset_items(items: List[AlignedDatasetItem]) -> AlignedBat
 class AlignedDataLoader(BaseDataLoader):
 
     collate_fn = collate_aligned_dataset_items
+    dataset: AlignedDataset
 
     def __init__(self, dataset: AlignedDataset, task: Task, *args, **kwargs):
         is_ipa = g.input_format == 'ipa'
@@ -102,13 +106,14 @@ class AlignedDataLoader(BaseDataLoader):
 
         # Assign class variables for AlignedBatch.
         if g.input_format == 'ipa':
-            lost_ipa_units = self.dataset.corpus.id2unit[g.lost_lang]
+            lost_ipa_units = self.dataset.corpus.char_sets[g.lost_lang].id2unit
             fm = torch.cat([ipa_unit.feat_matrix for ipa_unit in lost_ipa_units], dim=0)
             fm = fm.unsqueeze(dim=1).rename('batch', 'length', 'feat')
             dfm = convert_to_dense(fm)
             AlignedIpaBatch.all_lost_dense_feat_matrix = dfm
         else:
-            AlignedTextBatch.lost_unit2id = self.dataset.corpus.unit2id[g.lost_lang]
+            # AlignedTextBatch.lost_unit2id = self.dataset.corpus.unit2id[g.lost_lang]
+            AlignedTextBatch.lost_char_set = self.dataset.corpus.char_sets[g.lost_lang]
         # Get vocabulary.
         BaseAlignedBatch.known_vocab = Vocabulary()
 

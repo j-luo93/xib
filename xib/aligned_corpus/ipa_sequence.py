@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence as SequenceABC
-from typing import ClassVar, Dict, List, Optional, Union
+from typing import ClassVar, Dict, List, Optional, TypeVar, Union
 
 from ipapy.ipastring import IPAString
 
@@ -67,3 +67,6 @@ class IpaSequence(SequenceABC):
             return False
 
         return self._canonical_string == other._canonical_string
+
+
+Content = TypeVar('Content', str, IpaSequence)

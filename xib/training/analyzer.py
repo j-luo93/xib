@@ -191,6 +191,11 @@ class ExtractAnalyzer:
 
         almt = model_ret.alignment
         if almt is not None:
+            # # DEBUG(j_luo)
+            # if g.use_empty_symbol:
+            #     reg = (almt.sum(dim=0) - 1.0) ** 2
+            #     reg = reg[1:].sum() + (almt[:, 0].sum() - 2.0) ** 2
+            # else:
             reg = ((almt.sum(dim=0) - 1.0) ** 2).sum()
             metrics += Metric('reg', reg, batch.batch_size)
         return metrics

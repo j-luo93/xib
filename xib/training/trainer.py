@@ -185,7 +185,8 @@ class ExtractTrainer(BaseTrainer):
             to_save = {
                 'adapter': self.model.adapter.state_dict()
             }
-        path = g.log_dir / f'saved.{self.stage}.almt'
+        path = g.log_dir / 'almt' / f'saved.{self.stage}.almt'
+        path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(to_save, path)
         logging.debug(f'Alignment saved to {path}.')
 

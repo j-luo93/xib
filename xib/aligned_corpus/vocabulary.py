@@ -56,12 +56,15 @@ class Vocabulary:
                 vocab_dense_feat_matrix = convert_to_dense(self.vocab_feat_matrix)
             self.vocab_dense_feat_matrix = {k: v.rename(batch='vocab') for k, v in vocab_dense_feat_matrix.items()}
 
-            # Get the entire set of units from vocab.
-            self.id2unit, self.unit2id = gather_units(self.vocab)
+            # Get the entire set of units from vocab. Always use IPA for the known vocab.
+            self.id2unit, self.unit2id = gather_units(self.vocab, True)
 
             # Now indexify the vocab. Gather feature matrices for units as well.
             indexed_segments = np.zeros([len(self.vocab), max_len], dtype='int64')
-            unit_feat_matrix = dict()
+            if g.use_empty_symbol:
+                unit_feat_matrix = {'<EMPTY>': torch.zeros(0).long()}
+            else:
+                unit_feat_matrix = dict()
             for i, segment in enumerate(self.vocab):
                 indexed_segments[i, range(len(segment))] = [self.unit2id[u] for u in segment.cv_list]
                 for j, u in enumerate(segment.cv_list):

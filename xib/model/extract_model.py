@@ -124,6 +124,7 @@ class ExtractModel(nn.Module):
     add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
+    add_argument('use_empty_symbol', dtype=bool, default=False, msg='Flag to use empty symbol')
     add_argument('span_candidates', dtype=str,
                  choices=['all', 'oracle_full'], default='all', msg='How to generate candidates for spans.')
 
@@ -384,8 +385,14 @@ class ExtractModel(nn.Module):
                 for lt in range(min_lt, max_lt):
                     transitions = list()
                     if (ls - 1, lt) in fs:
-                        transitions.append(fs[(ls - 1, lt)] + self.ins_del_cost)
+                        if g.use_empty_symbol:
+                            del_cost = costs[..., ls - 1, 0].rename(None).unsqueeze(dim=1)
+                            transitions.append(fs[(ls - 1, lt)] + del_cost)
+                        else:
+                            transitions.append(fs[(ls - 1, lt)] + self.ins_del_cost)
                     if (ls, lt - 1) in fs:
+                        # transitions.append(fs[(ls, lt - 1)] + self.ins_del_cost)
+                        # FIXME(j_luo) How to parameterize insertion costs.
                         transitions.append(fs[(ls, lt - 1)] + self.ins_del_cost)
                     if (ls - 1, lt - 1) in fs:
                         vocab_inds = vocab.indexed_segments[:, lt - 1]

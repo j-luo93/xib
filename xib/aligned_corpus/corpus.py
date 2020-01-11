@@ -245,15 +245,17 @@ class AlignedSentence:
         return uss
 
 
-def gather_units(iterable: Iterable[Content]) -> Tuple[List[Content], Dict[Content, int]]:
+def gather_units(iterable: Iterable[Content], is_ipa: bool) -> Tuple[List[Content], Dict[Content, int]]:
     """Get `id2unit` and `unit2id` mappings from an iterable of contents."""
     all_units = set()
     for content in iterable:
-        try:
+        if is_ipa:
             all_units.update(content.cv_list)
-        except AttributeError:
+        else:
             all_units.update(content)
     id2unit = sorted(all_units, key=str)
+    if g.use_empty_symbol:
+        id2unit = ['<EMPTY>'] + id2unit
     unit2id = {u: i for i, u in enumerate(id2unit)}
     return id2unit, unit2id
 
@@ -301,8 +303,8 @@ class AlignedCorpus(SequenceABC):
                     for known_word in word.known_tokens | word.known_lemmas:
                         yield from yield_content(known_word)
 
-        lost_id2unit, lost_unit2id = gather_units(gen_lost_word())
-        known_id2unit, known_unit2id = gather_units(gen_known_word())
+        lost_id2unit, lost_unit2id = gather_units(gen_lost_word(), is_ipa)
+        known_id2unit, known_unit2id = gather_units(gen_known_word(), is_ipa)
 
         self.id2unit = {lost_lang: lost_id2unit, known_lang: known_id2unit}
         self.unit2id = {lost_lang: lost_unit2id, known_lang: known_unit2id}

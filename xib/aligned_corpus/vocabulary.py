@@ -6,7 +6,8 @@ import torch
 from dev_misc import add_argument, g
 from dev_misc.devlib import get_array, get_length_mask
 from dev_misc.devlib.named_tensor import Rename
-from xib.aligned_corpus.char_set import CharSetFactory
+from xib.aligned_corpus.char_set import (DELETE_SYM, EMPTY_SYM, INSERT_SYM,
+                                         CharSetFactory)
 from xib.aligned_corpus.corpus import Content, Word
 from xib.batch import convert_to_dense
 
@@ -63,8 +64,10 @@ class Vocabulary:
 
             # Now indexify the vocab. Gather feature matrices for units as well.
             indexed_segments = np.zeros([len(self.vocab), max_len], dtype='int64')
-            if g.use_empty_symbol:
-                unit_feat_matrix = {'<EMPTY>': torch.zeros(0).long()}
+            if g.use_conv_both_sides:
+                unit_feat_matrix = {INSERT_SYM: torch.zeros(0).long(), DELETE_SYM: torch.zeros(0).long()}
+            elif g.use_empty_symbol:
+                unit_feat_matrix = {EMPTY_SYM: torch.zeros(0).long()}
             else:
                 unit_feat_matrix = dict()
             for i, segment in enumerate(self.vocab):

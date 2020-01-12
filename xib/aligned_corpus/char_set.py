@@ -11,6 +11,14 @@ from xib.aligned_corpus.ipa_sequence import Content
 Lang = NewType('Lang', str)
 Key = Tuple[Lang, bool]
 
+EMPTY_SYM = '<EMPTY>'
+EMPTY_ID = 0
+
+INSERT_SYM = '<INSERT>'
+DELETE_SYM = '<DELETE>'
+INSERT_ID = 0
+DELETE_ID = 1
+
 
 class CharSet:
 
@@ -18,8 +26,10 @@ class CharSet:
         self.lang = lang
         self.is_ipa = is_ipa
         self.id2unit = sorted(units, key=str)
-        if g.use_empty_symbol:
-            id2unit = ['<EMPTY>'] + id2unit
+        if g.use_conv_both_sides:
+            self.id2unit = [INSERT_SYM, DELETE_SYM] + self.id2unit
+        elif g.use_empty_symbol:
+            self.id2unit = [EMPTY_SYM] + self.id2unit
         self.unit2id = {u: i for i, u in enumerate(self.id2unit)}
 
     def to_id(self, unit: Content):

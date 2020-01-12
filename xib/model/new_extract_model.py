@@ -1,11 +1,12 @@
 import logging
 import math
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
 
-from dev_misc import g, get_zeros
+from dev_misc import add_argument, g, get_zeros
+from xib.aligned_corpus.char_set import DELETE_ID, INSERT_ID
 from xib.model.extract_model import (BT, FT, LT, AlignedBatch, BaseBatch,
                                      Category, Extracted, ExtractModel,
                                      ExtractModelReturn, Matches, NameHelper,
@@ -28,6 +29,9 @@ class ViableSpans(BaseBatch):
 
 
 class NewExtractModel(nn.Module):
+
+    add_argument('use_conv_both_sides', dtype=bool, default=False, msg='Use conv on both sides.')
+    add_argument('ins_del_prior', dtype=float, default=0.1, msg='Prior value for insertion/deletion operations.')
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
@@ -189,25 +193,7 @@ class NewExtractModel(nn.Module):
                 min_ll = max(kl - 2, 1)
                 max_ll = min(kl + 3, mll + 1)
                 for ll in range(min_ll, max_ll):
-                    transitions = list()
-                    if (kl - 1, ll) in fs:
-                        if g.use_empty_symbol:
-                            del_cost = costs[..., kl - 1, 0].rename(None).unsqueeze(dim=1)
-                            transitions.append(fs[(kl - 1, ll)] + del_cost)
-                        else:
-                            transitions.append(fs[(kl - 1, ll)] + self.ins_del_cost)
-                    if (kl, ll - 1) in fs:
-                        # transitions.append(fs[(ls, lt - 1)] + self.ins_del_cost)
-                        # FIXME(j_luo) How to parameterize insertion costs.
-                        transitions.append(fs[(kl, ll - 1)] + self.ins_del_cost)
-                    if (kl - 1, ll - 1) in fs:
-                        lost_ids = viable_spans.unit_id_seqs[:, ll - 1]
-                        sub_cost = costs[:, kl - 1, lost_ids]
-                        transitions.append(fs[(kl - 1, ll - 1)] + sub_cost)
-                    if transitions:
-                        all_s = torch.stack(transitions, dim=-1)
-                        new_s, _ = all_s.min(dim=-1)
-                        fs[(kl, ll)] = new_s
+                    self._update_fs(fs, costs, viable_spans, kl, ll)
 
         f_lst = list()
         for i in range(mkl + 1):
@@ -257,6 +243,31 @@ class NewExtractModel(nn.Module):
                               viable_spans.end_candidates,
                               viable_spans.length_candidates)
         return extracted
+
+    def _update_fs(self, fs: Dict[Tuple[int, int], FT], costs: FT, viable_spans: ViableSpans, kl: int, ll: int):
+        transitions = list()
+        if (kl - 1, ll) in fs:
+            if g.use_conv_both_sides:
+                del_cost = costs[:, kl - 1, DELETE_ID].unsqueeze(dim=-1)  # - math.log(g.ins_del_prior)
+            else:
+                del_cost = self.ins_del_cost
+            transitions.append(fs[(kl - 1, ll)] + del_cost)
+        if (kl, ll - 1) in fs:
+            # if g.use_conv_both_sides:
+            #     ins_cost = costs[:, kl - 1, INSERT_ID].unsqueeze(dim=-1) - math.log(g.ins_del_prior)
+            # else:
+            ins_cost = self.ins_del_cost
+            transitions.append(fs[(kl, ll - 1)] + ins_cost)
+        if (kl - 1, ll - 1) in fs:
+            lost_ids = viable_spans.unit_id_seqs[:, ll - 1]
+            sub_cost = costs[:, kl - 1, lost_ids]
+            if g.use_conv_both_sides:
+                sub_cost = sub_cost  # - math.log(1.0 - g.ins_del_prior)
+            transitions.append(fs[(kl - 1, ll - 1)] + sub_cost)
+        if transitions:
+            all_s = torch.stack(transitions, dim=-1)
+            new_s, _ = all_s.min(dim=-1)
+            fs[(kl, ll)] = new_s
 
     def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, alignment: FT) -> ExtractModelReturn:
         # Get the best score and span.

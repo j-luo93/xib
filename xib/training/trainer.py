@@ -178,9 +178,14 @@ class ExtractTrainer(BaseTrainer):
 
     def save_alignment(self):
         if g.input_format == 'text':
-            to_save = {
-                'unit_aligner': self.model.g2p.unit_aligner.state_dict(),
-            }
+            try:
+                to_save = {
+                    'unit_aligner': self.model.g2p.unit_aligner.state_dict(),
+                }
+            except:
+                to_save = {
+                    'unit_aligner': self.model.unit_aligner.state_dict(),
+                }
         else:
             to_save = {
                 'adapter': self.model.adapter.state_dict()

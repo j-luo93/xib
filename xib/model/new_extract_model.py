@@ -1,3 +1,4 @@
+import logging
 import math
 from typing import List, Tuple
 
@@ -31,6 +32,8 @@ class NewExtractModel(nn.Module):
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
         self.unit_aligner = nn.Embedding(lost_size, known_size)
+        logging.imp('Unit aligner initialized to 0.')
+        self.unit_aligner.weight.data.fill_(0.0)
         self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
 
@@ -184,7 +187,7 @@ class NewExtractModel(nn.Module):
         with NoName(costs, viable_spans.unit_id_seqs):
             for kl in range(1, mkl + 1):
                 min_ll = max(kl - 2, 1)
-                max_ll = min(kl + 2, mll + 1)
+                max_ll = min(kl + 3, mll + 1)
                 for ll in range(min_ll, max_ll):
                     transitions = list()
                     if (kl - 1, ll) in fs:

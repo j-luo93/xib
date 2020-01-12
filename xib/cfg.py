@@ -252,3 +252,22 @@ class GotDeIpaAlignedReverseGvsPrepare(GotDeIpaAlignedReverseGvs):
     def __post_init__(self):
         super().__post_init__()
         self.data_path: str = './data/got-nhd.cog'
+
+
+@reg
+class FixGotGermOracleSpan(GotDeIpaAlignedReverseGvs):
+    input_format: str = 'text'
+    postprocess_mode: str = 'none'
+    char_per_batch: int = 1000
+    span_candidates: str = 'oracle_full'
+    known_lang: str = 'germ'
+    unextracted_prob: float = 0.0001
+    reg_hyper: float = 0.0
+    context_weight: float = 0.5
+    fix_direction: bool = True
+    learning_rate: float = 0.05
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/got_lemma-germ_no_pref.all.corpus.tsv'
+        self.vocab_path: str = './data/germ_no_pref.lemma.words'

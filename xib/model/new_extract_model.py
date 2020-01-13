@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from dev_misc import add_argument, g, get_zeros
+from dev_misc.devlib import get_length_mask
 from xib.aligned_corpus.char_set import DELETE_ID, INSERT_ID
 from xib.model.extract_model import (BT, FT, LT, AlignedBatch, BaseBatch,
                                      Category, Extracted, ExtractModel,
@@ -95,8 +96,11 @@ class NewExtractModel(nn.Module):
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
 
         # Get known embedding sequences for the entire vocabulary.
-        with NoName(vocab.indexed_segments, known_unit_emb):
+        max_len = vocab.indexed_segments.size('length')
+        with NoName(vocab.indexed_segments, known_unit_emb, vocab.vocab_length):
             known_vocab_emb = known_unit_emb[vocab.indexed_segments]
+            length_mask = get_length_mask(vocab.vocab_length, max_len).unsqueeze(dim=-1)
+            known_vocab_emb.masked_fill_(~length_mask, 0.0)
             known_vocab_emb.rename_('vocab', 'length', 'char_emb')
 
         # Get known contextualized embeddings.

@@ -26,7 +26,7 @@ class CharSet:
         self.lang = lang
         self.is_ipa = is_ipa
         self.id2unit = sorted(units, key=str)
-        if g.use_conv_both_sides:
+        if g.one2two:
             self.id2unit = [INSERT_SYM, DELETE_SYM] + self.id2unit
         elif g.use_empty_symbol:
             self.id2unit = [EMPTY_SYM] + self.id2unit

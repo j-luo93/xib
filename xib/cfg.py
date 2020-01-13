@@ -266,8 +266,19 @@ class FixGotGermOracleSpan(GotDeIpaAlignedReverseGvs):
     context_weight: float = 0.5
     fix_direction: bool = True
     learning_rate: float = 0.05
+    one2two: bool = True
 
     def __post_init__(self):
         super().__post_init__()
         self.data_path: str = './data/got_lemma-germ_no_pref.all.corpus.tsv'
         self.vocab_path: str = './data/germ_no_pref.lemma.words'
+
+
+@reg
+class FixGotAEOracleSpan(FixGotGermOracleSpan):
+    known_lang: str = 'ae'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/got_lemma-ae_no_pref.all.corpus.tsv'
+        self.vocab_path: str = './data/ae_no_pref.lemma.words'

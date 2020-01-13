@@ -28,9 +28,15 @@ class ViableSpans(BaseBatch):
     length_candidates: LT
 
 
+@batch_class
+class Costs(BaseBatch):
+    sub: FT
+    ins: FT
+
+
 class NewExtractModel(nn.Module):
 
-    add_argument('use_conv_both_sides', dtype=bool, default=False, msg='Use conv on both sides.')
+    add_argument('one2two', dtype=bool, default=False, msg='Use conv on both sides.')
     add_argument('ins_del_prior', dtype=float, default=0.1, msg='Prior value for insertion/deletion operations.')
 
     def __init__(self, lost_size: int, known_size: int):
@@ -39,6 +45,7 @@ class NewExtractModel(nn.Module):
         logging.imp('Unit aligner initialized to 0.')
         self.unit_aligner.weight.data.fill_(0.0)
         self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
+        self.ins_conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
 
     @global_property
@@ -56,12 +63,13 @@ class NewExtractModel(nn.Module):
     def forward(self, batch: AlignedBatch) -> ExtractModelReturn:
         vocab = batch.known_vocab
         # Get relevant representations -- one for all the known units, and one for a contextualized representation.
-        known_unit_emb, known_ctx_repr = self._get_repr(batch)
+        known_unit_emb, known_ctx_repr, known_ins_ctx_repr = self._get_repr(batch)
 
         # Get cost matrix.
         costs, alignment = self._get_costs(vocab.indexed_segments,
                                            known_unit_emb,
-                                           known_ctx_repr)
+                                           known_ctx_repr,
+                                           known_ins_ctx_repr)
 
         # Get span candidates:
         viable_spans = self._get_viable_spans(batch.unit_id_seqs, batch.lengths)
@@ -79,7 +87,7 @@ class NewExtractModel(nn.Module):
 
         return model_ret
 
-    def _get_repr(self, batch: AlignedBatch) -> Tuple[FT, FT]:
+    def _get_repr(self, batch: AlignedBatch) -> Tuple[FT, FT, FT]:
         vocab = batch.known_vocab
         # Get unit embeddings for each known unit.
         with NoName(*vocab.unit_dense_feat_matrix.values()):
@@ -94,12 +102,14 @@ class NewExtractModel(nn.Module):
         # Get known contextualized embeddings.
         inp_conv = known_vocab_emb.align_to('vocab', 'char_emb', 'length')
         with NoName(inp_conv):
-            known_ctx_repr = self.conv(inp_conv).rename('batch', 'char_emb', 'length')
-        known_ctx_repr = known_ctx_repr.align_to('batch', 'length', 'char_emb')
+            known_ctx_repr = self.conv(inp_conv).rename('vocab', 'char_emb', 'length')
+            known_ins_ctx_repr = self.ins_conv(inp_conv).rename('vocab', 'char_emb', 'length')
+        known_ctx_repr = known_ctx_repr.align_to('vocab', 'length', 'char_emb')
+        known_ins_ctx_repr = known_ins_ctx_repr.align_to('vocab', 'length', 'char_emb')
 
-        return known_unit_emb, known_ctx_repr
+        return known_unit_emb, known_ctx_repr, known_ins_ctx_repr
 
-    def _get_costs(self, vocab_unit_id_seqs: LT, known_unit_emb: FT, known_ctx_repr: FT) -> Tuple[FT, FT]:
+    def _get_costs(self, vocab_unit_id_seqs: LT, known_unit_emb: FT, known_ctx_repr: FT, known_ins_ctx_repr: FT) -> Tuple[Costs, FT]:
         # Get lost unit embeddings.
         lost_unit_weight = self.unit_aligner.weight
         lost_unit_emb = lost_unit_weight @ known_unit_emb
@@ -112,12 +122,20 @@ class NewExtractModel(nn.Module):
             global_log_probs = unit_log_probs[vocab_unit_id_seqs].rename('vocab', 'length', 'lost_unit')
 
         # Get contextualized log probs.
-        ctx_logits = known_ctx_repr @ lost_unit_emb.t()
-        ctx_log_probs = ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+        sub_ctx_logits = known_ctx_repr @ lost_unit_emb.t()
+        sub_ctx_log_probs = sub_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
 
         # Get interpolated log probs and costs.
-        weighted_log_probs = g.context_weight * ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
-        costs = -weighted_log_probs
+        sub_weighted_log_probs = g.context_weight * sub_ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
+        sub = -sub_weighted_log_probs
+
+        # Get secondary costs for insertions.
+        ins_ctx_logits = known_ins_ctx_repr @ lost_unit_emb.t()
+        ins_ctx_log_probs = ins_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+        ins_weighted_log_probs = g.context_weight * ins_ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
+        ins = -ins_weighted_log_probs.log_softmax(dim=-1)
+
+        costs = Costs(sub, ins)
 
         return costs, alignment
 
@@ -173,10 +191,10 @@ class NewExtractModel(nn.Module):
                            end_candidates,
                            len_candidates)
 
-    def _get_matches(self, costs: FT, viable_spans: ViableSpans, vocab_lengths: LT) -> Matches:
-        nk = costs.size('vocab')
+    def _get_matches(self, costs: Costs, viable_spans: ViableSpans, vocab_lengths: LT) -> Matches:
+        nk = costs.sub.size('vocab')
         nl = viable_spans.starts.size('viable')
-        mkl = costs.size('length')
+        mkl = costs.sub.size('length')
         mll = viable_spans.lengths.max().item()
         # NOTE(j_luo) Use dictionary to save every state.
         fs = dict()
@@ -188,7 +206,7 @@ class NewExtractModel(nn.Module):
         # ------------------------ Main body: DP ----------------------- #
 
         # Transition.
-        with NoName(costs, viable_spans.unit_id_seqs):
+        with NoName(costs.sub, costs.ins, viable_spans.unit_id_seqs):
             for kl in range(1, mkl + 1):
                 min_ll = max(kl - 2, 1)
                 max_ll = min(kl + 3, mll + 1)
@@ -244,24 +262,30 @@ class NewExtractModel(nn.Module):
                               viable_spans.length_candidates)
         return extracted
 
-    def _update_fs(self, fs: Dict[Tuple[int, int], FT], costs: FT, viable_spans: ViableSpans, kl: int, ll: int):
+    def _update_fs(self, fs: Dict[Tuple[int, int], FT], costs: Costs, viable_spans: ViableSpans, kl: int, ll: int):
         transitions = list()
         if (kl - 1, ll) in fs:
-            if g.use_conv_both_sides:
-                del_cost = costs[:, kl - 1, DELETE_ID].unsqueeze(dim=-1)  # - math.log(g.ins_del_prior)
+            if g.one2two:
+                del_cost = costs.sub[:, kl - 1, DELETE_ID].unsqueeze(dim=-1)  # - math.log(g.ins_del_prior)
             else:
                 del_cost = self.ins_del_cost
             transitions.append(fs[(kl - 1, ll)] + del_cost)
-        if (kl, ll - 1) in fs:
+        if not g.one2two and (kl, ll - 1) in fs:
             # if g.use_conv_both_sides:
             #     ins_cost = costs[:, kl - 1, INSERT_ID].unsqueeze(dim=-1) - math.log(g.ins_del_prior)
             # else:
             ins_cost = self.ins_del_cost
             transitions.append(fs[(kl, ll - 1)] + ins_cost)
+        if g.one2two and (kl - 1, ll - 2) in fs:
+            first_lost_ids = viable_spans.unit_id_seqs[:, ll - 2]
+            sub_cost = costs.sub[:, kl - 1, first_lost_ids]  # - math.log(g.ins_del_prior)
+            second_lost_ids = viable_spans.unit_id_seqs[:, ll - 1]
+            ins_cost = costs.ins[:, kl - 1, second_lost_ids]  # - math.log(g.ins_del_prior)
+            transitions.append(fs[(kl - 1, ll - 2)] + ins_cost + sub_cost)
         if (kl - 1, ll - 1) in fs:
             lost_ids = viable_spans.unit_id_seqs[:, ll - 1]
-            sub_cost = costs[:, kl - 1, lost_ids]
-            if g.use_conv_both_sides:
+            sub_cost = costs.sub[:, kl - 1, lost_ids]
+            if g.one2two:
                 sub_cost = sub_cost  # - math.log(1.0 - g.ins_del_prior)
             transitions.append(fs[(kl - 1, ll - 1)] + sub_cost)
         if transitions:

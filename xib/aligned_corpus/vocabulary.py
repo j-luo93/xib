@@ -64,7 +64,7 @@ class Vocabulary:
 
             # Now indexify the vocab. Gather feature matrices for units as well.
             indexed_segments = np.zeros([len(self.vocab), max_len], dtype='int64')
-            if g.use_conv_both_sides:
+            if g.one2two:
                 unit_feat_matrix = {INSERT_SYM: torch.zeros(0).long(), DELETE_SYM: torch.zeros(0).long()}
             elif g.use_empty_symbol:
                 unit_feat_matrix = {EMPTY_SYM: torch.zeros(0).long()}

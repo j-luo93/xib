@@ -342,6 +342,7 @@ class NewExtractModel(nn.Module):
         total_span_ll = nh.flatten(total_ll, ['len_s', 'len_e'], 'span')
         best_span_ll, _ = total_span_ll.max(dim='span')
         best_span_ll = best_span_ll.logsumexp(dim='vocab')
+        best_span_ll = torch.max(best_span_ll, unmatched_ll)
 
         model_ret = ExtractModelReturn(start,
                                        end,

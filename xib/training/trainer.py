@@ -13,6 +13,7 @@ from dev_misc.arglib import add_argument, g
 from dev_misc.trainlib import (Metric, Metrics, freeze, get_grad_norm,
                                get_trainable_params)
 from dev_misc.trainlib.base_trainer import BaseTrainer as BaseTrainerDev
+from dev_misc.trainlib.tb_writer import MetricWriter
 from dev_misc.utils import deprecated, global_property, pbar
 from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
 from xib.model.decipher_model import DecipherModel
@@ -177,6 +178,7 @@ class ExtractTrainer(BaseTrainer):
         self.ins_del_cost = g.init_ins_del_cost
         if g.save_alignment:
             self.add_callback('total_step', 1, self.save_alignment)
+        self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
 
     def save_alignment(self):
         if g.input_format == 'text':
@@ -236,6 +238,13 @@ class ExtractTrainer(BaseTrainer):
                 logging.warning('Do NOT use this number since this f1 is compared against ground truths.')
                 logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
                 self.save_to(out_path)
+
+    def evaluate(self):
+        eval_metrics = super().evaluate()
+        # HACK(j_luo)
+        nr, ns = map(int, self.stage.split('_'))
+        global_step = nr * g.num_steps + ns
+        self.metric_writer.add_metrics(eval_metrics, global_step)
 
     def should_terminate(self):
         return self.tracker.is_finished('total_step')

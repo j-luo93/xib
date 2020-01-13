@@ -202,10 +202,17 @@ class NewExtractModel(nn.Module):
         mll = viable_spans.lengths.max().item()
         # NOTE(j_luo) Use dictionary to save every state.
         fs = dict()
-        for i in range(mkl + 1):
-            fs[(i, 0)] = get_zeros(nk, nl).fill_(i * self.ins_del_cost)
-        for j in range(mll + 1):
-            fs[(0, j)] = get_zeros(nk, nl).fill_(j * self.ins_del_cost)
+        if g.one2two:
+            fs[(0, 0)] = get_zeros(nk, nl)
+            with NoName(costs.sub):
+                for i in range(1, mkl + 1):
+                    del_cost = costs.sub[:, i - 1, DELETE_ID].unsqueeze(dim=-1)  # - math.log(g.ins_del_prior)
+                    fs[(i, 0)] = fs[(i - 1, 0)] + del_cost
+        else:
+            for i in range(mkl + 1):
+                fs[(i, 0)] = get_zeros(nk, nl).fill_(i * self.ins_del_cost)
+            for j in range(mll + 1):
+                fs[(0, j)] = get_zeros(nk, nl).fill_(j * self.ins_del_cost)
 
         # ------------------------ Main body: DP ----------------------- #
 

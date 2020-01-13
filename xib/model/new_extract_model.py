@@ -128,7 +128,6 @@ class NewExtractModel(nn.Module):
         # Get contextualized log probs.
         sub_ctx_logits = known_ctx_repr @ lost_unit_emb.t()
         sub_ctx_log_probs = sub_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
-
         # Get interpolated log probs and costs.
         sub_weighted_log_probs = g.context_weight * sub_ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
         sub = -sub_weighted_log_probs
@@ -137,7 +136,7 @@ class NewExtractModel(nn.Module):
         ins_ctx_logits = known_ins_ctx_repr @ lost_unit_emb.t()
         ins_ctx_log_probs = ins_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = g.context_weight * ins_ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
-        ins = -ins_weighted_log_probs.log_softmax(dim=-1)
+        ins = -ins_weighted_log_probs
 
         costs = Costs(sub, ins)
 

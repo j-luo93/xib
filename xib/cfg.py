@@ -282,3 +282,13 @@ class FixGotAEOracleSpan(FixGotGermOracleSpan):
         super().__post_init__()
         self.data_path: str = './data/got_lemma-ae_no_pref.all.corpus.tsv'
         self.vocab_path: str = './data/ae_no_pref.lemma.words'
+
+
+@reg
+class FixGotNhdOracleSpan(FixGotGermOracleSpan):
+    known_lang: str = 'nhd'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/got_lemma-nhd_no_pref.all.corpus.tsv'
+        self.vocab_path: str = './data/nhd_no_pref.lemma.words'

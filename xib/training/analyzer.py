@@ -187,15 +187,15 @@ class ExtractAnalyzer:
 
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
-        metrics += Metric('ll', model_ret.marginal_ll.sum(), batch.batch_size)
+        if g.take_best_span:
+            best_span_ll = model_ret.best_span_ll.align_to('batch')
+            loss_metric = Metric('best_ll', best_span_ll.sum(), batch.batch_size)
+        else:
+            loss_metric = Metric('marginal_ll', model_ret.marginal_ll.sum(), batch.batch_size)
+        metrics += loss_metric
 
         almt = model_ret.alignment
         if almt is not None:
-            # # DEBUG(j_luo)
-            # if g.use_empty_symbol:
-            #     reg = (almt.sum(dim=0) - 1.0) ** 2
-            #     reg = reg[1:].sum() + (almt[:, 0].sum() - 2.0) ** 2
-            # else:
             reg = ((almt.sum(dim=0) - 1.0) ** 2).sum()
             metrics += Metric('reg', reg, batch.batch_size)
         return metrics

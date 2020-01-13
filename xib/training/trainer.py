@@ -168,6 +168,8 @@ class ExtractTrainer(BaseTrainer):
 
     add_argument('reg_hyper', default=1.0, dtype=float, msg='Hyperparameter for alignment regularization.')
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
+    add_argument('take_best_span', default=False, dtype=bool,
+                 msg='Flag to take the best ll instead of the marginal ll.')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -248,7 +250,10 @@ class ExtractTrainer(BaseTrainer):
             ret = self.model(batch)
             metrics = self.analyzer.analyze(ret, batch)
 
-            loss = -metrics.ll.mean
+            if g.take_best_span:
+                loss = -metrics.best_ll.mean
+            else:
+                loss = -metrics.marginal_ll.mean
             try:
                 loss = loss + metrics.reg.mean * g.reg_hyper
             except AttributeError:

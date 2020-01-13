@@ -338,6 +338,10 @@ class NewExtractModel(nn.Module):
         # Concatenate all.
         marginal_ll = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
         marginal_ll = marginal_ll.logsumexp(dim='cand')
+        total_ll = nh.unflatten(flat_total_ll, 'cand', ['len_s', 'len_e', 'vocab'])
+        total_span_ll = nh.flatten(total_ll, ['len_s', 'len_e'], 'span')
+        best_span_ll, _ = total_span_ll.max(dim='span')
+        best_span_ll = best_span_ll.logsumexp(dim='vocab')
 
         model_ret = ExtractModelReturn(start,
                                        end,
@@ -346,6 +350,7 @@ class NewExtractModel(nn.Module):
                                        unmatched_ll,
                                        marginal_ll,
                                        top_word_ll,
+                                       best_span_ll,
                                        extracted,
                                        alignment)
         return model_ret

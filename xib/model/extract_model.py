@@ -51,6 +51,7 @@ class ExtractModelReturn(BaseBatch):
     unmatched_ll: FT
     marginal_ll: FT
     top_word_ll: FT
+    best_span_ll: FT
     extracted: Extracted
     alignment: Optional[FT] = None
 

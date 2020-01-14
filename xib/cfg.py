@@ -278,6 +278,8 @@ class FixGotGermOracleSpan(GotDeIpaAlignedReverseGvs):
 class FixGotGermLemmaOnly(FixGotGermOracleSpan):
     span_candidates: str = 'all'
     char_per_batch: int = 400
+    reg_hyper: float = 1.0
+    unextracted_prob: float = 0.05
 
     def __post_init__(self):
         super().__post_init__()

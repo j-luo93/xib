@@ -39,6 +39,7 @@ class NewExtractModel(nn.Module):
 
     add_argument('one2two', dtype=bool, default=False, msg='Use conv on both sides.')
     add_argument('ins_del_prior', dtype=float, default=0.1, msg='Prior value for insertion/deletion operations.')
+    add_argument('include_unmatched', dtype=bool, default=True, msg='Flag to include unmatched scores in the loss.')
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
@@ -336,13 +337,17 @@ class NewExtractModel(nn.Module):
         # Get unmatched scores -- no word is matched for the entire inscription.
         unmatched_ll = batch.lengths * lp_per_unmatched
         # Concatenate all.
-        marginal_ll = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
-        marginal_ll = marginal_ll.logsumexp(dim='cand')
+        if g.include_unmatched:
+            marginal_ll = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
+            marginal_ll = marginal_ll.logsumexp(dim='cand')
+        else:
+            marginal_ll = flat_total_ll.logsumexp(dim='cand')
         total_ll = nh.unflatten(flat_total_ll, 'cand', ['len_s', 'len_e', 'vocab'])
         total_span_ll = nh.flatten(total_ll, ['len_s', 'len_e'], 'span')
         best_span_ll, _ = total_span_ll.max(dim='span')
         best_span_ll = best_span_ll.logsumexp(dim='vocab')
-        best_span_ll = torch.max(best_span_ll, unmatched_ll)
+        if g.include_unmatched:
+            best_span_ll = torch.max(best_span_ll, unmatched_ll)
 
         model_ret = ExtractModelReturn(start,
                                        end,

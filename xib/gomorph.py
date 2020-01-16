@@ -44,9 +44,13 @@ class Variable:
     @property
     def value(self):
         self._check_defined()
-        if not self._value_dict:
+        if self.is_simple:
             return self._single_value
         return self._value_dict
+
+    @property
+    def is_simple(self) -> bool:
+        return not self._value_dict
 
     def _check_single(self):
         assert not self._value_dict
@@ -136,11 +140,12 @@ reg_dc = mcr.register_dataclass
 
 @reg_dc(1)
 class Indeclinable(BaseClass):
-    pass
+    Root: Variable = vf()
     # Form: Variable = vf()
 
-    # def __post_init__(self):
-    #     self.Form.value = self.Lemma
+    def __post_init__(self):
+        self.Root.value = self.Lemma
+        # self.Form.value = self.Lemma
 
 
 def incomplete(func):
@@ -404,7 +409,7 @@ class Mwa(_MaStems):
     Lemma: str
 
     def derive_root(self, s):
-        return sub(s, [('s$', ''), ('([ai])u$', '\1w')])
+        return sub(s, [('s$', ''), (r'([ai])u$', r'\1w')])
 
 
 @reg_dc(10)
@@ -412,7 +417,7 @@ class Nwa(_NaStems):
     Lemma: str
 
     def derive_root(self, s):
-        return sub(s, [('([ai])u$', '\1w')])
+        return sub(s, [(r'([ai])u$', r'\1w')])
 
 
 @dataclass
@@ -474,11 +479,11 @@ class _iStems(_VocStems):
     z_Assimilation: bool = False
     Auslautverhärtung: bool = True
 
-    derive_root = gen_sub([('s$', ''), ('([ai])u$', '\1w')])
-    derive_root_from_plural = gen_sub([('eis$', '')])
-    cancel_final_devoicing = gen_sub([('({RE_V})f$', '\1b'),
-                                      ('({RE_V})þ$', '\1d'),
-                                      ('({RE_V})s$', '\1z')])
+    derive_root = gen_sub([('s$', ''), (r'([ai])u$', r'\1w')])
+    derive_root_from_plural = gen_sub([(r'eis$', '')])
+    cancel_final_devoicing = gen_sub([(r'({RE_V})f$', r'\1b'),
+                                      (r'({RE_V})þ$', r'\1d'),
+                                      (r'({RE_V})s$', r'\1z')])
 
     # suffix_lst = {"s", "", '', '', '', "eis", "ins", "im", "e", ''}
 
@@ -626,9 +631,9 @@ class _RootNouns(Noun):
     Auslautverhärtung: bool = True
     derive_root = gen_sub([('s$', '')])
     derive_root_from_plural = gen_sub([('s$', '')])
-    cancel_final_devoicing = gen_sub([('({RE_V})f$', '\1b'),
-                                      ('({RE_V})þ$', '\1d'),
-                                      ('({RE_V})s$', '\1z')])
+    cancel_final_devoicing = gen_sub([('({RE_V})f$', r'\1b'),
+                                      ('({RE_V})þ$', r'\1d'),
+                                      ('({RE_V})s$', r'\1z')])
     # suffix_lst = ["s", "", "", "s", '', "s", "s", '', "e", '']
 
     def get_Root(self):
@@ -664,11 +669,11 @@ class Adjective(BaseMorphClass):
     def derive_root_from_weak_declension(self):
         pass
 
-    phonology = gen_sub([('{RE_V})b(s?)$', '\1f\2'),
-                         ('{RE_V})d(s?)$', '\1þ\2'),
-                         ('({RE_V})z$', '\1s'),
+    phonology = gen_sub([('{RE_V})b(s?)$', r'\1f\2'),
+                         ('{RE_V})d(s?)$', r'\1þ\2'),
+                         ('({RE_V})z$', r'\1s'),
                          ('o(?=e?i)', 'au'),
-                         ('({RE_C}[ai])w(j|s?$)', '\1u\2')])
+                         ('({RE_C}[ai])w(j|s?$)', r'\1u\2')])
 
     reconstruction = gen_sub([('^(.*)$', r'\[\1\]')])
 
@@ -686,7 +691,7 @@ class Adjective(BaseMorphClass):
 
 @dataclass
 class _aStemsAdj(Adjective):
-    derive_root = gen_sub([('s$', ''), ('([ai])u$', '\1w')])
+    derive_root = gen_sub([('s$', ''), ('([ai])u$', r'\1w')])
     derive_root_from_weak_declension = gen_sub([('a$', '')])
 
 
@@ -696,9 +701,9 @@ class AdjA(_aStemsAdj):
     z_Assimilation: bool = False
     Auslautverhärtung: bool = True
 
-    cancel_final_devoicing = gen_sub([('({RE_V})f$', '\1b'),
-                                      ('({RE_V})þ$', '\1d'),
-                                      ('({RE_V})s$', '\1z')])
+    cancel_final_devoicing = gen_sub([('({RE_V})f$', r'\1b'),
+                                      ('({RE_V})þ$', r'\1d'),
+                                      ('({RE_V})s$', r'\1z')])
 
     def get_Root(self):
         super().get_Root()
@@ -720,7 +725,7 @@ class _jaStemsAdj(_aStemsAdj):
 
 @reg_dc(33)
 class AdjJa(_jaStemsAdj):
-    derive_root = gen_sub([('jis$', ''), ('([ai])u$', '\1w')])
+    derive_root = gen_sub([('jis$', ''), ('([ai])u$', r'\1w')])
     j_rules = gen_sub([('j$', 'i'), ('js$', 'jis')])
 
 
@@ -735,9 +740,9 @@ class AdjI(_jaStemsAdj):
     Lemma: str
     Auslautverhärtung: bool = True
 
-    cancel_final_devoicing = gen_sub([('({RE_V})f$', '\1b'),
-                                      ('({RE_V})þ$', '\1d'),
-                                      ('({RE_V})s$', '\1z')])
+    cancel_final_devoicing = gen_sub([('({RE_V})f$', r'\1b'),
+                                      ('({RE_V})þ$', r'\1d'),
+                                      ('({RE_V})s$', r'\1z')])
 
     def get_Root(self):
         super().get_Root()
@@ -918,7 +923,7 @@ class _WeakVerb(Verb):
 @reg_dc(54)
 class SWV1J(_WeakVerb):
     PretSuffix = 'id'
-    derive_root = gen_sub([('jan$', ''), ('^.*-', ''), ('([ai])u$', '\1w')])
+    derive_root = gen_sub([('jan$', ''), ('^.*-', ''), ('([ai])u$', r'\1w')])
 
 
 @reg_dc(55)

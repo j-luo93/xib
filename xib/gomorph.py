@@ -13,7 +13,7 @@ from dev_misc.utils import Singleton
 
 RE_HV = 'ƕ'
 RE_CHAR = fr'[\wïþÞ{RE_HV}]'
-RE_C = fr'[bdfghjklmnpqrstwxzþÞ{RE_HV}'
+RE_C = fr'[bdfghjklmnpqrstwxzþÞ{RE_HV}]'
 RE_V = fr'[aeuiïoāăēĕŏōŭū]'
 RE_C_BR = fr'[rh{RE_HV}]'
 RE_D = fr'[dtþ]'
@@ -32,7 +32,8 @@ def undefined(func):
 
 class Variable:
 
-    def __init__(self):
+    def __init__(self, id2tag=None):
+        self._id2tag = id2tag
         self._single_value = None
         self._value_dict = dict()
         self._undefined = True
@@ -91,15 +92,18 @@ class Variable:
         if key in self._value_dict:
             keys = [key]
         else:
-            keys = [k for k in self._value_dict if key in k]
+            assert self._id2tag is not None
+            keys = [k for k in self._id2tag if re.search(key, k)]
         for k in keys:
             if value is None:
                 del self._value_dict[k]
             else:
                 self._value_dict[k] = value
+        if keys:
+            self._undefined = False
 
 
-vf = lambda: field(init=False, default_factory=Variable, repr=False)
+vf = lambda id2tag=None: field(init=False, default_factory=lambda: Variable(id2tag), repr=False)
 
 
 def gen_sub(sub_rules):
@@ -138,16 +142,6 @@ mcr = MorphClassRegistry()
 reg_dc = mcr.register_dataclass
 
 
-@reg_dc(1)
-class Indeclinable(BaseClass):
-    Root: Variable = vf()
-    # Form: Variable = vf()
-
-    def __post_init__(self):
-        self.Root.value = self.Lemma
-        # self.Form.value = self.Lemma
-
-
 def incomplete(func):
 
     @wraps(func)
@@ -170,6 +164,10 @@ class BaseMorphClass(BaseClass):
     # suffix_lst: ClassVar[List[str]] = None
     # suffix_override: ClassVar[List[Tuple[str, str]]] = None
     # form_remove: ClassVar[List[str]] = None
+
+    @undefined
+    def derive_root(self):
+        pass
 
     def __post_init__(self):
         # self.get_Suffix()
@@ -200,8 +198,17 @@ class BaseMorphClass(BaseClass):
     #             self.Form.update_key(tag, None)
 
 
-# TODO(j_luo) reg this
-@dataclass
+@reg_dc(1)
+class Indeclinable(BaseMorphClass):
+    Root: Variable = vf()
+    # Form: Variable = vf()
+
+    # def __post_init__(self):
+    #     self.Root.value = self.Lemma
+    #     # self.Form.value = self.Lemma
+
+
+@reg_dc(2)
 class Noun(BaseMorphClass):
     Lemma: str
     Pluraletantum: bool = False
@@ -212,6 +219,8 @@ class Noun(BaseMorphClass):
         'VOC-SING', 'NOM-PLUR', 'ACC-PLUR', 'DAT-PLUR',
         'GEN-PLUR', 'VOC-PLUR'
     ]
+
+    Root: Variable = vf(id2tag)
 
     @undefined
     def derive_root(self):
@@ -481,9 +490,9 @@ class _iStems(_VocStems):
 
     derive_root = gen_sub([('s$', ''), (r'([ai])u$', r'\1w')])
     derive_root_from_plural = gen_sub([(r'eis$', '')])
-    cancel_final_devoicing = gen_sub([(r'({RE_V})f$', r'\1b'),
-                                      (r'({RE_V})þ$', r'\1d'),
-                                      (r'({RE_V})s$', r'\1z')])
+    cancel_final_devoicing = gen_sub([(f'({RE_V})f$', r'\1b'),
+                                      (f'({RE_V})þ$', r'\1d'),
+                                      (f'({RE_V})s$', r'\1z')])
 
     # suffix_lst = {"s", "", '', '', '', "eis", "ins", "im", "e", ''}
 
@@ -631,9 +640,9 @@ class _RootNouns(Noun):
     Auslautverhärtung: bool = True
     derive_root = gen_sub([('s$', '')])
     derive_root_from_plural = gen_sub([('s$', '')])
-    cancel_final_devoicing = gen_sub([('({RE_V})f$', r'\1b'),
-                                      ('({RE_V})þ$', r'\1d'),
-                                      ('({RE_V})s$', r'\1z')])
+    cancel_final_devoicing = gen_sub([(f'({RE_V})f$', r'\1b'),
+                                      (f'({RE_V})þ$', r'\1d'),
+                                      (f'({RE_V})s$', r'\1z')])
     # suffix_lst = ["s", "", "", "s", '', "s", "s", '', "e", '']
 
     def get_Root(self):
@@ -654,12 +663,24 @@ class Mkons(_RootNouns):
     pass
 
 
-# TODO(j_luo) reg this
-@dataclass
+@reg_dc(31)
 class Adjective(BaseMorphClass):
     Lemma: str
     WeakDeclensionOnly: bool = False
     StrongDeclensionOnly: bool = False
+
+    id2tag = ['STRONG-MASC-NOM-SING', 'STRONG-MASC-ACC-SING', 'STRONG-MASC-DAT-SING', 'STRONG-MASC-GEN-SING', 'STRONG-MASC-NOM-PLUR',
+              'STRONG-MASC-ACC-PLUR', 'STRONG-MASC-DAT-PLUR', 'STRONG-MASC-GEN-PLUR', 'STRONG-FEM-NOM-SING', 'STRONG-FEM-ACC-SING',
+              'STRONG-FEM-DAT-SING', 'STRONG-FEM-GEN-SING', 'STRONG-FEM-NOM-PLUR', 'STRONG-FEM-ACC-PLUR', 'STRONG-FEM-DAT-PLUR',
+              'STRONG-FEM-GEN-PLUR', 'STRONG-NEUT-NOM-SING', 'STRONG-NEUT-ACC-SING', 'STRONG-NEUT-DAT-SING', 'STRONG-NEUT-GEN-SING',
+              'STRONG-NEUT-NOM-PLUR', 'STRONG-NEUT-ACC-PLUR', 'STRONG-NEUT-DAT-PLUR', 'STRONG-NEUT-GEN-PLUR', 'WEAK-MASC-NOM-SING',
+              'WEAK-MASC-ACC-SING', 'WEAK-MASC-DAT-SING', 'WEAK-MASC-GEN-SING', 'WEAK-MASC-NOM-PLUR', 'WEAK-MASC-ACC-PLUR',
+              'WEAK-MASC-DAT-PLUR', 'WEAK-MASC-GEN-PLUR', 'WEAK-FEM-NOM-SING', 'WEAK-FEM-ACC-SING', 'WEAK-FEM-DAT-SING',
+              'WEAK-FEM-GEN-SING', 'WEAK-FEM-NOM-PLUR', 'WEAK-FEM-ACC-PLUR', 'WEAK-FEM-DAT-PLUR', 'WEAK-FEM-GEN-PLUR',
+              'WEAK-NEUT-NOM-SING', 'WEAK-NEUT-ACC-SING', 'WEAK-NEUT-DAT-SING', 'WEAK-NEUT-GEN-SING', 'WEAK-NEUT-NOM-PLUR',
+              'WEAK-NEUT-ACC-PLUR', 'WEAK-NEUT-DAT-PLUR', 'WEAK-NEUT-GEN-PLUR', 'CMP', 'SPR', 'ADV']
+
+    Root: Variable = vf(id2tag)
 
     @undefined
     def derive_root(self):
@@ -669,11 +690,11 @@ class Adjective(BaseMorphClass):
     def derive_root_from_weak_declension(self):
         pass
 
-    phonology = gen_sub([('{RE_V})b(s?)$', r'\1f\2'),
-                         ('{RE_V})d(s?)$', r'\1þ\2'),
-                         ('({RE_V})z$', r'\1s'),
+    phonology = gen_sub([(f'{RE_V})b(s?)$', r'\1f\2'),
+                         (f'{RE_V})d(s?)$', r'\1þ\2'),
+                         (f'({RE_V})z$', r'\1s'),
                          ('o(?=e?i)', 'au'),
-                         ('({RE_C}[ai])w(j|s?$)', r'\1u\2')])
+                         (f'({RE_C}[ai])w(j|s?$)', r'\1u\2')])
 
     reconstruction = gen_sub([('^(.*)$', r'\[\1\]')])
 
@@ -686,7 +707,9 @@ class Adjective(BaseMorphClass):
 
     def get_Root(self):
         super().get_Root()
-        self.Root.value = self.derive_root_from_weak_declension(self.Lemma)  # pylint: disable=too-many-function-args
+        if self.WeakDeclensionOnly:
+            self.Root.value = self.derive_root_from_weak_declension(
+                self.Lemma)  # pylint: disable=too-many-function-args
 
 
 @dataclass
@@ -701,9 +724,9 @@ class AdjA(_aStemsAdj):
     z_Assimilation: bool = False
     Auslautverhärtung: bool = True
 
-    cancel_final_devoicing = gen_sub([('({RE_V})f$', r'\1b'),
-                                      ('({RE_V})þ$', r'\1d'),
-                                      ('({RE_V})s$', r'\1z')])
+    cancel_final_devoicing = gen_sub([(f'({RE_V})f$', r'\1b'),
+                                      (f'({RE_V})þ$', r'\1d'),
+                                      (f'({RE_V})s$', r'\1z')])
 
     def get_Root(self):
         super().get_Root()
@@ -740,9 +763,9 @@ class AdjI(_jaStemsAdj):
     Lemma: str
     Auslautverhärtung: bool = True
 
-    cancel_final_devoicing = gen_sub([('({RE_V})f$', r'\1b'),
-                                      ('({RE_V})þ$', r'\1d'),
-                                      ('({RE_V})s$', r'\1z')])
+    cancel_final_devoicing = gen_sub([(f'({RE_V})f$', r'\1b'),
+                                      (f'({RE_V})þ$', r'\1d'),
+                                      (f'({RE_V})s$', r'\1z')])
 
     def get_Root(self):
         super().get_Root()
@@ -781,17 +804,32 @@ class PartPerf(AdjA):
 class Superlative(AdjA):
     pass
 
-# TODO(j_luo)  reg this
-@dataclass
+
+@reg_dc(41)
 class Verb(BaseMorphClass):
     Lemma: str
+    id2tag = ['INF', 'PART-PRES', 'PART-PERF', 'ACT-IND-PRES-SING-1', 'ACT-IND-PRES-SING-2', 'ACT-IND-PRES-SING-3',
+              'ACT-IND-PRES-DUAL-1', 'ACT-IND-PRES-DUAL-2', 'ACT-IND-PRES-DUAL-3', 'ACT-IND-PRES-PLUR-1', 'ACT-IND-PRES-PLUR-2',
+              'ACT-IND-PRES-PLUR-3', 'ACT-IND-PRET-SING-1', 'ACT-IND-PRET-SING-2', 'ACT-IND-PRET-SING-3', 'ACT-IND-PRET-DUAL-1',
+              'ACT-IND-PRET-DUAL-2', 'ACT-IND-PRET-DUAL-3', 'ACT-IND-PRET-PLUR-1', 'ACT-IND-PRET-PLUR-2', 'ACT-IND-PRET-PLUR-3',
+              'ACT-OPT-PRES-SING-1', 'ACT-OPT-PRES-SING-2', 'ACT-OPT-PRES-SING-3', 'ACT-OPT-PRES-DUAL-1', 'ACT-OPT-PRES-DUAL-2',
+              'ACT-OPT-PRES-DUAL-3', 'ACT-OPT-PRES-PLUR-1', 'ACT-OPT-PRES-PLUR-2', 'ACT-OPT-PRES-PLUR-3', 'ACT-OPT-PRET-SING-1',
+              'ACT-OPT-PRET-SING-2', 'ACT-OPT-PRET-SING-3', 'ACT-OPT-PRET-DUAL-1', 'ACT-OPT-PRET-DUAL-2', 'ACT-OPT-PRET-DUAL-3',
+              'ACT-OPT-PRET-PLUR-1', 'ACT-OPT-PRET-PLUR-2', 'ACT-OPT-PRET-PLUR-3', 'PAS-IND-PRES-SING-1', 'PAS-IND-PRES-SING-2',
+              'PAS-IND-PRES-SING-3', 'PAS-IND-PRES-DUAL-1', 'PAS-IND-PRES-DUAL-2', 'PAS-IND-PRES-DUAL-3', 'PAS-IND-PRES-PLUR-1',
+              'PAS-IND-PRES-PLUR-2', 'PAS-IND-PRES-PLUR-3', 'PAS-OPT-PRES-SING-1', 'PAS-OPT-PRES-SING-2', 'PAS-OPT-PRES-SING-3',
+              'PAS-OPT-PRES-DUAL-1', 'PAS-OPT-PRES-DUAL-2', 'PAS-OPT-PRES-DUAL-3', 'PAS-OPT-PRES-PLUR-1', 'PAS-OPT-PRES-PLUR-2',
+              'PAS-OPT-PRES-PLUR-3', 'ACT-IMP-PRES-SING-1', 'ACT-IMP-PRES-SING-2', 'ACT-IMP-PRES-SING-3', 'ACT-IMP-PRES-DUAL-1',
+              'ACT-IMP-PRES-DUAL-2', 'ACT-IMP-PRES-DUAL-3', 'ACT-IMP-PRES-PLUR-1', 'ACT-IMP-PRES-PLUR-2', 'ACT-IMP-PRES-PLUR-3']
+
+    Root: Variable = vf(id2tag)
 
     @undefined
     def derive_root(self):
         pass
 
 
-@reg_dc(42)
+@dataclass
 class _StrongVerb(Verb):
     derive_root = gen_sub([('an$', ''), ('^.*-', '')])
 
@@ -815,53 +853,60 @@ class _StrongVerb(Verb):
         self.Root['PART-PERF'] = self.Ablaut4(base_root)
 
 
-@reg_dc(43)
+@reg_dc(42)
 class AblV1(_StrongVerb):
-    Ablaut2 = gen_sub([('ei{RE__C}', 'ai')])
-    Ablaut3 = gen_sub([('ei{RE__C}', 'i'), ('i(?={RE_C_BR}{RE_C}*$)', 'ai')])
-    Ablaut4 = gen_sub([('ei{RE__C}', 'i'), ('i(?={RE_C_BR}{RE_C}*$)', 'ai')])
+    Ablaut2 = gen_sub([(f'ei{RE__C}', 'ai')])
+    Ablaut3 = gen_sub([(f'ei{RE__C}', 'i'), (f'i(?={RE_C_BR}{RE_C}*$)', 'ai')])
+    Ablaut4 = gen_sub([(f'ei{RE__C}', 'i'), (f'i(?={RE_C_BR}{RE_C}*$)', 'ai')])
+
+
+@reg_dc(43)
+class AblV2(_StrongVerb):
+    Ablaut2 = gen_sub([(f'i?u{RE__C}', 'au')])
+    Ablaut3 = gen_sub([(f'i?u{RE__C}', 'u'), (f'u(?={RE_C_BR}{RE_C}*$)', 'au')])
+    Ablaut4 = gen_sub([(f'i?u{RE__C}', 'u'), (f'u(?={RE_C_BR}{RE_C}*$)', 'au')])
 
 
 @reg_dc(44)
-class AblV2(_StrongVerb):
-    Ablaut2 = gen_sub([('i?u{RE__C}', 'au')])
-    Ablaut3 = gen_sub([('i?u{RE__C}', 'u'), ('u(?={RE_C_BR}{RE_C}*$)', 'au')])
-    Ablaut4 = gen_sub([('i?u{RE__C}', 'u'), ('u(?={RE_C_BR}{RE_C}*$)', 'au')])
+class AblV3(_StrongVerb):
+    Ablaut2 = gen_sub([(f'a?i{RE__C}', 'a')])
+    Ablaut3 = gen_sub([(f'a?i{RE__C}', 'u'), (f'u(?={RE_C_BR}{RE_C}*$)', 'au')])
+    Ablaut4 = gen_sub([(f'a?i{RE__C}', 'u'), (f'u(?={RE_C_BR}{RE_C}*$)', 'au')])
 
 
 @reg_dc(45)
-class AblV3(_StrongVerb):
-    Ablaut2 = gen_sub([('a?i{RE__C}', 'a')])
-    Ablaut3 = gen_sub([('a?i{RE__C}', 'u'), ('u(?={RE_C_BR}{RE_C}*$)', 'au')])
-    Ablaut4 = gen_sub([('a?i{RE__C}', 'u'), ('u(?={RE_C_BR}{RE_C}*$)', 'au')])
+class AblV4(_StrongVerb):
+    Ablaut2 = gen_sub([(f'a?i{RE__C}', 'a')])
+    Ablaut3 = gen_sub([(f'a?i{RE__C}', 'e')])
+    Ablaut4 = gen_sub([(f'a?i{RE__C}', 'u'), (f'u(?={RE_C_BR}{RE_C}*$)', 'au')])
 
 
 @reg_dc(46)
-class AblV4(_StrongVerb):
-    Ablaut2 = gen_sub([('a?i{RE__C}', 'a')])
-    Ablaut3 = gen_sub([('a?i{RE__C}', 'e')])
-    Ablaut4 = gen_sub([('a?i{RE__C}', 'u'), ('u(?={RE_C_BR}{RE_C}*$)', 'au')])
+class AblV5(_StrongVerb):
+    Ablaut2 = gen_sub([(f'a?i{RE__C}', 'a')])
+    Ablaut3 = gen_sub([(f'a?i{RE__C}', 'e')])
+
+    @undefined
+    def Ablaut4(self):
+        pass
 
 
 @reg_dc(47)
-class AblV5(_StrongVerb):
-    Ablaut2 = gen_sub([('a?i{RE__C}', 'a')])
-    Ablaut3 = gen_sub([('a?i{RE__C}', 'e')])
-
-    @undefined
-    def Ablaut4(self):
-        pass
-
-# TODO(j_luo) reg this
-
-
 class AblV6(_StrongVerb):
-    Ablaut2 = gen_sub([('a?i{RE__C}', 'a')])
-    Ablaut3 = gen_sub([('a?i{RE__C}', 'e')])
+    derive_root_with_infix_j = gen_sub([(fr'^(.*-)?(.*a{RE_C}+j?)an$', r'\2')])
+    derive_root = gen_sub([(fr'^(.*-)?(.*a{RE_C}*[^j])j?an$', r'\2')])
+
+    Ablaut2 = gen_sub([(f'a{RE__C}', 'o')])
+    Ablaut3 = gen_sub([(f'a{RE__C}', 'o')])
 
     @undefined
     def Ablaut4(self):
         pass
+
+    def get_Root(self):
+        # NOTE(j_luo) This is Baseroot in the original Gomorph doc.
+        self.Root.update_key('PRES', self.derive_root_with_infix_j(self.Lemma))
+        self.Root.update_key('INF', self.derive_root_with_infix_j(self.Lemma))
 
 
 @dataclass
@@ -907,8 +952,8 @@ class RedV5(_RedupVerb):
 
 @reg_dc(53)
 class RedAblV(_RedupVerb):
-    Ablaut2 = gen_sub([('(e(?={RE_C}$)|ai$)', 'o')])
-    Ablaut3 = gen_sub([('(e(?={RE_C}$)|ai$)', 'o')])
+    Ablaut2 = gen_sub([(f'(e(?={RE_C}$)|ai$)', 'o')])
+    Ablaut3 = gen_sub([(f'(e(?={RE_C}$)|ai$)', 'o')])
 
 
 @dataclass
@@ -947,3 +992,102 @@ class SWV3(_WeakVerb):
 class SWV4(_WeakVerb):
     PretSuffix = 'od'
     derive_root = gen_sub([('an$', ''), ('^.*-', '')])
+
+
+@reg_dc(59)
+class VPrtPrs(Verb):
+
+    def get_Root(self):
+        lemma = self.Lemma
+
+        if re.search(r"^(.*-)?witan$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "wait")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "wit")
+            self.Root.update_key(r'ACT-.*-PRET', "wiss")
+
+        elif re.search(r"^lais$", lemma) or re.search(r"^daug$", lemma):
+            self.Root.value = lemma
+
+        elif re.search(r"^(.*-)?kunnan$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "kann")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "kunn")
+            self.Root.update_key(r'ACT-.*-PRET|PART-PERF', "kunþ")
+
+        elif re.search(r"^(.*-)?þaurban$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "þarf")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "þaurb")
+            self.Root.update_key(r'ACT-.*-PRET|PART-PERF', "þaurft")
+
+        elif re.search(r"^(.*-)?daursan$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "dars")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "daurs")
+            self.Root.update_key(r'ACT-.*-PRET', "daurst")
+
+        elif re.search(r"^(.*-)?munan$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "man")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "mun")
+            self.Root.update_key(r'ACT-.*-PRET|PART-PERF', "mund")
+        elif re.search(r"^(.*-)?skulan$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "skal")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "skul")
+            self.Root.update_key(r'ACT-.*-PRET|PART-PERF', "skuld")
+
+        elif re.search(r"^ga-nah$", lemma):
+            self.Root.value = lemma
+
+        elif re.search(r"^bi-nah$", lemma):
+            self.Root.value = lemma
+
+        elif re.search(r"^(.*-)?motan$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "mot")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "mot")
+            self.Root.update_key(r'ACT-.*-PRET', "most")
+
+        elif re.search(r"^(.*-)?ogan$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "og")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "og")
+            self.Root.update_key(r'ACT-.*-PRET', "oht")
+
+        elif re.search(r"^(.*-)?magan$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "mag")
+            self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', "mag")
+            self.Root.update_key(r'ACT-.*-PRET|PART-PERF', "maht")
+
+        elif re.search(r"^(.*-)?ai[gh]an$", lemma):
+            self.Root.update_key(r'ACT-IND-PRES-SING', "aih")
+            if re.match(r"^(.*-)?aigan$", lemma):
+                self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', 'aig')
+            else:
+                self.Root.update_key(r'ACT-(IND-PRES-(DUAL|PLUR)|OPT)|INF|PART-PRES', 'aih')
+            self.Root.update_key(r'ACT-.*-PRET', "aiht")
+
+        else:
+            super().get_Root()
+
+
+@reg_dc(60)
+class PersPron(BaseMorphClass):
+    pass
+
+
+@reg_dc(61)
+class Pron(BaseMorphClass):
+    pass
+
+
+@reg_dc(62)
+class Num1(BaseMorphClass):
+    pass
+
+
+@reg_dc(63)
+class Num2(BaseMorphClass):
+
+    derive_root = gen_sub([(f'({RE_V})f$', r'\1b'),
+                           (f'({RE_V})þ$', r'\1d'),
+                           (f'({RE_V})s$', r'\1z')])
+
+
+@reg_dc(64)
+class Unknown(BaseMorphClass):
+    pass

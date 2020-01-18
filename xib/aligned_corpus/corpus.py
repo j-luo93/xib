@@ -165,7 +165,7 @@ class UnsegmentedSentence(SequenceABC):
     is_known_ipa: bool
     segmented_content: Content = field(repr=False)
     segments: List[Segment] = field(default_factory=list)
-    annotated: Set[int] = field(default_factory=set, repr=False)
+    # annotated: Set[int] = field(default_factory=set, repr=False)
 
     def __len__(self):
         return len(self.content)
@@ -177,11 +177,11 @@ class UnsegmentedSentence(SequenceABC):
         if isinstance(aligned_contents, (str, IpaSequence)):
             aligned_contents = {aligned_contents}
         segment = Segment(start, end, self.content[start: end + 1], aligned_contents)
-        idx_set = set(range(start, end + 1))
-        if idx_set & self.annotated:
-            raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
+        # idx_set = set(range(start, end + 1))
+        # if idx_set & self.annotated:
+        #     raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
         self.segments.append(segment)  # pylint: disable=no-member
-        self.annotated |= idx_set
+        # self.annotated |= idx_set
 
 
 @dataclass

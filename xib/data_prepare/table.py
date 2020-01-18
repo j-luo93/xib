@@ -12,12 +12,16 @@ class BaseTable:
     def __init__(self, data: PD_DF):
         self._check_columns(data)
         self.data = data
+        self.postprocess()
 
     def _check_columns(self, data: PD_DF):
         cls = type(self)
         for col in cls._required_columns:
             if col not in data.columns:
                 raise TypeError(f'Column {col} not present in the data frame which has columns {data.columns}.')
+
+    def postprocess(self):
+        pass
 
 
 class MonoTable(BaseTable):
@@ -32,10 +36,16 @@ class Tokens(MonoTable):
 
     _required_columns = ['SegmentID', 'Position', 'Token', 'LemmaID']
 
+    def postprocess(self):
+        self.data['LemmaID'] = self.data['LemmaID'].astype('Int64')
+
 
 class Lemmas(MonoTable):
 
     _required_columns = ['LemmaID', 'Lemma']
+
+    def postprocess(self):
+        self.data['LemmaID'] = self.data['LemmaID'].astype('Int64')
 
 
 class Stems(MonoTable):
@@ -71,11 +81,11 @@ def generate_data_file(lost_tokens: Tokens,
     tsl = pd.merge(ts, lost_lemmas.data, left_on='LemmaID', right_on='LemmaID', how='left')
 
     # Get cognate alignments.
-    def get_lemmas(lang: str, group) -> Set[str]:
+    def get_lemmas(lang: str, group) -> List[str]:
         if lang == source_lang:
             lemmas = group.Source.values
         lemmas = group[group.Language == lang].Lemma.values
-        return set(lemmas)
+        return sorted(set(lemmas))
 
     data = list()
     for cog_id, group in cog_set.data.groupby('CogID'):
@@ -90,11 +100,16 @@ def generate_data_file(lost_tokens: Tokens,
 
     # Add stem info on the known side.
     flat_cog_df = cog_df.explode('known_lemma')
-    flat_cog_df = pd.merge(flat_cog_df, known_stems, left_on='known_lemma', right_on='Token', how='left')
-    cog_df = flat_cog_df.pivot_table(index='lost_lemma', values='known_lemma', aggfunc=lambda lst: '|'.join(lst))
+    flat_cog_df = pd.merge(flat_cog_df, known_stems.data, left_on='known_lemma', right_on='Token', how='left')
+    cog_df = flat_cog_df.pivot_table(index='lost_lemma',
+                                     values=['known_lemma', 'Stems'],
+                                     aggfunc={
+                                         'known_lemma': '|'.join,
+                                         'Stems': ','.join
+                                     })
 
     # Match lost tokens and known cognates based on lemmas.
     matched = pd.merge(tsl, cog_df, left_on='Lemma', right_on='lost_lemma', how='left')
 
     # Write to file.
-    matched.to_csv(out_path, sep='\t')
+    matched.to_csv(out_path, sep='\t', index=None)

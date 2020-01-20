@@ -68,7 +68,7 @@ def generate_data_file(lost_tokens: Tokens,
                        lost_stems: Stems,
                        known_stems: Stems,
                        cog_set: CogSet,
-                       out_path: str):
+                       out_path: str) -> PD_DF:
     # Get some meta-data first.
     source_lang = cog_set.source_lang
     lost_lang = lost_tokens.lang
@@ -98,14 +98,20 @@ def generate_data_file(lost_tokens: Tokens,
     cog_df = pd.DataFrame(data, columns=['lost_lemma', 'known_lemma'])
     cog_df = cog_df.explode('lost_lemma')
 
+    # cog_set_pt = cog_set.data.pivot_table(index=['CogID', 'Source'], columns='Language', values='Lemma', aggfunc=set)
+    # cog_df = cog_set_pt.reset_index(level=1).rename(columns={'Source': 'gem-pro'})
+    # cog_df[[lost_lang, known_lang]]
+
     # Add stem info on the known side.
     flat_cog_df = cog_df.explode('known_lemma')
     flat_cog_df = pd.merge(flat_cog_df, known_stems.data, left_on='known_lemma', right_on='Token', how='left')
+    print(f'Missing {flat_cog_df.Stems.isnull().sum()} stems.')
+    flat_cog_df = flat_cog_df.dropna(subset=['Stems'])
     cog_df = flat_cog_df.pivot_table(index='lost_lemma',
                                      values=['known_lemma', 'Stems'],
                                      aggfunc={
-                                         'known_lemma': '|'.join,
-                                         'Stems': ','.join
+                                         'known_lemma': lambda lst: '|'.join(set(lst)),
+                                         'Stems': lambda lst: '|'.join(set(lst))
                                      })
 
     # Match lost tokens and known cognates based on lemmas.
@@ -113,3 +119,5 @@ def generate_data_file(lost_tokens: Tokens,
 
     # Write to file.
     matched.to_csv(out_path, sep='\t', index=None)
+
+    return matched

@@ -15,25 +15,41 @@ def split_by_length(lengths: Sequence[int], max_length: int, min_length: int) ->
     cum_lengths = [0]
     for length in lengths:
         cum_lengths.append(cum_lengths[-1] + length)
+
     start = 0
-    end = 1
-    while end < len(cum_lengths):
-        seg_length = cum_lengths[end] - cum_lengths[start]
-        if seg_length <= max_length:
-            end += 1
-            continue
-
-        if end > start + 1 and seg_length >= min_length:
-            ret.append((start, end - 1))
-            start = end - 1
-        else:
-            start = end
+    while start < len(lengths):
         end = start + 1
-
-    if end > start + 1 and seg_length >= min_length:
-        ret.append((start, end - 1))
-
+        while end < len(cum_lengths) - 1 and cum_lengths[end + 1] <= max_length:
+            end += 1
+        if min_length <= cum_lengths[end] - cum_lengths[start] <= max_length:
+            ret.append((start, end))
+        start = end
     return ret
+
+# def split_by_length(lengths: Sequence[int], max_length: int, min_length: int) -> List[Tuple[int, int]]:
+#     ret = list()
+#     cum_lengths = [0]
+#     for length in lengths:
+#         cum_lengths.append(cum_lengths[-1] + length)
+#     start = 0
+#     end = 1
+#     while end < len(cum_lengths):
+#         seg_length = cum_lengths[end] - cum_lengths[start]
+#         if seg_length <= max_length:
+#             end += 1
+#             continue
+
+#         if end > start + 1 and seg_length >= min_length:
+#             ret.append((start, end - 1))
+#             start = end - 1
+#         else:
+#             start = end
+#         end = start + 1
+
+#     if end > start + 1 and seg_length >= min_length:
+#         ret.append((start, end - 1))
+
+#     return ret
 
 
 @dataclass

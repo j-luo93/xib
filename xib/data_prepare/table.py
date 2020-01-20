@@ -80,6 +80,12 @@ def generate_data_file(lost_tokens: Tokens,
     # Add lemma information.
     tsl = pd.merge(ts, lost_lemmas.data, left_on='LemmaID', right_on='LemmaID', how='left')
 
+    # Remove sentences that are not fully analyzed with lemmas.
+    no_lemma_mask = tsl['LemmaID'].isnull()
+    incomplete_segments = set(tsl[no_lemma_mask]['SegmentID'])
+    total_segments = len(set(tsl['SegmentID']))
+    print(f'Missing {no_lemma_mask.sum()}/{len(tsl)} lost lemmas in {len(incomplete_segments)}/{total_segments} segments.')
+
     # Get cognate alignments.
     def get_lemmas(lang: str, group) -> List[str]:
         if lang == source_lang:
@@ -107,6 +113,7 @@ def generate_data_file(lost_tokens: Tokens,
     flat_cog_df = pd.merge(flat_cog_df, known_stems.data, left_on='known_lemma', right_on='Token', how='left')
     print(f'Missing {flat_cog_df.Stems.isnull().sum()} stems.')
     flat_cog_df = flat_cog_df.dropna(subset=['Stems'])
+    # Combine stems and their original forms.
     cog_df = flat_cog_df.pivot_table(index='lost_lemma',
                                      values=['known_lemma', 'Stems'],
                                      aggfunc={

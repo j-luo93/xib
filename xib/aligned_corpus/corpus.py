@@ -4,8 +4,8 @@ import warnings
 from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import (IO, ClassVar, Dict, FrozenSet, Iterable, List, Optional,
-                    Sequence, Set, Tuple, TypeVar, Union)
+from typing import (IO, ClassVar, Dict, FrozenSet, Iterable, Iterator, List,
+                    Optional, Sequence, Set, Tuple, TypeVar, Union)
 
 import numpy as np
 import pandas as pd
@@ -39,18 +39,39 @@ class Word:
 
     def __repr__(self):
         ipa_str = ','.join(map(str, self.ipa))
-        return f'{self.lang};{self.form};{ipa_str}'
+        return f'{self.lang};{self.form};{{{ipa_str}}}'
 
     @classmethod
     def from_saved_string(cls, saved_string: str) -> Word:
         lang, form, ipa_str = saved_string.split(';')
-        ipa = frozenset({IpaSequence(s) for s in ipa_str.split(',')})
+        ipa = frozenset({IpaSequence(s) for s in ipa_str[1:-1].split(',')})
         return cls(lang, form, ipa)
 
     @property
     def main_ipa(self) -> IpaSequence:
         # HACK(j_luo) Only take one of them.
         return list(self.ipa)[0]
+
+
+@dataclass(eq=True, frozen=True)
+class Stem(Word):
+    """A stem is just a word with start and end."""
+    start: int
+    end: int
+    full_form: str
+
+    def __repr__(self):
+        ipa_str = ','.join(map(str, self.ipa))
+        return f'{self.lang};{self.form}:{self.start}:{self.end}:{self.full_form};{{{ipa_str}}}'
+
+    @classmethod
+    def from_saved_string(cls, saved_string: str) -> Word:
+        lang, form_with_orig, ipa_str = saved_string.split(';')
+        form, start, end, full_form = form_with_orig.split(':')
+        start = int(start)
+        end = int(end)
+        ipa = frozenset({IpaSequence(s) for s in ipa_str[1:-1].split(',')})
+        return cls(lang, form, ipa, start, end, full_form)
 
 
 _Signature = Tuple[str, str]
@@ -90,6 +111,8 @@ class AlignedWord:
     lost_lemma: Word
     known_tokens: Set[Word]  # Translations for the lost token.
     known_lemmas: Set[Word]  # Translations for the lost lemma.
+    lost_stems: Set[Stem] = field(default_factory=set)
+    known_stems: Set[Stem] = field(default_factory=set)
 
     def __repr__(self):
         """Only display the most important (form) information."""
@@ -226,35 +249,43 @@ class AlignedSentence:
             content = ''.join(content_lst)
         segmented_content = ' '.join(content_lst)
         uss = UnsegmentedSentence(content, is_lost_ipa, is_known_ipa, segmented_content)
-        if annotated:
+
+        def iter_annotation() -> Iterator[Tuple[int, int, Set[Content]]]:
             offset = 0
             for word in self.words:
-                lwl = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
-                if (word.known_tokens or word.known_lemmas) and lwl <= g.max_word_length and lwl >= g.min_word_length:
-                    aligned_contents = set()
-                    for known_word in (word.known_tokens | word.known_lemmas):
-                        if is_known_ipa:
-                            aligned_contents.update(known_word.ipa)
-                        else:
-                            aligned_contents.add(known_word.form)
-                    uss.annotate(offset, offset + lwl - 1, aligned_contents)
-                offset += lwl
+                words_or_stems = word.known_lemmas if g.use_stem else (word.known_tokens | word.known_lemmas)
+                contents = {wos.ipa if is_known_ipa else wos.form for wos in words_or_stems}
+                full_length = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
+                if g.use_stem:
+                    for stem in word.lost_stems:
+                        yield offset + stem.start, offset + stem.end, contents
+                else:
+                    yield offset, offset + full_length - 1, contents
+                offset += full_length
+
+        if annotated:
+            offset = 0
+            for start, end, aligned_contents in iter_annotation():
+                length = end - start + 1
+                if length <= g.max_word_length and length >= g.min_word_length:
+                    uss.annotate(start, end, aligned_contents)
+            # for word in self.words:
+            #     lwl = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
+            #     if (word.known_tokens or word.known_lemmas) and lwl <= g.max_word_length and lwl >= g.min_word_length:
+            #         aligned_contents = set()
+            #         for known_word in (word.known_tokens | word.known_lemmas):
+            #             if is_known_ipa:
+            #                 aligned_contents.update(known_word.ipa)
+            #             else:
+            #                 aligned_contents.add(known_word.form)
+            #         uss.annotate(offset, offset + lwl - 1, aligned_contents)
+            #     offset += lwl
 
         return uss
 
 
-def get_set_of_words(saved_string: str) -> Set[Word]:
-    """Get a set of words from a saved_string optionally separated by '|'."""
-    ret = set()
-    try:
-        for s in saved_string.split('|'):
-            try:
-                ret.add(Word.from_saved_string(s))
-            except ValueError:
-                pass
-    except AttributeError:
-        pass
-    return ret
+class NullValue(Exception):
+    """Raise this error if a function is applied on a null value in data frames."""
 
 
 class AlignedCorpus(SequenceABC):
@@ -277,8 +308,8 @@ class AlignedCorpus(SequenceABC):
         def gen_lost_word():
             for sentence in sentences:
                 for word in sentence.words:
-                    for lost_word in [word.lost_token, word.lost_lemma]:
-                        yield from yield_content(lost_word)
+                    # NOTE(j_luo) No need to yield content from lemmas.
+                    yield from yield_content(word.lost_token)
 
         def gen_known_word():
             for sentence in sentences:
@@ -309,13 +340,33 @@ class AlignedCorpus(SequenceABC):
 
     @classmethod
     def from_tsv(cls, lost_lang: str, known_lang: str, data_path: str) -> AlignedCorpus:
+
+        def get_word(saved_string: str, strict: bool = True, return_set: bool = False, word_cls=Word):
+            if pd.isnull(saved_string):
+                if strict:
+                    raise NullValue(f'Null value encountered.')
+                return set() if return_set else None
+            else:
+                if return_set:
+                    return {word_cls.from_saved_string(s) for s in saved_string.split('|')}
+                else:
+                    return word_cls.from_saved_string(saved_string)
+
         df = pd.read_csv(data_path, sep='\t')
-        df['lost_token'] = df['lost_token'].apply(Word.from_saved_string)
-        df['lost_lemma'] = df['lost_lemma'].apply(Word.from_saved_string)
-        df['known_tokens'] = df['known_tokens'].apply(get_set_of_words)
-        df['known_lemmas'] = df['known_lemmas'].apply(get_set_of_words)
-        df['aligned_word'] = df[['lost_token', 'lost_lemma', 'known_tokens',
-                                 'known_lemmas']].apply(lambda item: AlignedWord(*item), axis=1)
+        word_info_cols = ['lost_token', 'lost_lemma', 'known_tokens', 'known_lemmas']
+        df['lost_token'] = df['lost_token'].apply(get_word)
+        df['lost_lemma'] = df['lost_lemma'].apply(get_word, strict=False)
+        df['known_tokens'] = df['known_tokens'].apply(get_word, strict=False, return_set=True)
+        if g.use_stem:
+            # NOTE(j_luo) These two columns are identical if stems are used.
+            df['known_lemmas'] = df['known_tokens']
+            # Get stems.
+            df['lost_stems'] = df['lost_stems'].apply(get_word, strict=False, return_set=True, word_cls=Stem)
+            df['known_stems'] = df['known_stems'].apply(get_word, strict=False, return_set=True, word_cls=Stem)
+            word_info_cols.extend(['lost_stems', 'known_stems'])
+        else:
+            df['known_lemmas'] = df['known_lemmas'].apply(get_word, strict=False, return_set=True)
+        df['aligned_word'] = df[word_info_cols].apply(lambda item: AlignedWord(*item), axis=1)
 
         sentences = list()
         for sentence_idx, group in df.groupby('sentence_idx', sort=True)['word_idx', 'aligned_word']:
@@ -325,6 +376,8 @@ class AlignedCorpus(SequenceABC):
         return cls(lost_lang, known_lang, sentences)
 
     def to_df(self) -> pd.DataFrame:
+        if g.use_stem:
+            raise NotImplementedError(f'Saving stems are not supported right now.')
 
         data = list()
         for s_idx, sentence in enumerate(self.sentences):

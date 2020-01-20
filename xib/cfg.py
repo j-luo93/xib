@@ -287,6 +287,22 @@ class FixGotGermLemmaOnly(FixGotGermOracleSpan):
 
 
 @reg
+class FixGotNhdWithStemSmall(FixGotGermLemmaOnly):
+    known_lang: str = 'nhd'
+    span_candidates: str = 'all'
+    char_per_batch: int = 400
+    reg_hyper: float = 1.0
+    unextracted_prob: float = 0.05
+    use_stem: bool = True
+    min_word_length: int = 3
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.small.tsv'
+        self.vocab_path: str = './data/wulfila/processed/nhd.small.matched.stems'
+
+
+@reg
 class FixGotAEOracleSpan(FixGotGermOracleSpan):
     known_lang: str = 'ae'
 

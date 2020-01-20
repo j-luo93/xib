@@ -8,13 +8,14 @@ from dev_misc.devlib import get_array, get_length_mask
 from dev_misc.devlib.named_tensor import Rename
 from xib.aligned_corpus.char_set import (DELETE_SYM, EMPTY_SYM, INSERT_SYM,
                                          CharSetFactory)
-from xib.aligned_corpus.corpus import Content, Word
+from xib.aligned_corpus.corpus import Content, Stem, Word
 from xib.batch import convert_to_dense
 
 
 class Vocabulary:
 
     add_argument('add_infinitive', dtype=bool, default=False)
+    add_argument('use_stem', dtype=bool, default=False)
 
     def __init__(self):
 
@@ -22,10 +23,12 @@ class Vocabulary:
             l = len(content)
             return g.min_word_length <= l <= g.max_word_length
 
+        word_cls = Stem if g.use_stem else Word
         def gen_word(io: IO):
+
             for line in io:
                 try:
-                    word = Word.from_saved_string(line.strip())
+                    word = word_cls.from_saved_string(line.strip())
                     yield from word.ipa
                 except ValueError:
                     pass

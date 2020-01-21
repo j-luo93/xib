@@ -7,7 +7,7 @@ import torch.nn as nn
 
 from dev_misc import add_argument, g, get_zeros
 from dev_misc.devlib import get_length_mask
-from xib.aligned_corpus.char_set import DELETE_ID, INSERT_ID
+from xib.aligned_corpus.char_set import DELETE_ID
 from xib.aligned_corpus.corpus import AlignedSentence
 from xib.model.extract_model import (BT, FT, LT, AlignedBatch, BaseBatch,
                                      Category, Extracted, ExtractModel,

@@ -408,8 +408,13 @@ class AlignedExtractEvaluator(BaseEvaluator):
                         prefix_span_match += 1
                     elif p_seg.has_prefix_span(g_seg):
                         prefix_span_match += 1
-                    if p_seg.has_prefix_span(g_seg) and p_seg.has_same_content(g_seg):
-                        exact_content_match += 1
+                    if p_seg.has_same_content(g_seg):
+                        if g.use_stem:
+                            if p_seg.has_reasonable_stem_span(g_seg):
+                                exact_content_match += 1
+                        else:
+                            if p_seg.has_prefix_span(g_seg):
+                                exact_content_match += 1
                         if has_cognate:
                             exact_positive_content_match += 1
 

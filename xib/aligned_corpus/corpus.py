@@ -155,6 +155,8 @@ class Segment:
     end: int
     content: Content
     aligned_contents: Set[Content]
+    full_form_start: int = None
+    full_form_end: int = None
 
     def _check_segment_type(self, other: Segment):
         if not isinstance(other, Segment):
@@ -163,6 +165,11 @@ class Segment:
     def has_same_span(self, other: Segment) -> bool:
         self._check_segment_type(other)
         return self.start == other.start and self.end == other.end
+
+    def has_reasonable_stem_span(self, other: Segment) -> bool:
+        self._check_segment_type(other)
+        assert other.full_form_end is not None and other.full_form_start is not None
+        return self.start == other.full_form_start and self.end <= other.full_form_end
 
     def has_same_content(self, other: Segment) -> bool:
         self._check_segment_type(other)
@@ -196,10 +203,15 @@ class UnsegmentedSentence(SequenceABC):
     def __getitem__(self, idx: int) -> Content:
         return self.content[idx]
 
-    def annotate(self, start: int, end: int, aligned_contents: Union[Content, Set[Content]]):
+    def annotate(self,
+                 start: int,
+                 end: int,
+                 aligned_contents: Union[Content, Set[Content]],
+                 full_form_start: Optional[int] = None,
+                 full_form_end: Optional[int] = None):
         if isinstance(aligned_contents, (str, IpaSequence)):
             aligned_contents = {aligned_contents}
-        segment = Segment(start, end, self.content[start: end + 1], aligned_contents)
+        segment = Segment(start, end, self.content[start: end + 1], aligned_contents, full_form_start, full_form_end)
         # idx_set = set(range(start, end + 1))
         # if idx_set & self.annotated:
         #     raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
@@ -250,29 +262,29 @@ class AlignedSentence:
         segmented_content = ' '.join(content_lst)
         uss = UnsegmentedSentence(content, is_lost_ipa, is_known_ipa, segmented_content)
 
-        def iter_annotation() -> Iterator[Tuple[int, int, Set[Content]]]:
+        def iter_annotation() -> Iterator[Tuple[int, int, Set[Content], Optional[int], Optional[int]]]:
             offset = 0
             for word in self.words:
                 words_or_stems = word.known_stems if g.use_stem else (word.known_tokens | word.known_lemmas)
+                full_length = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
                 aligned_contents = {wos.ipa if is_known_ipa else {wos.form} for wos in words_or_stems}
                 aligned_contents = union_sets(aligned_contents)
-                if not aligned_contents:
-                    continue
-
-                full_length = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
-                if g.use_stem:
-                    for stem in word.lost_stems:
-                        yield offset + stem.start, offset + stem.end, aligned_contents
-                else:
-                    yield offset, offset + full_length - 1, aligned_contents
+                if aligned_contents:
+                    if g.use_stem:
+                        for stem in word.lost_stems:
+                            yield offset + stem.start, offset + stem.end, aligned_contents, offset, offset + full_length
+                    else:
+                        yield offset, offset + full_length - 1, aligned_contents, None, None
                 offset += full_length
 
         if annotated:
             offset = 0
-            for start, end, aligned_contents in iter_annotation():
+            for start, end, aligned_contents, full_form_start, full_form_end in iter_annotation():
                 length = end - start + 1
                 if length <= g.max_word_length and length >= g.min_word_length:
-                    uss.annotate(start, end, aligned_contents)
+                    uss.annotate(start, end, aligned_contents,
+                                 full_form_start=full_form_start,
+                                 full_form_end=full_form_end)
             # for word in self.words:
             #     lwl = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
             #     if (word.known_tokens or word.known_lemmas) and lwl <= g.max_word_length and lwl >= g.min_word_length:

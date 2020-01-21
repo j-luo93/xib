@@ -90,7 +90,8 @@ def generate_data_file(lost_tokens: Tokens,
     def get_lemmas(lang: str, group) -> List[str]:
         if lang == source_lang:
             lemmas = group.Source.values
-        lemmas = group[group.Language == lang].Lemma.values
+        else:
+            lemmas = group[group.Language == lang].Lemma.values
         return sorted(set(lemmas))
 
     data = list()

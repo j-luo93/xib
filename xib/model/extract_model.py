@@ -127,7 +127,7 @@ class ExtractModel(nn.Module):
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
     add_argument('use_empty_symbol', dtype=bool, default=False, msg='Flag to use empty symbol')
     add_argument('span_candidates', dtype=str,
-                 choices=['all', 'oracle_full'], default='all', msg='How to generate candidates for spans.')
+                 choices=['all', 'oracle_full', 'oracle_stem'], default='all', msg='How to generate candidates for spans.')
 
     def __init__(self, lu_size: Optional[int] = None, ku_size: Optional[int] = None):
         super().__init__()

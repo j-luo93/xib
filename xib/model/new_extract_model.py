@@ -1,6 +1,6 @@
 import logging
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -8,6 +8,7 @@ import torch.nn as nn
 from dev_misc import add_argument, g, get_zeros
 from dev_misc.devlib import get_length_mask
 from xib.aligned_corpus.char_set import DELETE_ID, INSERT_ID
+from xib.aligned_corpus.corpus import AlignedSentence
 from xib.model.extract_model import (BT, FT, LT, AlignedBatch, BaseBatch,
                                      Category, Extracted, ExtractModel,
                                      ExtractModelReturn, Matches, NameHelper,
@@ -74,7 +75,7 @@ class NewExtractModel(nn.Module):
                                            known_ins_ctx_repr)
 
         # Get span candidates:
-        viable_spans = self._get_viable_spans(batch.unit_id_seqs, batch.lengths)
+        viable_spans = self._get_viable_spans(batch.unit_id_seqs, batch.lengths, batch.sentences)
 
         # Get matches.
         matches = self._get_matches(costs,
@@ -143,7 +144,7 @@ class NewExtractModel(nn.Module):
 
         return costs, alignment
 
-    def _get_viable_spans(self, lost_unit_id_seqs: LT, lost_lengths: LT) -> ViableSpans:
+    def _get_viable_spans(self, lost_unit_id_seqs: LT, lost_lengths: LT, sentences: Sequence[AlignedSentence]) -> ViableSpans:
         max_length = lost_lengths.max().item()
         batch_size = lost_lengths.size('batch')
         if g.span_candidates == 'all':
@@ -152,11 +153,30 @@ class NewExtractModel(nn.Module):
             # Range from `min_word_length` to `max_word_length`.
             len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
             len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
-        else:
+        elif g.span_candidates == 'oracle_full':
             # Start from the first position.
             start_candidates = torch.zeros_like(lost_lengths).align_to('batch', 'len_s', 'len_e')
             # Use full word length.
             len_candidates = lost_lengths.align_to('batch', 'len_s', 'len_e')
+            len_candidates.clamp_(min=g.min_word_length, max=g.max_word_length)
+        else:
+            assert g.use_stem
+            starts = list()
+            lens = list()
+            for i, sentence in enumerate(sentences):
+                uss = sentence.to_unsegmented(is_lost_ipa=g.input_format == 'ipa', is_known_ipa=True, annotated=True)
+                if uss.segments:
+                    starts.append(uss.segments[0].start)
+                    lens.append(uss.segments[0].end - starts[-1] + 1)
+                else:
+                    starts.append(0)
+                    lens.append(lost_lengths[i])
+            start_candidates = torch.zeros_like(lost_lengths)
+            start_candidates[:] = torch.LongTensor(starts)
+            start_candidates = start_candidates.align_to('batch', 'len_s', 'len_e')
+            len_candidates = torch.zeros_like(lost_lengths)
+            len_candidates[:] = torch.LongTensor(lens)
+            len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
             len_candidates.clamp_(min=g.min_word_length, max=g.max_word_length)
         # This is inclusive.
         end_candidates = start_candidates + len_candidates - 1

@@ -6,7 +6,7 @@ from typing import List, Sequence, Tuple
 import torch
 from torch.utils.data import Dataset
 
-from dev_misc import LT, g
+from dev_misc import LT, add_argument, g
 from xib.aligned_corpus.corpus import AlignedCorpus, AlignedSentence
 
 
@@ -62,6 +62,8 @@ class AlignedDatasetItem:
 class AlignedDataset(Dataset):
     """A subclass of Dataset that deals with AlignedCorpus."""
 
+    add_argument('noiseless', dtype=bool, default=False)
+
     def __init__(self, corpus: AlignedCorpus):
         self.corpus = corpus
         self.data = list()
@@ -70,7 +72,19 @@ class AlignedDataset(Dataset):
             splits = split_by_length(word_lengths, g.max_segment_length, g.min_word_length)
             for start, end in splits:
                 truncated_sentence = AlignedSentence(sentence.words[start: end])
-                self.data.append(truncated_sentence)
+
+                to_add = False
+                if g.noiseless:
+                    uss = truncated_sentence.to_unsegmented(is_known_ipa=True,
+                                                            is_lost_ipa=g.input_format == 'ipa',
+                                                            annotated=True)
+                    if uss.segments and any(g.min_word_length <= segment.end - segment.start <= g.max_word_length for segment in uss.segments):
+                        to_add = True
+                else:
+                    to_add = True
+
+                if to_add:
+                    self.data.append(truncated_sentence)
 
     def __len__(self):
         return len(self.data)

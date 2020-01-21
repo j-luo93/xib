@@ -138,7 +138,7 @@ class NewExtractModel(nn.Module):
         ins_ctx_logits = known_ins_ctx_repr @ lost_unit_emb.t()
         ins_ctx_log_probs = ins_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = g.context_weight * ins_ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
-        ins = -ins_weighted_log_probs
+        ins = -ins_weighted_log_probs + self.ins_del_cost
 
         costs = Costs(sub, ins)
 

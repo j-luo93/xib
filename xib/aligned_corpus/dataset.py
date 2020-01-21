@@ -63,10 +63,13 @@ class AlignedDataset(Dataset):
     """A subclass of Dataset that deals with AlignedCorpus."""
 
     add_argument('noiseless', dtype=bool, default=False)
+    add_argument('freq_hack', dtype=bool, default=False)
 
     def __init__(self, corpus: AlignedCorpus):
         self.corpus = corpus
         self.data = list()
+        if g.freq_hack:
+            _data_str = set()
         for sentence in self.corpus.sentences:
             word_lengths = [word.lost_token.form_length for word in sentence.words]
             splits = split_by_length(word_lengths, g.max_segment_length, g.min_word_length)
@@ -84,7 +87,11 @@ class AlignedDataset(Dataset):
                     to_add = True
 
                 if to_add:
+                    if g.freq_hack and str(truncated_sentence) in _data_str:
+                        continue
                     self.data.append(truncated_sentence)
+                    if g.freq_hack:
+                        _data_str.add(str(truncated_sentence))
 
     def __len__(self):
         return len(self.data)

@@ -14,7 +14,7 @@ import torch
 from dev_misc import add_argument, g
 from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.devlib.named_tensor import NoName, Rename
-from dev_misc.utils import Singleton, check_explicit_arg
+from dev_misc.utils import Singleton, check_explicit_arg, union_sets
 from xib.aligned_corpus.char_set import CharSet, CharSetFactory
 from xib.aligned_corpus.ipa_sequence import Content, IpaSequence
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
@@ -253,14 +253,18 @@ class AlignedSentence:
         def iter_annotation() -> Iterator[Tuple[int, int, Set[Content]]]:
             offset = 0
             for word in self.words:
-                words_or_stems = word.known_lemmas if g.use_stem else (word.known_tokens | word.known_lemmas)
-                contents = {wos.ipa if is_known_ipa else wos.form for wos in words_or_stems}
+                words_or_stems = word.known_stems if g.use_stem else (word.known_tokens | word.known_lemmas)
+                aligned_contents = {wos.ipa if is_known_ipa else {wos.form} for wos in words_or_stems}
+                aligned_contents = union_sets(aligned_contents)
+                if not aligned_contents:
+                    continue
+
                 full_length = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
                 if g.use_stem:
                     for stem in word.lost_stems:
-                        yield offset + stem.start, offset + stem.end, contents
+                        yield offset + stem.start, offset + stem.end, aligned_contents
                 else:
-                    yield offset, offset + full_length - 1, contents
+                    yield offset, offset + full_length - 1, aligned_contents
                 offset += full_length
 
         if annotated:

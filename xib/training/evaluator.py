@@ -330,6 +330,7 @@ def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int, name: str) ->
 class _Match:
     total_log_prob: float
     word_log_prob: float
+    avg_char_log_prob: float
     hypothesis: UnsegmentedSentence
 
 
@@ -374,8 +375,9 @@ class AlignedExtractEvaluator(BaseEvaluator):
             for match in anno.top_matched:
                 log_prob_str = f'{match.total_log_prob:.3f}'
                 word_log_prob_str = f'{match.word_log_prob:.3f}'
+                avg_char_log_prob_str = f'{match.avg_char_log_prob:.3f}'
                 segments_str = ';'.join(map(str, match.hypothesis.segments))
-                top_matched_strings.append(f'({log_prob_str}, {word_log_prob_str}, {segments_str})')
+                top_matched_strings.append(f'({log_prob_str}, {word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
             top_matched_seg_str = ', '.join(top_matched_strings)
             um = f'{anno.unmatched_log_prob:.3f}'
             data.append((segmented_content, g_seg_str, p_seg_str, um, top_matched_seg_str))
@@ -457,7 +459,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
             for ss, ee, mlml, wlwl, ww in zip(s, e, ml, wl, mw):
                 uss = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
                 uss.annotate(ss, ee, ww)
-                match = _Match(mlml, wlwl, uss)
+                match = _Match(mlml, wlwl, wlwl / (ee - ss + 1), uss)
                 top_matched.append(match)
             annotation_tuple = _AnnotationTuple(gold, pred, um, top_matched)
             ret.append(annotation_tuple)

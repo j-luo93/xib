@@ -169,6 +169,7 @@ class ExtractTrainer(BaseTrainer):
 
     add_argument('reg_hyper', default=1.0, dtype=float, msg='Hyperparameter for alignment regularization.')
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
+    add_argument('update_p_weights', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('take_best_span', default=False, dtype=bool,
                  msg='Flag to take the best ll instead of the marginal ll.')
 
@@ -178,7 +179,8 @@ class ExtractTrainer(BaseTrainer):
         self.ins_del_cost = g.init_ins_del_cost
         if g.save_alignment:
             self.add_callback('total_step', 1, self.save_alignment)
-        self.add_callback('total_step', g.num_steps, self.update_p_weights)
+        if g.update_p_weights:
+            self.add_callback('total_step', g.num_steps, self.update_p_weights)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
         # HACK(j_luo)
         self._cnt = 200

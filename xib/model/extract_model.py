@@ -81,6 +81,7 @@ class ExtractModel(nn.Module):
     add_argument('one2two', dtype=bool, default=False, msg='Use conv on both sides.')
     add_argument('ins_del_prior', dtype=float, default=0.1, msg='Prior value for insertion/deletion operations.')
     add_argument('include_unmatched', dtype=bool, default=True, msg='Flag to include unmatched scores in the loss.')
+    add_argument('em_training', dtype=bool, default=False)
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
@@ -314,8 +315,12 @@ class ExtractModel(nn.Module):
         # NOTE(j_luo) Some segments don't have any viable spans.
         nh = NameHelper()
         viable_spans = extracted.viable_spans
-        flat_ll = nh.flatten(matches.ll + viable_spans.p_weights.align_as(matches.ll),
-                             ['len_s', 'len_e', 'vocab'], 'cand')
+        if g.em_training:
+            flat_ll = nh.flatten(matches.ll,
+                                 ['len_s', 'len_e', 'vocab'], 'cand')
+        else:
+            flat_ll = nh.flatten(matches.ll + viable_spans.p_weights.align_as(matches.ll),
+                                 ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable = nh.flatten(viable_spans.viable.expand_as(matches.ll), ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable_ll = (~flat_viable) * (-9999.9) + flat_ll
         # Add probs for unextracted characters.
@@ -339,18 +344,24 @@ class ExtractModel(nn.Module):
         top_matched_vocab = top_span_ind % vs
         # Get unmatched scores -- no word is matched for the entire inscription.
         unmatched_ll = batch.lengths * lp_per_unmatched
-        # Concatenate all.
-        if g.include_unmatched:
-            marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
-            marginal = marginal.logsumexp(dim='cand')
-        else:
-            marginal = flat_total_ll.logsumexp(dim='cand')
         total_ll = nh.unflatten(flat_total_ll, 'cand', ['len_s', 'len_e', 'vocab'])
         total_span_ll = nh.flatten(total_ll, ['len_s', 'len_e'], 'span')
         best_span_ll, _ = total_span_ll.max(dim='span')
         best_span_ll = best_span_ll.logsumexp(dim='vocab')
         if g.include_unmatched:
             best_span_ll = torch.max(best_span_ll, unmatched_ll)
+        # Get marginal.
+        if g.em_training:
+            weighted_total_ll = total_ll.logsumexp(dim='vocab') * viable_spans.p_weights.exp()
+            marginal = weighted_total_ll.sum(dim=['len_s', 'len_e']) / viable_spans.viable.sum(dim=['len_s', 'len_e'])
+            # if g.include_unmatched:
+            #     marginal = torch.stack([marginal, unmatched_ll], new_name='stacked')
+            #     marginal = marginal.logsumexp(dim='stacked')
+        elif g.include_unmatched:
+            marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
+            marginal = marginal.logsumexp(dim='cand')
+        else:
+            marginal = flat_total_ll.logsumexp(dim='cand')
 
         model_ret = ExtractModelReturn(start,
                                        end,

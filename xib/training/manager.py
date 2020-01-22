@@ -31,7 +31,6 @@ from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
 from xib.model.decipher_model import DecipherModel
 from xib.model.extract_model import ExtractModel
 from xib.model.lm_model import LM, AdaptLM
-from xib.model.new_extract_model import NewExtractModel
 from xib.search.search_solver import SearchSolver
 from xib.search.searcher import BruteForceSearcher
 from xib.training.evaluator import (AlignedExtractEvaluator, DecipherEvaluator,
@@ -219,7 +218,6 @@ class ExtractManager(BaseManager):
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
     add_argument('min_threshold', default=0.01, dtype=float, msg='Min value for threshold')
     add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
-    add_argument('fix_direction', default=False, dtype=bool, msg='Flag to fix direction')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -233,10 +231,7 @@ class ExtractManager(BaseManager):
             char_sets = self.dl_reg[task].dataset.corpus.char_sets
             lu_size = len(char_sets[g.lost_lang])
             ku_size = len(BaseAlignedBatch.known_vocab.char_set)
-        if g.fix_direction:
-            self.model = NewExtractModel(lu_size, ku_size)
-        else:
-            self.model = ExtractModel(lu_size=lu_size, ku_size=ku_size)
+        self.model = ExtractModel(lu_size, ku_size)
         if has_gpus():
             self.model.cuda()
         logging.info(str(self.model))

@@ -264,7 +264,6 @@ class FixGotGermOracleSpan(GotDeIpaAlignedReverseGvs):
     unextracted_prob: float = 0.0001
     reg_hyper: float = 0.0
     context_weight: float = 0.5
-    fix_direction: bool = True
     learning_rate: float = 0.05
     one2two: bool = True
 

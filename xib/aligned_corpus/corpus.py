@@ -14,7 +14,8 @@ import torch
 from dev_misc import add_argument, g
 from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.devlib.named_tensor import NoName, Rename
-from dev_misc.utils import Singleton, check_explicit_arg, union_sets
+from dev_misc.utils import (Singleton, cached_property, check_explicit_arg,
+                            union_sets)
 from xib.aligned_corpus.char_set import CharSet, CharSetFactory
 from xib.aligned_corpus.ipa_sequence import Content, IpaSequence
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
@@ -235,6 +236,10 @@ class AlignedSentence:
 
     def __repr__(self):
         """Only display the lost form information."""
+        return self.surface_form
+
+    @cached_property
+    def surface_form(self) -> str:
         return repr(' '.join([word.lost_token.form for word in self.words]))
 
     @classmethod

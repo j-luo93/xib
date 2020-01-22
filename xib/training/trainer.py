@@ -262,7 +262,7 @@ class ExtractTrainer(BaseTrainer):
             if g.take_best_span:
                 loss = -metrics.best_ll.mean
             else:
-                loss = -metrics.marginal_ll.mean
+                loss = -metrics.marginal.mean
             try:
                 loss = loss + metrics.reg.mean * g.reg_hyper
             except AttributeError:

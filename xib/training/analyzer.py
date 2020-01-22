@@ -191,7 +191,7 @@ class ExtractAnalyzer:
             best_span_ll = model_ret.best_span_ll.align_to('batch')
             loss_metric = Metric('best_ll', best_span_ll.sum(), batch.batch_size)
         else:
-            loss_metric = Metric('marginal_ll', model_ret.marginal_ll.sum(), batch.batch_size)
+            loss_metric = Metric('marginal', model_ret.marginal.sum(), batch.batch_size)
         metrics += loss_metric
 
         almt = model_ret.alignment

@@ -100,6 +100,11 @@ class ExtractModel(nn.Module):
     def ins_del_cost(self):
         pass
 
+    def state_dict(self, *args, **kwargs):
+        sd = super().state_dict(*args, **kwargs)
+        sd['span_proposer'] = self.span_proposer.state_dict(*args, **kwargs)
+        return sd
+
     @cached_property
     def effective_categories(self) -> List[Category]:
         ret = list()

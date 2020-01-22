@@ -178,7 +178,14 @@ class ExtractTrainer(BaseTrainer):
         self.ins_del_cost = g.init_ins_del_cost
         if g.save_alignment:
             self.add_callback('total_step', 1, self.save_alignment)
+        self.add_callback('total_step', g.num_steps, self.update_p_weights)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
+        # HACK(j_luo)
+        self._cnt = 200
+
+    def update_p_weights(self):
+        sentences, spans = self.evaluator.get_best_spans(self.stage, self._cnt)
+        self.model.span_proposer.update(sentences, spans)
 
     def save_alignment(self):
         if g.input_format == 'text':

@@ -18,7 +18,8 @@ from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from dev_misc.trainlib.tracker.tracker import Tracker
 from dev_misc.utils import deprecated, pbar
-from xib.aligned_corpus.corpus import Segment, UnsegmentedSentence
+from xib.aligned_corpus.corpus import (AlignedSentence, Segment,
+                                       UnsegmentedSentence)
 from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
 from xib.data_loader import (ContinuousIpaBatch, ContinuousTextDataLoader,
                              DataLoaderRegistry)
@@ -336,6 +337,7 @@ class _Match:
 
 @dataclass
 class _AnnotationTuple:
+    sentence: AlignedSentence
     gold: UnsegmentedSentence
     pred: UnsegmentedSentence
     unmatched_log_prob: float
@@ -348,22 +350,47 @@ class AlignedExtractEvaluator(BaseEvaluator):
         self.model = model
         self.dl = dl
         self.analyzer = ExtractAnalyzer()
+        self._last_eval_stage: str = None
+        self._last_annotations_results: List[_AnnotationTuple] = None
 
-    def evaluate(self, stage: str) -> Metrics:
+    def get_best_spans(self, stage: str, total_num_spans: int) -> Tuple[Sequence[AlignedSentence], Sequence[Tuple[int, int]]]:
+        with torch.no_grad():
+            _, annotations = self._evaluate_core(stage)
+
+        avg_char_log_probs = [anno.top_matched[0].avg_char_log_prob for anno in annotations]
+        aclp = np.asarray(avg_char_log_probs)
+        best_idx = np.argsort(-aclp)[:total_num_spans]
+        sentences = list()
+        spans = list()
+        for idx in best_idx:
+            anno = annotations[idx]
+            seg = anno.pred.segments[0]
+            sentences.append(anno.sentence)
+            spans.append((seg.start, seg.end))
+        return sentences, spans
+
+    def _evaluate_core(self, stage: str) -> Tuple[Metrics, List[_AnnotationTuple]]:
+        if self._last_eval_stage is not None and self._last_eval_stage == stage:
+            return self._last_annotations_results
+
         total_num_samples = 0
         analyzed_metrics = Metrics()
-        annotations: List[_AnnotationTuple] = list()
+        annotations = list()
         for batch in pbar(self.dl, desc='eval_batch'):
-
             if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
                 logging.imp(
                     f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
                 break
-
             ret = self.model(batch)
             analyzed_metrics += self.analyzer.analyze(ret, batch)
             total_num_samples += batch.batch_size
-            annotations.extend(self._get_annotations(ret, batch))
+            annotations.extend(self._get_annotations_for_batch(ret, batch))
+        self._last_eval_stage = stage
+        self._last_annotations_results = (analyzed_metrics, annotations)
+        return analyzed_metrics, annotations
+
+    def evaluate(self, stage: str) -> Metrics:
+        analyzed_metrics, annotations = self._evaluate_core(stage)
 
         # Write to file.
         data = list()
@@ -377,7 +404,8 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 word_log_prob_str = f'{match.word_log_prob:.3f}'
                 avg_char_log_prob_str = f'{match.avg_char_log_prob:.3f}'
                 segments_str = ';'.join(map(str, match.hypothesis.segments))
-                top_matched_strings.append(f'({log_prob_str}, {word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
+                top_matched_strings.append(
+                    f'({log_prob_str}, {word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
             top_matched_seg_str = ', '.join(top_matched_strings)
             um = f'{anno.unmatched_log_prob:.3f}'
             data.append((segmented_content, g_seg_str, p_seg_str, um, top_matched_seg_str))
@@ -438,16 +466,19 @@ class AlignedExtractEvaluator(BaseEvaluator):
             num_positive, num_positive, exact_positive_content_match, 'exact_positive_content')
         return analyzed_metrics + exact_span_prf_scores + prefix_span_prf_scores + exact_content_prf_scores + exact_positive_content_prf_scores
 
-    def _get_annotations(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
-        model_ret = model_ret.numpy()
-        tml = model_ret.top_matched_ll
-        twl = model_ret.top_word_ll
-        matched = tml[:, 0] > model_ret.unmatched_ll
-        tmw = batch.known_vocab.vocab[model_ret.top_matched_vocab]  # Top matched word.
+    def _get_annotations_for_batch(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
+        start = model_ret.start.cpu().numpy()
+        end = model_ret.end.cpu().numpy()
+        unmatched_ll = model_ret.unmatched_ll.cpu().numpy()
+        tml = model_ret.top_matched_ll.cpu().numpy()
+        twl = model_ret.top_word_ll.cpu().numpy()
+        top_matched_vocab = model_ret.top_matched_vocab.cpu().numpy()
+        matched = tml[:, 0] > unmatched_ll
+        tmw = batch.known_vocab.vocab[top_matched_vocab]  # Top matched word.
 
         ret = list()
         is_lost_ipa = (g.input_format == 'ipa')
-        for sentence, s, e, m, ml, wl, mw, um in zip(batch.sentences, model_ret.start, model_ret.end, matched, tml, twl, tmw, model_ret.unmatched_ll):
+        for sentence, s, e, m, ml, wl, mw, um in zip(batch.sentences, start, end, matched, tml, twl, tmw, unmatched_ll):
             # NOTE(j_luo) IPA is always used on the known side.
             gold = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=True)
             pred = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
@@ -461,6 +492,6 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 uss.annotate(ss, ee, ww)
                 match = _Match(mlml, wlwl, wlwl / (ee - ss + 1), uss)
                 top_matched.append(match)
-            annotation_tuple = _AnnotationTuple(gold, pred, um, top_matched)
+            annotation_tuple = _AnnotationTuple(sentence, gold, pred, um, top_matched)
             ret.append(annotation_tuple)
         return ret

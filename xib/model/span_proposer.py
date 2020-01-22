@@ -1,10 +1,11 @@
+import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
 
-from dev_misc import BT, FT, LT, g, get_zeros
+from dev_misc import BT, FT, LT, add_argument, g, get_zeros
 from dev_misc.devlib import BaseBatch, batch_class, get_range
 from dev_misc.devlib.named_tensor import NoName, get_named_range
 from dev_misc.utils import WithholdKeys
@@ -121,6 +122,8 @@ class OracleStemSpanProposer(BaseSpanProposer):
 
 class AllSpanProposer(BaseSpanProposer):
 
+    add_argument('momentum', dtype=float, default=0.5)
+
     def __init__(self):
         super().__init__()
         self.p_weights = dict()
@@ -170,3 +173,27 @@ class AllSpanProposer(BaseSpanProposer):
         p_weights = torch.nn.utils.rnn.pad_sequence(p_weights, batch_first=True)
         p_weights.rename_('batch', 'len_s', 'len_e')
         return start_candidates, len_candidates, p_weights
+
+    def update(self, sentences: Sequence[AlignedSentence], best_spans: Sequence[Tuple[int, int]]):
+        logging.imp(f'Updating {len(sentences)} p_weights.')
+        assert len(sentences) == len(best_spans)
+        updated = set()
+        for sentence, (start, end) in zip(sentences, best_spans):
+            s_key = str(sentence)
+            if s_key in updated:
+                continue
+
+            start_idx = start
+            end_idx = end - start - g.min_word_length + 1
+            sparse_p_weights = get_zeros(sentence.length, g.max_word_length + 1 - g.min_word_length)
+            sparse_p_weights[start_idx, end_idx] = 1.0
+
+            old_p_weights = self.p_weights[s_key]
+            new_p_weights = g.momentum * old_p_weights + (1.0 - g.momentum) * sparse_p_weights
+            self.p_weights[s_key] = new_p_weights
+            updated.add(s_key)
+
+        # # HACK(j_luo)
+        # for k in self.p_weights:
+        #     if k not in updated:
+        #         self.p_weights[k] *= g.momentum

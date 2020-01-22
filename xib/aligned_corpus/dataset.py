@@ -98,10 +98,7 @@ class AlignedDataset(Dataset):
 
     def __getitem__(self, idx: int) -> AlignedDatasetItem:
         sentence = self.data[idx]
-        if g.input_format == 'ipa':
-            length = sentence.lost_ipa_length
-        else:
-            length = sentence.lost_form_length
+        length = sentence.length
         feat_matrix = torch.cat(
             [word.lost_token.main_ipa.feat_matrix for word in sentence.words],
             dim=0

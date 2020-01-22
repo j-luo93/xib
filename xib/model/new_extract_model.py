@@ -15,19 +15,8 @@ from xib.model.extract_model import (BT, FT, LT, AlignedBatch, BaseBatch,
                                      NoName, batch_class, cached_property,
                                      get_named_range, get_range,
                                      global_property, should_include)
-
-
-@batch_class
-class ViableSpans(BaseBatch):
-    viable: BT
-    batch_indices: LT
-    starts: LT
-    ends: LT
-    lengths: LT
-    unit_id_seqs: LT
-    start_candidates: LT
-    end_candidates: LT
-    length_candidates: LT
+from xib.model.span_proposer import (AllSpanProposer, OracleStemSpanProposer,
+                                     OracleWordSpanProposer, ViableSpans)
 
 
 @batch_class
@@ -50,6 +39,11 @@ class NewExtractModel(nn.Module):
         self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.ins_conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
+        opt2sp_cls = {'all': AllSpanProposer,
+                      'oracle_word': OracleWordSpanProposer,
+                      'oracle_stem': OracleStemSpanProposer}
+        sp_cls = opt2sp_cls[g.span_candidates]
+        self.span_proposer = sp_cls()
 
     @global_property
     def ins_del_cost(self):
@@ -75,7 +69,7 @@ class NewExtractModel(nn.Module):
                                            known_ins_ctx_repr)
 
         # Get span candidates:
-        viable_spans = self._get_viable_spans(batch.unit_id_seqs, batch.lengths, batch.sentences)
+        viable_spans = self.span_proposer(batch.unit_id_seqs, batch.lengths, batch.sentences)
 
         # Get matches.
         matches = self._get_matches(costs,
@@ -143,77 +137,6 @@ class NewExtractModel(nn.Module):
         costs = Costs(sub, ins)
 
         return costs, alignment
-
-    def _get_viable_spans(self, lost_unit_id_seqs: LT, lost_lengths: LT, sentences: Sequence[AlignedSentence]) -> ViableSpans:
-        max_length = lost_lengths.max().item()
-        batch_size = lost_lengths.size('batch')
-        if g.span_candidates == 'all':
-            # Propose all span start/end positions.
-            start_candidates = get_named_range(max_length, 'len_s').align_to('batch', 'len_s', 'len_e')
-            # Range from `min_word_length` to `max_word_length`.
-            len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
-            len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
-        elif g.span_candidates == 'oracle_full':
-            # Start from the first position.
-            start_candidates = torch.zeros_like(lost_lengths).align_to('batch', 'len_s', 'len_e')
-            # Use full word length.
-            len_candidates = lost_lengths.align_to('batch', 'len_s', 'len_e')
-            len_candidates.clamp_(min=g.min_word_length, max=g.max_word_length)
-        else:
-            assert g.use_stem
-            starts = list()
-            lens = list()
-            for i, sentence in enumerate(sentences):
-                uss = sentence.to_unsegmented(is_lost_ipa=g.input_format == 'ipa', is_known_ipa=True, annotated=True)
-                if uss.segments:
-                    starts.append(uss.segments[0].start)
-                    lens.append(uss.segments[0].end - starts[-1] + 1)
-                else:
-                    starts.append(0)
-                    lens.append(lost_lengths[i])
-            start_candidates = torch.zeros_like(lost_lengths)
-            start_candidates[:] = torch.LongTensor(starts)
-            start_candidates = start_candidates.align_to('batch', 'len_s', 'len_e')
-            len_candidates = torch.zeros_like(lost_lengths)
-            len_candidates[:] = torch.LongTensor(lens)
-            len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
-            len_candidates.clamp_(min=g.min_word_length, max=g.max_word_length)
-        # This is inclusive.
-        end_candidates = start_candidates + len_candidates - 1
-
-        # Only keep the viable/valid spans around.
-        viable = (end_candidates < lost_lengths.align_as(end_candidates))
-        start_candidates = start_candidates.expand_as(viable)
-        end_candidates = end_candidates.expand_as(viable)
-        len_candidates = len_candidates.expand_as(viable)
-        batch_indices = get_named_range(batch_size, 'batch').expand_as(viable)
-        with NoName(start_candidates, end_candidates, len_candidates, batch_indices, viable):
-            viable_starts = start_candidates[viable].rename('viable')
-            viable_ends = end_candidates[viable].rename('viable')
-            viable_lengths = len_candidates[viable].rename('viable')
-            viable_batch_indices = batch_indices[viable].rename('viable')
-
-        # Get the word positions to get the corresponding representations.
-        viable_starts_2d = viable_starts.align_to('viable', 'len_w')
-        word_pos_offsets = get_named_range(g.max_word_length, 'len_w').align_as(viable_starts_2d)
-        word_pos = viable_starts_2d + word_pos_offsets
-        word_pos = word_pos.clamp(max=max_length - 1)
-
-        # Get the corresponding representations.
-        viable_batch_indices_2d = viable_batch_indices.expand_as(word_pos)
-        with NoName(viable_batch_indices_2d, word_pos, lost_unit_id_seqs):
-            viable_unit_id_seqs = lost_unit_id_seqs[viable_batch_indices_2d, word_pos]
-            viable_unit_id_seqs.rename_('viable', 'len_w')
-
-        return ViableSpans(viable,
-                           viable_batch_indices,
-                           viable_starts,
-                           viable_ends,
-                           viable_lengths,
-                           viable_unit_id_seqs,
-                           start_candidates,
-                           end_candidates,
-                           len_candidates)
 
     def _get_matches(self, costs: Costs, viable_spans: ViableSpans, vocab_lengths: LT) -> Matches:
         nk = costs.sub.size('vocab')

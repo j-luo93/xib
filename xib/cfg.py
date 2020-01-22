@@ -259,7 +259,7 @@ class FixGotGermOracleSpan(GotDeIpaAlignedReverseGvs):
     input_format: str = 'text'
     postprocess_mode: str = 'none'
     char_per_batch: int = 1000
-    span_candidates: str = 'oracle_full'
+    span_candidates: str = 'oracle_word'
     known_lang: str = 'germ'
     unextracted_prob: float = 0.0001
     reg_hyper: float = 0.0

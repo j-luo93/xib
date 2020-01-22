@@ -251,7 +251,15 @@ class AlignedSentence:
 
     @property
     def lost_ipa_length(self):
+
         return sum([word.lost_token.ipa_length for word in self.words])
+
+    @property
+    def length(self) -> int:
+        if g.input_format == 'ipa':
+            return self.lost_ipa_length
+        else:
+            return self.lost_form_length
 
     def __getitem__(self, idx: int) -> AlignedWord:
         return self.words[idx]

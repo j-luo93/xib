@@ -18,7 +18,7 @@ from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from dev_misc.trainlib.tracker.tracker import Tracker
 from dev_misc.utils import deprecated, pbar
-from xib.aligned_corpus.corpus import UnsegmentedSentence
+from xib.aligned_corpus.corpus import Segment, UnsegmentedSentence
 from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
 from xib.data_loader import (ContinuousIpaBatch, ContinuousTextDataLoader,
                              DataLoaderRegistry)
@@ -379,50 +379,61 @@ class AlignedExtractEvaluator(BaseEvaluator):
             top_matched_seg_str = ', '.join(top_matched_strings)
             um = f'{anno.unmatched_log_prob:.3f}'
             data.append((segmented_content, g_seg_str, p_seg_str, um, top_matched_seg_str))
-        df = pd.DataFrame(data, columns=['segmented_content', 'gold', 'predicted', 'unmatched_log_prob', 'top_matched'])
-        out_path = g.log_dir / 'predictions' / f'aligned.{stage}.tsv'
-        out_path.parent.mkdir(exist_ok=True, parents=True)
-        df.to_csv(out_path, index=None, sep='\t')
+        out_df = pd.DataFrame(data, columns=['segmented_content', 'gold',
+                                             'predicted', 'unmatched_log_prob', 'top_matched'])
+        segment_df = pd.DataFrame({
+            'gold': [anno.gold.segments for anno in annotations],
+            'pred': [anno.pred.segments for anno in annotations]})
+        segment_df = segment_df.reset_index().rename(columns={'index': 'segment_idx'})
+        flat_segment_df = segment_df.explode('gold').explode('pred')
+
+        def safe_bifunc(func):
+
+            def wrapped(item):
+                x, y = item
+                if pd.isnull(x) or pd.isnull(y):
+                    return None
+                return func(x, y)
+
+            return wrapped
 
         # Get P/R/F scores.
-        num_pred = 0
-        num_gold = 0
-        exact_span_match = 0
-        prefix_span_match = 0
-        exact_content_match = 0
-        # These are for segments that do have cognates. Similar to the evaluation setup of the old model.
-        logging.warning('num_positive_gold might be wrong.')
-        num_positive_gold = 0
-        num_positive_pred = 0
-        exact_positive_content_match = 0
-        for anno in annotations:
-            num_pred += len(anno.pred.segments)
-            num_gold += min(len(anno.gold.segments), g.max_num_words)
-            has_cognate = bool(anno.gold.segments)
-            num_positive_gold += has_cognate
-            num_positive_pred += has_cognate
-            for p_seg in anno.pred.segments:
-                for g_seg in anno.gold.segments:
-                    if p_seg.has_same_span(g_seg):
-                        exact_span_match += 1
-                        prefix_span_match += 1
-                    elif p_seg.has_prefix_span(g_seg):
-                        prefix_span_match += 1
-                    if p_seg.has_same_content(g_seg):
-                        if g.use_stem:
-                            if p_seg.has_reasonable_stem_span(g_seg):
-                                exact_content_match += 1
-                        else:
-                            if p_seg.has_prefix_span(g_seg):
-                                exact_content_match += 1
-                        if has_cognate:
-                            exact_positive_content_match += 1
+        flat_segment_df['exact_span_match'] = flat_segment_df[['pred', 'gold']].apply(safe_bifunc(Segment.has_same_span),
+                                                                                      axis=1)
+        flat_segment_df['prefix_span_match'] = flat_segment_df[['pred', 'gold']].apply(safe_bifunc(Segment.has_prefix_span),
+                                                                                       axis=1)
+        flat_segment_df['exact_content_match'] = flat_segment_df[['pred', 'gold']].apply(safe_bifunc(Segment.has_correct_prediction),
+                                                                                         axis=1)
 
+        flat_segment_df = flat_segment_df.fillna(value=False)
+        segment_score_df = flat_segment_df.pivot_table(index='segment_idx',
+                                                       values=['exact_span_match',
+                                                               'prefix_span_match', 'exact_content_match'],
+                                                       aggfunc=np.max)
+        segment_df = pd.merge(segment_df, segment_score_df, left_on='segment_idx', right_index=True, how='left')
+        has_cognate = segment_df['gold'].apply(bool)
+        out_df['exact_positive_content_match'] = segment_df['exact_content_match'] & has_cognate
+        out_df['exact_content_match'] = segment_df['exact_content_match']
+        out_df['exact_span_match'] = segment_df['exact_span_match']
+        out_df['prefix_span_match'] = segment_df['prefix_span_match']
+        out_path = g.log_dir / 'predictions' / f'aligned.{stage}.tsv'
+        out_path.parent.mkdir(exist_ok=True, parents=True)
+        out_df.to_csv(out_path, index=None, sep='\t')
+
+        logging.warning('num_positive_gold might be wrong.')
+
+        num_pred = segment_df['pred'].apply(len).sum()
+        num_gold = segment_df['gold'].apply(len).clip(upper=g.max_num_words).sum()
+        num_positive = has_cognate.sum()
+        exact_span_match = out_df['exact_span_match'].sum()
+        prefix_span_match = out_df['prefix_span_match'].sum()
+        exact_content_match = out_df['exact_content_match'].sum()
+        exact_positive_content_match = out_df['exact_positive_content_match'].sum()
         exact_span_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_span_match, 'exact_span')
         prefix_span_prf_scores = _get_prf_metrics(num_pred, num_gold, prefix_span_match, 'prefix_span')
         exact_content_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_content_match, 'exact_content')
         exact_positive_content_prf_scores = _get_prf_metrics(
-            num_positive_pred, num_positive_gold, exact_positive_content_match, 'exact_positive_content')
+            num_positive, num_positive, exact_positive_content_match, 'exact_positive_content')
         return analyzed_metrics + exact_span_prf_scores + prefix_span_prf_scores + exact_content_prf_scores + exact_positive_content_prf_scores
 
     def _get_annotations(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:

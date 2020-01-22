@@ -175,6 +175,15 @@ class Segment:
         self._check_segment_type(other)
         return bool(self.aligned_contents & other.aligned_contents)
 
+    def has_correct_prediction(self, gold: Segment) -> bool:
+        self._check_segment_type(gold)
+        if self.has_same_content(gold):
+            if g.use_stem:
+                return self.has_reasonable_stem_span(gold)
+            else:
+                return self.has_prefix_span(gold)
+        return False
+
     def has_prefix_span(self, other: Segment) -> bool:
         self._check_segment_type(other)
         return self.start == other.start and self.end <= other.end

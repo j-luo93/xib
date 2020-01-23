@@ -6,7 +6,7 @@ from typing import Dict, Tuple, Union
 
 import torch
 
-from dev_misc import FT, g, get_tensor
+from dev_misc import FT, add_argument, g, get_tensor
 from dev_misc.devlib import get_length_mask
 from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metric, Metrics
@@ -185,17 +185,22 @@ class DecipherAnalyzer:
 
 class ExtractAnalyzer:
 
+    add_argument('mean_mode', default='segment', choices=['segment', 'char'])
+
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
+        loss_name = 'best_ll' if g.take_best_span else 'marginal'
         if g.take_best_span:
             best_span_ll = model_ret.best_span_ll.align_to('batch')
-            loss_metric = Metric('best_ll', best_span_ll.sum(), batch.batch_size)
+            loss_value = best_span_ll.sum()
         else:
-            loss_metric = Metric('marginal', model_ret.marginal.sum(), batch.batch_size)
+            loss_value = model_ret.marginal.sum()
+        loss_weight = batch.batch_size if g.mean_mode == 'segment' else batch.lengths.sum()
+        loss_metric = Metric(loss_name, loss_value, loss_weight)
         metrics += loss_metric
 
         almt = model_ret.alignment
         if almt is not None:
             reg = ((almt.sum(dim=0) - 1.0) ** 2).sum()
-            metrics += Metric('reg', reg, batch.batch_size)
+            metrics += Metric('reg', reg, loss_weight)
         return metrics

@@ -74,6 +74,8 @@ class ExtractModel(nn.Module):
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
+    add_argument('context_agg_mode', default='log_interpolation', dtype=str,
+                 choices=['log_interpolation', 'linear_interpolation', 'log_add'])
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
     add_argument('use_empty_symbol', dtype=bool, default=False, msg='Flag to use empty symbol')
     add_argument('span_candidates', dtype=str,
@@ -181,14 +183,25 @@ class ExtractModel(nn.Module):
         # Get contextualized log probs.
         sub_ctx_logits = known_ctx_repr @ lost_unit_emb.t()
         sub_ctx_log_probs = sub_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+
+        def interpolate(ctx, plain):
+            if g.context_agg_mode == 'log_interpolation':
+                return g.context_weight * ctx + (1.0 - g.context_weight) * plain
+            elif g.context_agg_mode == 'linear_interpolation':
+                z_ctx = math.log(g.context_weight + 1e-8)
+                z_plain = math.log(1.0 - g.context_weight + 1e-8)
+                return torch.stack([z_ctx + ctx, z_plain + plain], new_name='stacked').logsumexp(dim='stacked')
+            else:
+                return ctx + plain
+
         # Get interpolated log probs and costs.
-        sub_weighted_log_probs = g.context_weight * sub_ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
+        sub_weighted_log_probs = interpolate(sub_ctx_log_probs, global_log_probs)
         sub = -sub_weighted_log_probs
 
         # Get secondary costs for insertions.
         ins_ctx_logits = known_ins_ctx_repr @ lost_unit_emb.t()
         ins_ctx_log_probs = ins_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
-        ins_weighted_log_probs = g.context_weight * ins_ctx_log_probs + (1.0 - g.context_weight) * global_log_probs
+        ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
         ins = -ins_weighted_log_probs + self.ins_del_cost
 
         costs = Costs(sub, ins)

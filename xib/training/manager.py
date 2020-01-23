@@ -257,7 +257,12 @@ class ExtractManager(BaseManager):
 
         out_path = g.log_dir / f'saved.init'
         self.trainer.save_to(out_path)
+        # # HACK(j_luo)
+        # self.trainer.reset(reset_params=True)
         while self.trainer.threshold > g.min_threshold:
+            if g.update_p_weights:
+                # HACK(j_luo)
+                self.trainer.update_p_weights()
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
 

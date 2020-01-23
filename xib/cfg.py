@@ -302,6 +302,24 @@ class FixGotNhdWithStemSmall(FixGotGermLemmaOnly):
 
 
 @reg
+class FixGotGermWithStemSmall(FixGotNhdWithStemSmall):
+    known_lang: str = 'germ'
+    char_per_batch: int = 320
+    context_agg_mode: str = 'log_interpolation'
+    max_segment_length: int = 40
+    message: str = 'ml40'
+    min_word_length: int = 4
+    freq_hack: bool = True  # FIXME(j_luo) This should be removed.
+    one2two: str = True
+    init_ins_del_cost: float = 0.0
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.small.got-germ.tsv'
+        self.vocab_path: str = './data/wulfila/processed/germ.small.matched.stems'
+
+
+@reg
 class FixGotAEOracleSpan(FixGotGermOracleSpan):
     known_lang: str = 'ae'
 

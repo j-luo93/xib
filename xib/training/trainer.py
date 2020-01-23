@@ -170,6 +170,7 @@ class ExtractTrainer(BaseTrainer):
     add_argument('reg_hyper', default=1.0, dtype=float, msg='Hyperparameter for alignment regularization.')
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('update_p_weights', default=False, dtype=bool, msg='Flag to save alignment every step.')
+    add_argument('p_weight_inc', default=50, dtype=int)
     add_argument('take_best_span', default=False, dtype=bool,
                  msg='Flag to take the best ll instead of the marginal ll.')
 
@@ -188,6 +189,7 @@ class ExtractTrainer(BaseTrainer):
     def update_p_weights(self):
         sentences, spans = self.evaluator.get_best_spans(self.stage, self._cnt)
         self.model.span_proposer.update(sentences, spans)
+        self._cnt += g.p_weight_inc
 
     def save_alignment(self):
         if g.input_format == 'text':
@@ -229,9 +231,12 @@ class ExtractTrainer(BaseTrainer):
         self.tracker.add_trackable('total_step', total=g.num_steps)
         self.tracker.add_max_trackable('best_f1')
 
-    def reset(self):
+    def reset(self, reset_params: bool = False):
         """Reset the tracker. But keep the best_f1 since it's related to evaluation."""
         self.tracker.reset('total_step')
+        if reset_params:
+            logging.imp('Init params')
+            self.model.unit_aligner.weight.data.fill_(0.0)
 
     def load(self, path: Path):
         saved = torch.load(path)
@@ -283,6 +288,7 @@ class ExtractTrainer(BaseTrainer):
 
         grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)
         self.optimizer.step()
+        # FIXME(j_luo) avg for grad_norm might be wrong.
         accum_metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
 
         return accum_metrics

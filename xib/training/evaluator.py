@@ -364,7 +364,10 @@ class AlignedExtractEvaluator(BaseEvaluator):
         spans = list()
         for idx in best_idx:
             anno = annotations[idx]
-            seg = anno.pred.segments[0]
+            try:
+                seg = anno.pred.segments[0]
+            except IndexError:
+                continue
             sentences.append(anno.sentence)
             spans.append((seg.start, seg.end))
         return sentences, spans

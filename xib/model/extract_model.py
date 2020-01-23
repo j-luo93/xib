@@ -337,7 +337,9 @@ class ExtractModel(nn.Module):
         flat_viable = nh.flatten(viable_spans.viable.expand_as(matches.ll), ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable_ll = (~flat_viable) * (-9999.9) + flat_ll
         # Add probs for unextracted characters.
-        unextracted = batch.lengths.align_as(viable_spans.len_candidates) - viable_spans.len_candidates
+        max_lengths_to_consider = batch.lengths.clamp(max=g.max_word_length)
+        # Truncate unextracted segments.
+        unextracted = max_lengths_to_consider.align_as(viable_spans.len_candidates) - viable_spans.len_candidates
         unextracted = torch.where(viable_spans.viable, unextracted, torch.zeros_like(unextracted))
         unextracted = unextracted.expand_as(matches.ll)
         flat_unextracted = nh.flatten(unextracted, ['len_s', 'len_e', 'vocab'], 'cand')

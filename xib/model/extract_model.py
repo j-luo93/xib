@@ -75,8 +75,10 @@ class ExtractModel(nn.Module):
     add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
     add_argument('context_agg_mode', default='log_interpolation', dtype=str,
-                 choices=['log_interpolation', 'linear_interpolation', 'log_add'])
+                 choices=['log_interpolation', 'linear_interpolation', 'log_add', 'dilute'])
+    add_argument('dilute_hyper', dtype=float, default=0.5)
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
+    add_argument('truncate_unextracted', dtype=bool, default=False, msg='Flag to enter debug mode.')
     add_argument('use_empty_symbol', dtype=bool, default=False, msg='Flag to use empty symbol')
     add_argument('span_candidates', dtype=str,
                  choices=['all', 'oracle_word', 'oracle_stem'], default='all', msg='How to generate candidates for spans.')
@@ -191,8 +193,10 @@ class ExtractModel(nn.Module):
                 z_ctx = math.log(g.context_weight + 1e-8)
                 z_plain = math.log(1.0 - g.context_weight + 1e-8)
                 return torch.stack([z_ctx + ctx, z_plain + plain], new_name='stacked').logsumexp(dim='stacked')
-            else:
+            elif g.context_agg_mode == 'log_add':
                 return ctx + plain
+            else:
+                return (ctx + plain) * g.dilute_hyper
 
         # Get interpolated log probs and costs.
         sub_weighted_log_probs = interpolate(sub_ctx_log_probs, global_log_probs)
@@ -337,9 +341,12 @@ class ExtractModel(nn.Module):
         flat_viable = nh.flatten(viable_spans.viable.expand_as(matches.ll), ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable_ll = (~flat_viable) * (-9999.9) + flat_ll
         # Add probs for unextracted characters.
-        max_lengths_to_consider = batch.lengths.clamp(max=g.max_word_length)
-        # Truncate unextracted segments.
-        unextracted = max_lengths_to_consider.align_as(viable_spans.len_candidates) - viable_spans.len_candidates
+        if g.truncate_unextracted:
+            # Truncate unextracted segments.
+            max_lengths_to_consider = batch.lengths.clamp(max=g.max_word_length)
+            unextracted = max_lengths_to_consider.align_as(viable_spans.len_candidates) - viable_spans.len_candidates
+        else:
+            unextracted = batch.lengths.align_as(viable_spans.len_candidates) - viable_spans.len_candidates
         unextracted = torch.where(viable_spans.viable, unextracted, torch.zeros_like(unextracted))
         unextracted = unextracted.expand_as(matches.ll)
         flat_unextracted = nh.flatten(unextracted, ['len_s', 'len_e', 'vocab'], 'cand')

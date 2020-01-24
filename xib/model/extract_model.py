@@ -89,6 +89,7 @@ class ExtractModel(nn.Module):
     add_argument('em_training', dtype=bool, default=False)
     add_argument('use_ctc', dtype=bool, default=False)
     add_argument('best_ctc', dtype=bool, default=False)
+    add_argument('one_span_hack', dtype=bool, default=False)
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
@@ -380,6 +381,9 @@ class ExtractModel(nn.Module):
             viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
             span_log_probs = viable_ll.logsumexp(dim='vocab')
             marginal = self._run_ctc(batch.lengths, span_log_probs)
+            # old_marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
+            # old_marginal = old_marginal.logsumexp(dim='cand')
+            # print(marginal.sum().item(), old_marginal.sum().item())
         elif g.em_training:
             weighted_total_ll = total_ll.logsumexp(dim='vocab') * viable_spans.p_weights.exp()
             marginal = weighted_total_ll.sum(dim=['len_s', 'len_e']) / viable_spans.viable.sum(dim=['len_s', 'len_e'])
@@ -420,7 +424,12 @@ class ExtractModel(nn.Module):
         batch_size = span_log_probs.size('batch')
 
         def get_init():
-            ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(-9999.9)
+            # ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(-9999.9)
+            # HACK(j_luo)
+            if g.one_span_hack:
+                ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 3).fill_(-9999.9)
+            else:
+                ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(-9999.9)
             ret.rename_('batch', 'tag')
             return ret
 
@@ -428,18 +437,37 @@ class ExtractModel(nn.Module):
         start[:, 0] = 0.0
         ctc[0] = start
 
+        # HACK(j_luo)
+        if g.one_span_hack:
+            E_mask = get_init()
+            E_mask[:, 0] = 0.0
+            O_mask = get_init()
+            O_mask[:, 0] = 0.0
+            O2_mask = get_init()
+            O2_mask[:, 1:] = 0.0
+
         for l in range(1, max_length + 1):
             transitions = list()
-            # Case 'O'.
-            transitions.append(ctc[l - 1] + math.log(g.unextracted_prob))
+            if g.one_span_hack:
+                # Case 'O'.
+                transitions.append(ctc[l - 1] + O_mask + math.log(g.unextracted_prob))
+                # Case 'O2'.
+                transitions.append(ctc[l - 1] + O2_mask + math.log(g.unextracted_prob))
+            else:
+                transitions.append(ctc[l - 1] + math.log(g.unextracted_prob))
             # Case 'E's.
             for word_len in range(g.min_word_length, g.max_word_length + 1):
                 prev_l = l - word_len
                 try:
                     prev_v = ctc[prev_l]
-                    start_idx = l - 1
+                    start_idx = prev_l
                     end_idx = word_len - g.min_word_length
-                    transitions.append((prev_v + span_log_probs[:, start_idx, end_idx].align_as(prev_v)))
+                    if g.one_span_hack:
+                        transitions.append(
+                            (prev_v + E_mask + span_log_probs[:, start_idx, end_idx].align_as(prev_v)))
+                    else:
+                        transitions.append(
+                            (prev_v + span_log_probs[:, start_idx, end_idx].align_as(prev_v)))
                 except (KeyError, IndexError):
                     transitions.append(get_init())
             # Sum up all alignments.
@@ -457,35 +485,3 @@ class ExtractModel(nn.Module):
         else:
             final_score = final_nodes.logsumexp(dim='tag')
         return final_score
-
-        # O = 'O'
-        # Es = {i: f'E{i}' for i in range(g.min_word_length, g.max_word_length + 1)}
-        # all_tags = [O] + list(Es.values())
-        # # Initialize dp values.
-        # ctc = defaultdict(list)
-        # ctc[(0, O)] = [get_zeros(span_log_probs.size('batch')).rename('batch')]
-        # # Push forward instead of backward.
-        # for l in range(0, max_length + 1):
-        #     for tag in all_tags:
-        #         key = (l, tag)
-        #         if key not in ctc:
-        #             continue
-
-        #         this_dp = ctc[key] = torch.stack(ctc[key], new_name='stacked').logsumexp(dim='stacked')
-        #         # Case 'E'.
-        #         for word_len in range(g.min_word_length, g.max_word_length + 1):
-        #             if l + word_len - 1 > max_length:
-        #                 continue
-
-        #             forward_key = (l + word_len - 1, Es[word_len])
-        #             start_idx = l - 1
-        #             end_idx = word_len - g.min_word_length
-        #             ctc[forward_key].append(this_dp + span_log_probs[:, start_idx, end_idx])
-        #         # Case 'O'.
-        #         forward_key = (l + 1, 'O')
-        #         if l + 1 <= max_length:
-        #             ctc[forward_key].append(this_dp + math.log(g.unextracted_prob))
-        # # Final nodes.
-        # final_nodes = [ctc[(max_length, tag)] for tag in all_tags if (max_length, tag) in ctc]
-        # final_score = torch.stack(final_nodes, new_name='stacked').logsumexp(dim='stacked')
-        # return final_score

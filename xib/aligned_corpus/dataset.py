@@ -68,6 +68,7 @@ class AlignedDataset(Dataset):
     def __init__(self, corpus: AlignedCorpus):
         self.corpus = corpus
         self.data = list()
+        # HACK(j_luo)
         if g.freq_hack:
             _data_str = set()
         for sentence in self.corpus.sentences:

@@ -1,5 +1,6 @@
 import logging
 import math
+from collections import defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
@@ -86,6 +87,8 @@ class ExtractModel(nn.Module):
     add_argument('ins_del_prior', dtype=float, default=0.1, msg='Prior value for insertion/deletion operations.')
     add_argument('include_unmatched', dtype=bool, default=True, msg='Flag to include unmatched scores in the loss.')
     add_argument('em_training', dtype=bool, default=False)
+    add_argument('use_ctc', dtype=bool, default=False)
+    add_argument('best_ctc', dtype=bool, default=False)
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
@@ -373,7 +376,11 @@ class ExtractModel(nn.Module):
         if g.include_unmatched:
             best_span_ll = torch.max(best_span_ll, unmatched_ll)
         # Get marginal.
-        if g.em_training:
+        if g.use_ctc:
+            viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
+            span_log_probs = viable_ll.logsumexp(dim='vocab')
+            marginal = self._run_ctc(batch.lengths, span_log_probs)
+        elif g.em_training:
             weighted_total_ll = total_ll.logsumexp(dim='vocab') * viable_spans.p_weights.exp()
             marginal = weighted_total_ll.sum(dim=['len_s', 'len_e']) / viable_spans.viable.sum(dim=['len_s', 'len_e'])
             # if g.include_unmatched:
@@ -396,3 +403,89 @@ class ExtractModel(nn.Module):
                                        extracted,
                                        alignment)
         return model_ret
+
+    def _run_ctc(self, lengths: LT, span_log_probs: FT) -> FT:
+        r"""To speed up DP, everything is packed into tensors.
+
+        tag \ case
+        -------------------------------------------------------------
+        O           (l-1, O)    (l-1, E_m)      ...     (l-1, E_M)
+        E_m         (l-m, O)  (l-m, E_m)    ...     (l-m, E_M)
+        E_m+1       (l-m-1, O)    (l-m-1, E_m)      ...     (l-m-1, E_M)
+        ...
+        E_M         (l-M, O)  (l-M, E_m)    ...     (l-M, E_M)
+        """
+        ctc = dict()
+        max_length = lengths.max().item()
+        batch_size = span_log_probs.size('batch')
+
+        def get_init():
+            ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(-9999.9)
+            ret.rename_('batch', 'tag')
+            return ret
+
+        start = get_init()
+        start[:, 0] = 0.0
+        ctc[0] = start
+
+        for l in range(1, max_length + 1):
+            transitions = list()
+            # Case 'O'.
+            transitions.append(ctc[l - 1] + math.log(g.unextracted_prob))
+            # Case 'E's.
+            for word_len in range(g.min_word_length, g.max_word_length + 1):
+                prev_l = l - word_len
+                try:
+                    prev_v = ctc[prev_l]
+                    start_idx = l - 1
+                    end_idx = word_len - g.min_word_length
+                    transitions.append((prev_v + span_log_probs[:, start_idx, end_idx].align_as(prev_v)))
+                except (KeyError, IndexError):
+                    transitions.append(get_init())
+            # Sum up all alignments.
+            if g.best_ctc:
+                ctc[l] = torch.stack(transitions, new_name='new_tag').max(dim='tag')[0].rename(new_tag='tag')
+            else:
+                ctc[l] = torch.stack(transitions, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+
+        ctc = torch.stack([ctc[l] for l in range(max_length + 1)], new_name='length')
+        with NoName(ctc, lengths):
+            final_nodes = ctc[range(batch_size), :, lengths]
+            final_nodes.rename_('batch', 'tag')
+        if g.best_ctc:
+            final_score = final_nodes.max(dim='tag')[0]
+        else:
+            final_score = final_nodes.logsumexp(dim='tag')
+        return final_score
+
+        # O = 'O'
+        # Es = {i: f'E{i}' for i in range(g.min_word_length, g.max_word_length + 1)}
+        # all_tags = [O] + list(Es.values())
+        # # Initialize dp values.
+        # ctc = defaultdict(list)
+        # ctc[(0, O)] = [get_zeros(span_log_probs.size('batch')).rename('batch')]
+        # # Push forward instead of backward.
+        # for l in range(0, max_length + 1):
+        #     for tag in all_tags:
+        #         key = (l, tag)
+        #         if key not in ctc:
+        #             continue
+
+        #         this_dp = ctc[key] = torch.stack(ctc[key], new_name='stacked').logsumexp(dim='stacked')
+        #         # Case 'E'.
+        #         for word_len in range(g.min_word_length, g.max_word_length + 1):
+        #             if l + word_len - 1 > max_length:
+        #                 continue
+
+        #             forward_key = (l + word_len - 1, Es[word_len])
+        #             start_idx = l - 1
+        #             end_idx = word_len - g.min_word_length
+        #             ctc[forward_key].append(this_dp + span_log_probs[:, start_idx, end_idx])
+        #         # Case 'O'.
+        #         forward_key = (l + 1, 'O')
+        #         if l + 1 <= max_length:
+        #             ctc[forward_key].append(this_dp + math.log(g.unextracted_prob))
+        # # Final nodes.
+        # final_nodes = [ctc[(max_length, tag)] for tag in all_tags if (max_length, tag) in ctc]
+        # final_score = torch.stack(final_nodes, new_name='stacked').logsumexp(dim='stacked')
+        # return final_score

@@ -73,7 +73,6 @@ class ExtractModel(nn.Module):
     add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
-    add_argument('unextracted_prob', default=0.01, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
     add_argument('context_agg_mode', default='log_interpolation', dtype=str,
                  choices=['log_interpolation', 'linear_interpolation', 'log_add', 'dilute'])
@@ -150,7 +149,7 @@ class ExtractModel(nn.Module):
                                     vocab.vocab_length)
 
         # Get extracted object.
-        extracted = self._get_extracted(matches, viable_spans)
+        extracted = self._get_extracted(matches, viable_spans, len(vocab))
 
         # Prepare return.
         model_ret = self._prepare_return(batch, extracted, alignment)
@@ -277,7 +276,7 @@ class ExtractModel(nn.Module):
         matches = Matches(-nll, f)
         return matches
 
-    def _get_extracted(self, matches: Matches, viable_spans: ViableSpans) -> Extracted:
+    def _get_extracted(self, matches: Matches, viable_spans: ViableSpans, vocab_size: int) -> Extracted:
         viable = viable_spans.viable
         batch_size = viable.size('batch')
         len_s = viable.size('len_s')
@@ -294,11 +293,13 @@ class ExtractModel(nn.Module):
             all_ll = get_zeros(batch_size, len_s, len_e, vs)
             all_ll.fill_(-9999.9)
             all_ll[v_bi, v_lsi, v_lei] = matches.ll.t()
+            all_ll.rename_('batch', 'len_s', 'len_e', 'vocab')
+            # NOTE(j_luo) Remember to add the prior for vocab.
+            matches.ll = all_ll - math.log(vocab_size)
             # NOTE(j_luo) `p_weights` is now in log scale.
             all_p_weights = get_zeros(batch_size, len_s, len_e)
             all_p_weights.fill_(-9999.9)
             all_p_weights[v_bi, v_lsi, v_lei] = (viable_spans.p_weights + 1e-8).log()
-            matches.ll = all_ll.rename('batch', 'len_s', 'len_e', 'vocab')
             viable_spans.p_weights = all_p_weights.rename('batch', 'len_s', 'len_e')
 
         extracted = Extracted(batch_size,
@@ -337,12 +338,15 @@ class ExtractModel(nn.Module):
             new_s, _ = all_s.min(dim=-1)
             fs[(kl, ll)] = new_s
 
+    @property
+    def lp_per_unmatched(self) -> float:
+        return math.log(1.0 / self.unit_aligner.num_embeddings)
+
     def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, alignment: FT) -> ExtractModelReturn:
         # Get the best score and span.
         matches = extracted.matches
         len_e = matches.ll.size('len_e')
         vs = len(batch.known_vocab)
-        lp_per_unmatched = math.log(g.unextracted_prob)
         # NOTE(j_luo) Some segments don't have any viable spans.
         nh = NameHelper()
         viable_spans = extracted.viable_spans
@@ -364,7 +368,7 @@ class ExtractModel(nn.Module):
         unextracted = torch.where(viable_spans.viable, unextracted, torch.zeros_like(unextracted))
         unextracted = unextracted.expand_as(matches.ll)
         flat_unextracted = nh.flatten(unextracted, ['len_s', 'len_e', 'vocab'], 'cand')
-        flat_unextracted_ll = flat_unextracted * lp_per_unmatched
+        flat_unextracted_ll = flat_unextracted * self.lp_per_unmatched
         flat_total_ll = flat_viable_ll + flat_unextracted_ll
         # Get the top candiates based on total scores.
         k = min(g.top_k_predictions, flat_total_ll.size('cand'))
@@ -379,7 +383,7 @@ class ExtractModel(nn.Module):
             end = viable_spans.end_candidates[batch_idx, start_idx, end_idx]
         top_matched_vocab = top_span_ind % vs
         # Get unmatched scores -- no word is matched for the entire inscription.
-        unmatched_ll = batch.lengths * lp_per_unmatched
+        unmatched_ll = batch.lengths * self.lp_per_unmatched
         total_ll = nh.unflatten(flat_total_ll, 'cand', ['len_s', 'len_e', 'vocab'])
         total_span_ll = nh.flatten(total_ll, ['len_s', 'len_e'], 'span')
         best_span_ll, _ = total_span_ll.max(dim='span')
@@ -460,11 +464,11 @@ class ExtractModel(nn.Module):
             transitions = list()
             if g.one_span_hack:
                 # Case 'O'.
-                transitions.append(ctc[l - 1] + O_mask + math.log(g.unextracted_prob))
+                transitions.append(ctc[l - 1] + O_mask + self.lp_per_unmatched)
                 # Case 'O2'.
-                transitions.append(ctc[l - 1] + O2_mask + math.log(g.unextracted_prob))
+                transitions.append(ctc[l - 1] + O2_mask + self.lp_per_unmatched)
             else:
-                transitions.append(ctc[l - 1] + math.log(g.unextracted_prob))
+                transitions.append(ctc[l - 1] + self.lp_per_unmatched)
             # Case 'E's.
             for word_len in range(g.min_word_length, g.max_word_length + 1):
                 prev_l = l - word_len

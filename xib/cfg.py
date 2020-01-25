@@ -205,7 +205,6 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     num_steps: int = 1000
     reg_hyper: float = 1.0
     learning_rate: float = 0.1
-    unextracted: float = 0.5
 
 
 @reg
@@ -261,7 +260,6 @@ class FixGotGermOracleSpan(GotDeIpaAlignedReverseGvs):
     char_per_batch: int = 1000
     span_candidates: str = 'oracle_word'
     known_lang: str = 'germ'
-    unextracted_prob: float = 0.0001
     reg_hyper: float = 0.0
     context_weight: float = 0.5
     learning_rate: float = 0.05
@@ -278,7 +276,6 @@ class FixGotGermLemmaOnly(FixGotGermOracleSpan):
     span_candidates: str = 'all'
     char_per_batch: int = 400
     reg_hyper: float = 1.0
-    unextracted_prob: float = 0.05
 
     def __post_init__(self):
         super().__post_init__()
@@ -291,7 +288,6 @@ class FixGotNhdWithStemSmall(FixGotGermLemmaOnly):
     span_candidates: str = 'all'
     char_per_batch: int = 400
     reg_hyper: float = 1.0
-    unextracted_prob: float = 0.05
     use_stem: bool = True
     min_word_length: int = 3
 

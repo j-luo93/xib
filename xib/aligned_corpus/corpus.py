@@ -170,7 +170,7 @@ class Segment:
     def has_reasonable_stem_span(self, other: Segment) -> bool:
         self._check_segment_type(other)
         assert other.full_form_end is not None and other.full_form_start is not None
-        # print(repr(self), repr(other))
+        print(repr(self), repr(other))
         return self.start == other.full_form_start and self.end <= other.full_form_end
 
     def has_same_content(self, other: Segment) -> bool:

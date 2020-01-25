@@ -81,6 +81,9 @@ class ExtractModel(nn.Module):
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
     add_argument('truncate_unextracted', dtype=bool, default=False, msg='Flag to enter debug mode.')
     add_argument('use_empty_symbol', dtype=bool, default=False, msg='Flag to use empty symbol')
+    add_argument('use_base_embedding', dtype=bool, default=False,
+                 msg='Flag to use base embeddings to compute character embeddings.')
+    add_argument('base_embedding_dim', dtype=int, default=250, msg='Dimensionality for base embeddings.')
     add_argument('span_candidates', dtype=str,
                  choices=['all', 'oracle_word', 'oracle_stem'], default='all', msg='How to generate candidates for spans.')
     add_argument('one2two', dtype=bool, default=False, msg='Use conv on both sides.')
@@ -93,17 +96,22 @@ class ExtractModel(nn.Module):
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
+        self.dim = g.base_embedding_dim if g.use_base_embedding else g.dim
         self.unit_aligner = nn.Embedding(lost_size, known_size)
         logging.imp('Unit aligner initialized to 0.')
         self.unit_aligner.weight.data.fill_(0.0)
-        self.conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
-        self.ins_conv = nn.Conv1d(g.dim, g.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
+        self.conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
+        self.ins_conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
         opt2sp_cls = {'all': AllSpanProposer,
                       'oracle_word': OracleWordSpanProposer,
                       'oracle_stem': OracleStemSpanProposer}
         sp_cls = opt2sp_cls[g.span_candidates]
         self.span_proposer = sp_cls()
+        if g.use_base_embedding:
+            self.base_embeddings = nn.Embedding(60, g.base_embedding_dim)
+            logging.imp('Base embeddigns initialized uniformly.')
+            nn.init.uniform_(self.base_embeddings.weight, -0.05, 0.05)
 
     @global_property
     def ins_del_cost(self):
@@ -154,6 +162,8 @@ class ExtractModel(nn.Module):
         # Get unit embeddings for each known unit.
         with NoName(*vocab.unit_dense_feat_matrix.values()):
             known_unit_emb = torch.cat([vocab.unit_dense_feat_matrix[cat] for cat in self.effective_categories], dim=-1)
+            if g.use_base_embedding:
+                known_unit_emb = known_unit_emb @ self.base_embeddings.weight
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
 
         # Get known embedding sequences for the entire vocabulary.

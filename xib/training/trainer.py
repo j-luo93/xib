@@ -187,6 +187,7 @@ class ExtractTrainer(BaseTrainer):
         self._cnt = 200
 
     def update_p_weights(self):
+
         sentences, spans = self.evaluator.get_best_spans(self.stage, self._cnt)
         self.model.span_proposer.update(sentences, spans)
         self._cnt += g.p_weight_inc

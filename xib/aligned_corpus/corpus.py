@@ -170,6 +170,7 @@ class Segment:
     def has_reasonable_stem_span(self, other: Segment) -> bool:
         self._check_segment_type(other)
         assert other.full_form_end is not None and other.full_form_start is not None
+        # print(repr(self), repr(other))
         return self.start == other.full_form_start and self.end <= other.full_form_end
 
     def has_same_content(self, other: Segment) -> bool:
@@ -294,7 +295,7 @@ class AlignedSentence:
                 if aligned_contents:
                     if g.use_stem:
                         for stem in word.lost_stems:
-                            yield offset + stem.start, offset + stem.end, aligned_contents, offset, offset + full_length
+                            yield offset + stem.start, offset + stem.end, aligned_contents, offset, offset + full_length - 1
                     else:
                         yield offset, offset + full_length - 1, aligned_contents, None, None
                 offset += full_length

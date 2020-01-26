@@ -316,6 +316,12 @@ class FixGotGermWithStemSmall(FixGotNhdWithStemSmall):
 
 
 @reg
+class FixGotGermWithStemSmallCtcEmbedding(FixGotGermWithStemSmall):
+    use_ctc: bool = True
+    use_base_embedding: bool = True
+
+
+@reg
 class FixGotAEOracleSpan(FixGotGermOracleSpan):
     known_lang: str = 'ae'
 

@@ -107,10 +107,17 @@ class ExtractModel(nn.Module):
     add_argument('use_ctc', dtype=bool, default=False)
     add_argument('best_ctc', dtype=bool, default=False)
     add_argument('one_span_hack', dtype=bool, default=False)
+    add_argument('dense_embedding', dtype=bool, default=False)
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
-        self.dim = g.base_embedding_dim if g.use_base_embedding else g.dim
+        if g.use_base_embedding:
+            if g.dense_embedding:
+                self.dim = g.dim * 7
+            else:
+                self.dim = g.base_embedding_dim
+        else:
+            self.dim = g.dim
         self.unit_aligner = nn.Embedding(lost_size, known_size)
         logging.imp('Unit aligner initialized to 0.')
         self.unit_aligner.weight.data.fill_(0.0)
@@ -123,9 +130,12 @@ class ExtractModel(nn.Module):
         sp_cls = opt2sp_cls[g.span_candidates]
         self.span_proposer = sp_cls()
         if g.use_base_embedding:
-            self.base_embeddings = nn.Embedding(60, g.base_embedding_dim)
-            logging.imp('Base embeddigns initialized uniformly.')
-            nn.init.uniform_(self.base_embeddings.weight, -0.05, 0.05)
+            if g.dense_embedding:
+                self.base_embeddings = DenseFeatEmbedding('feat_emb', 'feat_group', 'char_emb', dim=g.dim)
+            else:
+                self.base_embeddings = nn.Embedding(60, g.base_embedding_dim)
+                logging.imp('Base embeddigns initialized uniformly.')
+                nn.init.uniform_(self.base_embeddings.weight, -0.05, 0.05)
 
     @global_property
     def ins_del_cost(self):
@@ -174,10 +184,18 @@ class ExtractModel(nn.Module):
     def _get_repr(self, batch: AlignedBatch) -> Tuple[FT, FT, FT]:
         vocab = batch.known_vocab
         # Get unit embeddings for each known unit.
-        with NoName(*vocab.unit_dense_feat_matrix.values()):
-            known_unit_emb = torch.cat([vocab.unit_dense_feat_matrix[cat] for cat in self.effective_categories], dim=-1)
-            if g.use_base_embedding:
-                known_unit_emb = known_unit_emb @ self.base_embeddings.weight
+        if g.dense_embedding:
+            with Rename(*vocab.unit_dense_feat_matrix.values(), unit='batch'):
+                known_unit_emb = self.base_embeddings(vocab.unit_dense_feat_matrix)
+            with NoName(known_unit_emb):
+                known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.log(7)
+        else:
+            with NoName(*vocab.unit_dense_feat_matrix.values()):
+                known_unit_emb = torch.cat([vocab.unit_dense_feat_matrix[cat]
+                                            for cat in self.effective_categories], dim=-1)
+                if g.use_base_embedding:
+                    known_unit_emb = known_unit_emb @ self.base_embeddings.weight
+                    known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.log(7)
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
 
         # Get known embedding sequences for the entire vocabulary.

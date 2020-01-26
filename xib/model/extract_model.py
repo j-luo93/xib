@@ -184,9 +184,10 @@ class ExtractModel(nn.Module):
     def _get_repr(self, batch: AlignedBatch) -> Tuple[FT, FT, FT]:
         vocab = batch.known_vocab
         # Get unit embeddings for each known unit.
-        if g.dense_embedding:
+        if g.dense_embedding and g.use_base_embedding:
             with Rename(*vocab.unit_dense_feat_matrix.values(), unit='batch'):
                 known_unit_emb = self.base_embeddings(vocab.unit_dense_feat_matrix)
+            known_unit_emb = self.dropout(known_unit_emb)
             with NoName(known_unit_emb):
                 known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.log(7)
         else:
@@ -195,6 +196,7 @@ class ExtractModel(nn.Module):
                                             for cat in self.effective_categories], dim=-1)
                 if g.use_base_embedding:
                     known_unit_emb = known_unit_emb @ self.base_embeddings.weight
+                    known_unit_emb = self.dropout(known_unit_emb)
                     known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.log(7)
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
 

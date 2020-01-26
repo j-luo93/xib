@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,7 @@ import torch
 
 from dev_misc import add_argument, g
 from dev_misc.arglib import g
-from dev_misc.devlib import get_range
+from dev_misc.devlib import get_range, get_tensor
 from dev_misc.devlib.named_tensor import NoName, get_named_range
 from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
@@ -21,6 +21,7 @@ from dev_misc.utils import deprecated, pbar
 from xib.aligned_corpus.corpus import (AlignedSentence, Segment,
                                        UnsegmentedSentence)
 from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
+from xib.aligned_corpus.vocabulary import Vocabulary
 from xib.data_loader import (ContinuousIpaBatch, ContinuousTextDataLoader,
                              DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
@@ -340,15 +341,16 @@ class _AnnotationTuple:
     sentence: AlignedSentence
     gold: UnsegmentedSentence
     pred: UnsegmentedSentence
-    unmatched_log_prob: float
-    top_matched: List[_Match]
+    unmatched_log_prob: Optional[float] = None
+    top_matched: Optional[List[_Match]] = field(default_factory=list)
 
 
 class AlignedExtractEvaluator(BaseEvaluator):
 
-    def __init__(self, model: ExtractModel, dl: AlignedDataLoader):
+    def __init__(self, model: ExtractModel, dl: AlignedDataLoader, vocab: Vocabulary):
         self.model = model
         self.dl = dl
+        self.vocab = vocab.vocab
         self.analyzer = ExtractAnalyzer()
         self._last_eval_stage: str = None
         self._last_annotations_results: List[_AnnotationTuple] = None
@@ -410,7 +412,10 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 top_matched_strings.append(
                     f'({log_prob_str}, {word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
             top_matched_seg_str = ', '.join(top_matched_strings)
-            um = f'{anno.unmatched_log_prob:.3f}'
+            try:
+                um = f'{anno.unmatched_log_prob:.3f}'
+            except TypeError:
+                um = None
             data.append((segmented_content, g_seg_str, p_seg_str, um, top_matched_seg_str))
         out_df = pd.DataFrame(data, columns=['segmented_content', 'gold',
                                              'predicted', 'unmatched_log_prob', 'top_matched'])
@@ -418,7 +423,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
             'gold': [anno.gold.segments for anno in annotations],
             'pred': [anno.pred.segments for anno in annotations]})
         segment_df = segment_df.reset_index().rename(columns={'index': 'segment_idx'})
-        flat_segment_df = segment_df.explode('gold').explode('pred')
+        flat_segment_df = segment_df.explode('gold').reset_index(drop=True).explode('pred')
 
         def safe_bifunc(func):
 
@@ -442,10 +447,13 @@ class AlignedExtractEvaluator(BaseEvaluator):
         segment_score_df = flat_segment_df.pivot_table(index='segment_idx',
                                                        values=['exact_span_match',
                                                                'prefix_span_match', 'exact_content_match'],
-                                                       aggfunc=np.max)
+                                                       aggfunc=np.sum if g.use_ctc else np.max)
         segment_df = pd.merge(segment_df, segment_score_df, left_on='segment_idx', right_index=True, how='left')
         has_cognate = segment_df['gold'].apply(bool)
-        out_df['exact_positive_content_match'] = segment_df['exact_content_match'] & has_cognate
+        if g.use_ctc:
+            out_df['exact_positive_content_match'] = segment_df['exact_content_match'] * has_cognate.apply(int)
+        else:
+            out_df['exact_positive_content_match'] = segment_df['exact_content_match'] & has_cognate
         out_df['exact_content_match'] = segment_df['exact_content_match']
         out_df['exact_span_match'] = segment_df['exact_span_match']
         out_df['prefix_span_match'] = segment_df['prefix_span_match']
@@ -456,7 +464,10 @@ class AlignedExtractEvaluator(BaseEvaluator):
         logging.warning('num_positive_gold might be wrong.')
 
         num_pred = segment_df['pred'].apply(len).sum()
-        num_gold = segment_df['gold'].apply(len).clip(upper=g.max_num_words).sum()
+        if g.use_ctc:
+            num_gold = segment_df['gold'].apply(len).sum()
+        else:
+            num_gold = segment_df['gold'].apply(len).clip(upper=g.max_num_words).sum()
         num_positive = has_cognate.sum()
         exact_span_match = out_df['exact_span_match'].sum()
         prefix_span_match = out_df['prefix_span_match'].sum()
@@ -470,6 +481,80 @@ class AlignedExtractEvaluator(BaseEvaluator):
         return analyzed_metrics + exact_span_prf_scores + prefix_span_prf_scores + exact_content_prf_scores + exact_positive_content_prf_scores
 
     def _get_annotations_for_batch(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
+        if g.use_ctc:
+            return self._get_annotations_for_batch_ctc(model_ret, batch)
+        else:
+            return self._get_annotations_for_batch_plain(model_ret, batch)
+
+    def _get_annotations_for_batch_ctc(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
+        bkp = model_ret.ctc_return.bookkeeper
+        bpt = bkp.best_prev_tags
+        max_length = batch.lengths.max().item()
+
+        final_nodes = model_ret.ctc_return.final_nodes
+        prev_tag = last_tag = final_nodes.max(dim=1)[1]
+        prev_pos = last_pos = batch.lengths
+        offset = torch.LongTensor([1] + [1] * g.one_span_hack + list(range(g.min_word_length, g.max_word_length + 1)))
+        offset = get_tensor(offset)
+        offset.rename_('tag')
+        bs = final_nodes.size('batch')
+        hyps = list()
+        for l in range(max_length, 0, -1):
+            with NoName(bpt[l], prev_tag):
+                new_prev_tag = bpt[l][range(bs), prev_tag]
+            new_prev_pos = l - offset.gather('tag', prev_tag)
+
+            is_last = l == batch.lengths
+            prev_pos = torch.where(is_last, last_pos, prev_pos)
+            prev_tag = torch.where(is_last, last_tag, prev_tag)
+
+            to_update = l == prev_pos
+            prev_pos = torch.where(to_update, new_prev_pos, prev_pos)
+            prev_tag = torch.where(to_update, new_prev_tag, prev_tag)
+            hyps.append((prev_pos, prev_tag))
+        pos, tag = zip(*reversed(hyps))
+        pos = torch.stack(pos, new_name='length').cpu().numpy()
+        tag = torch.stack(tag, new_name='length').cpu().numpy()
+        last_pos = last_pos.cpu().numpy()
+        last_tag = last_tag.cpu().numpy()
+
+        lens = batch.lengths.cpu().numpy()
+        tag_seqs = list()
+        for p, t, lp, lt, l in zip(pos, tag, last_pos, last_tag, lens):
+            p = np.concatenate([p[:l + 1], lp.reshape(1)], axis=0)
+            t = np.concatenate([t[:l + 1], lt.reshape(1)], axis=0)
+            last_p = 0
+            i = 0
+            tag_seq = list()
+            while i < len(p):
+                while i < len(p) and p[i] == last_p:
+                    i += 1
+                if i == len(p):
+                    break
+                tag_seq.append((p[i], t[i]))
+                last_p = p[i]
+            tag_seqs.append(tag_seq)
+
+        offset = offset.cpu().numpy()
+        best_vocab = bkp.best_vocab.cpu().numpy()
+        ret = list()
+        is_lost_ipa = (g.input_format == 'ipa')
+        for sentence, tag_seq, bv in zip(batch.sentences, tag_seqs, best_vocab):
+            gold = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=True)
+            pred = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
+
+            span_seq = list()
+            for pos, tag in tag_seq:
+                if tag != 0:
+                    end = pos - 1
+                    start = end - offset[tag] + 1
+                    pred.annotate(start, end, self.vocab[bv[start, end - start - g.min_word_length + 1]])
+
+            annotation_tuple = _AnnotationTuple(sentence, gold, pred)
+            ret.append(annotation_tuple)
+        return ret
+
+    def _get_annotations_for_batch_plain(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
         start = model_ret.start.cpu().numpy()
         end = model_ret.end.cpu().numpy()
         unmatched_ll = model_ret.unmatched_ll.cpu().numpy()

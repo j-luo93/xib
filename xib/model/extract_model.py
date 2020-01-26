@@ -1,6 +1,7 @@
 import logging
 import math
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
@@ -43,6 +44,25 @@ class Extracted(BaseBatch):
 
 
 @batch_class
+class Costs(BaseBatch):
+    sub: FT
+    ins: FT
+
+
+@batch_class
+class CtcBookkeeper(BaseBatch):
+    best_vocab: LT
+    best_prev_tags: Dict[int, FT] = field(init=False, default_factory=dict)
+
+
+@batch_class
+class CtcReturn(BaseBatch):
+    final_nodes: FT
+    final_score: FT
+    bookkeeper: Optional[CtcBookkeeper] = None
+
+
+@batch_class
 class ExtractModelReturn(BaseBatch):
     start: LT
     end: LT
@@ -54,12 +74,7 @@ class ExtractModelReturn(BaseBatch):
     best_span_ll: FT
     extracted: Extracted
     alignment: Optional[FT] = None
-
-
-@batch_class
-class Costs(BaseBatch):
-    sub: FT
-    ins: FT
+    ctc_return: Optional[CtcReturn] = None
 
 
 class ExtractModel(nn.Module):
@@ -391,10 +406,12 @@ class ExtractModel(nn.Module):
         if g.include_unmatched:
             best_span_ll = torch.max(best_span_ll, unmatched_ll)
         # Get marginal.
+        ctc_return = None
         if g.use_ctc:
             viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
             span_log_probs = viable_ll.logsumexp(dim='vocab')
-            marginal = self._run_ctc(batch.lengths, span_log_probs)
+            ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll)
+            marginal = ctc_return.final_score
             # old_marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
             # old_marginal = old_marginal.logsumexp(dim='cand')
             # print(marginal.sum().item(), old_marginal.sum().item())
@@ -419,10 +436,11 @@ class ExtractModel(nn.Module):
                                        top_word_ll,
                                        best_span_ll,
                                        extracted,
-                                       alignment)
+                                       alignment,
+                                       ctc_return)
         return model_ret
 
-    def _run_ctc(self, lengths: LT, span_log_probs: FT) -> FT:
+    def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT) -> CtcReturn:
         r"""To speed up DP, everything is packed into tensors.
 
         tag \ case
@@ -436,6 +454,12 @@ class ExtractModel(nn.Module):
         ctc = dict()
         max_length = lengths.max().item()
         batch_size = span_log_probs.size('batch')
+        if self.training:
+            log_probs = span_log_probs
+            bookkeeper = None
+        else:
+            log_probs, best_vocab = vocab_log_probs.max(dim='vocab')
+            bookkeeper = CtcBookkeeper(best_vocab)
 
         def get_init():
             # ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(-9999.9)
@@ -478,24 +502,29 @@ class ExtractModel(nn.Module):
                     end_idx = word_len - g.min_word_length
                     if g.one_span_hack:
                         transitions.append(
-                            (prev_v + E_mask + span_log_probs[:, start_idx, end_idx].align_as(prev_v)))
+                            (prev_v + E_mask + log_probs[:, start_idx, end_idx].align_as(prev_v)))
                     else:
                         transitions.append(
-                            (prev_v + span_log_probs[:, start_idx, end_idx].align_as(prev_v)))
+                            (prev_v + log_probs[:, start_idx, end_idx].align_as(prev_v)))
                 except (KeyError, IndexError):
                     transitions.append(get_init())
             # Sum up all alignments.
-            if g.best_ctc:
-                ctc[l] = torch.stack(transitions, new_name='new_tag').max(dim='tag')[0].rename(new_tag='tag')
+            if self.training:
+                if g.best_ctc:
+                    ctc[l] = torch.stack(transitions, new_name='new_tag').max(dim='tag')[0].rename(new_tag='tag')
+                else:
+                    ctc[l] = torch.stack(transitions, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
             else:
-                ctc[l] = torch.stack(transitions, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+                best_value, best_prev_tag = torch.stack(transitions, new_name='new_tag').max(dim='tag')
+                ctc[l] = best_value.rename(new_tag='tag')
+                bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
 
         ctc = torch.stack([ctc[l] for l in range(max_length + 1)], new_name='length')
         with NoName(ctc, lengths):
             final_nodes = ctc[range(batch_size), :, lengths]
             final_nodes.rename_('batch', 'tag')
-        if g.best_ctc:
+        if g.best_ctc or not self.training:
             final_score = final_nodes.max(dim='tag')[0]
         else:
             final_score = final_nodes.logsumexp(dim='tag')
-        return final_score
+        return CtcReturn(final_nodes, final_score, bookkeeper)

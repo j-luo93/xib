@@ -237,7 +237,7 @@ class ExtractManager(BaseManager):
         logging.info(str(self.model))
 
         eval_cls = AlignedExtractEvaluator if g.use_new_data_loader else ExtractEvaluator
-        self.evaluator = eval_cls(self.model, self.dl_reg[task])
+        self.evaluator = eval_cls(self.model, self.dl_reg[task], BaseAlignedBatch.known_vocab)
 
         self.trainer = ExtractTrainer(self.model, [task], [1.0], 'total_step',
                                       stage_tnames=['round', 'total_step'],

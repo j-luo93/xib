@@ -105,6 +105,7 @@ class ExtractModel(nn.Module):
     add_argument('include_unmatched', dtype=bool, default=True, msg='Flag to include unmatched scores in the loss.')
     add_argument('em_training', dtype=bool, default=False)
     add_argument('use_ctc', dtype=bool, default=False)
+    add_argument('use_s_prior', dtype=bool, default=False)
     add_argument('best_ctc', dtype=bool, default=False)
     add_argument('one_span_hack', dtype=bool, default=False)
     add_argument('dense_embedding', dtype=bool, default=False)
@@ -121,6 +122,8 @@ class ExtractModel(nn.Module):
         self.unit_aligner = nn.Embedding(lost_size, known_size)
         logging.imp('Unit aligner initialized to 0.')
         self.unit_aligner.weight.data.fill_(0.0)
+        # logging.imp('Unit aligner initialized uniformly.')
+        # nn.init.uniform_(self.unit_aligner.weight, -0.05, 0.05)
         self.conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.ins_conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
@@ -446,6 +449,10 @@ class ExtractModel(nn.Module):
             marginal = marginal.logsumexp(dim='cand')
         else:
             marginal = flat_total_ll.logsumexp(dim='cand')
+
+        if g.use_s_prior:
+            s_log_probs = -(1e-8 + viable_spans.viable.sum(dim=['len_s', 'len_e'])).log()
+            marginal = marginal + s_log_probs
 
         model_ret = ExtractModelReturn(start,
                                        end,

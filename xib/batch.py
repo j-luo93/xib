@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from dev_misc import FT, LT, g
+from dev_misc import FT, LT, add_argument, g
 from dev_misc.devlib import BaseBatch as BaseBatchDev
 from dev_misc.devlib import (batch_class, get_array, get_length_mask,
                              get_range, get_zeros)
@@ -232,26 +232,55 @@ class DenseIpaBatch(IpaBatch):
 
 class BatchSampler(Sampler):
 
+    add_argument('sort_by_length', default=True, dtype=bool)
+
     def __init__(self, lengths: Iterable[int], shuffle: bool = True):
         self.shuffle = shuffle
-        lengths = np.asarray(lengths)
-        # Partition the entire dataset beforehand into batches by length.
-        indices = lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
-        logging.info('Partitioning the data into batches.')
-        self.idx_batches = list()
-        i = 0
-        while i < len(indices):
-            max_len = lengths[indices[i]]
-            bs = g.char_per_batch // max_len
-            if bs == 0:
-                raise RuntimeError(f'Batch too small!')
-            self.idx_batches.append(indices[i: i + bs])
-            i += bs
+        self.lengths = np.asarray(lengths)
+        if g.sort_by_length:
+            # Partition the entire dataset beforehand into batches by length.
+            indices = self.lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
+            logging.info('Partitioning the data into batches.')
+            self.idx_batches = list()
+            i = 0
+            while i < len(indices):
+                max_len = self.lengths[indices[i]]
+                bs = g.char_per_batch // max_len
+                if bs == 0:
+                    raise RuntimeError(f'Batch too small!')
+                self.idx_batches.append(indices[i: i + bs])
+                i += bs
 
     def __len__(self):
-        return len(self.idx_batches)
+        if g.sort_by_length:
+            return len(self.idx_batches)
+        else:
+            return None
 
     def __iter__(self):
-        if self.shuffle:
-            random.shuffle(self.idx_batches)
-        yield from self.idx_batches
+        if g.sort_by_length:
+            if self.shuffle:
+                random.shuffle(self.idx_batches)
+            yield from self.idx_batches
+        else:
+            indices = list(range(len(self.lengths)))
+            if self.shuffle:
+                random.shuffle(indices)
+
+            max_length = 0
+            idx_batch = list()
+            while indices:
+                index = indices.pop()
+
+                new_max_length = max(max_length, self.lengths[index])
+                if new_max_length * (1 + len(idx_batch)) > g.char_per_batch:
+                    assert idx_batch
+                    yield idx_batch
+                    max_length = self.lengths[index]
+                    idx_batch = [index]
+                else:
+                    max_length = new_max_length
+                    idx_batch.append(index)
+            if idx_batch:
+                yield idx_batch
+

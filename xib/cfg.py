@@ -317,8 +317,20 @@ class FixGotGermWithStemSmall(FixGotNhdWithStemSmall):
 
 @reg
 class FixGotGermWithStemSmallCtcEmbedding(FixGotGermWithStemSmall):
+    char_per_batch: int = 1000
+    sort_by_length: bool = False
+    use_s_prior: bool = True
+    context_weight: float = 0.2
     use_ctc: bool = True
     use_base_embedding: bool = True
+    dense_embedding: bool = True
+    context_agg_mode: str = 'linear_interpolation'
+    dim: int = 30
+    reg_hyper: float = 0.1
+    use_s_prior: bool = True
+    dropout: float = 0.3
+    learning_rate: float = 0.3
+    save_alignment: bool = True
 
 
 @reg

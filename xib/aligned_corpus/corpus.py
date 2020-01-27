@@ -55,24 +55,47 @@ class Word:
 
 
 @dataclass(eq=True, frozen=True)
-class Stem(Word):
-    """A stem is just a word with start and end."""
+class SingleStem(Word):
+    """A single stem is just a word with start and end."""
     start: int
     end: int
-    full_form: str
 
     def __repr__(self):
         ipa_str = ','.join(map(str, self.ipa))
-        return f'{self.lang};{self.form}:{self.start}:{self.end}:{self.full_form};{{{ipa_str}}}'
+        return f'{self.lang};{self.start}~{self.end}@{self.form}:{{{ipa_str}}}'
 
     @classmethod
-    def from_saved_string(cls, saved_string: str) -> Word:
-        lang, form_with_orig, ipa_str = saved_string.split(';')
-        form, start, end, full_form = form_with_orig.split(':')
-        start = int(start)
-        end = int(end)
+    def from_saved_string(cls, saved_string: str) -> SingleStem:
+        lang, stem_info = saved_string.split(';')
+        stem, ipa_str = stem_info.split(':')
+        digits, form = stem.split('@')
+        start, end = map(int, digits.split('~'))
         ipa = frozenset({IpaSequence(s) for s in ipa_str[1:-1].split(',')})
-        return cls(lang, form, ipa, start, end, full_form)
+        return cls(lang, form, ipa, start, end)
+
+
+@dataclass(eq=True, frozen=True)
+class Stem:
+    lang: str
+    single_stems: Tuple[SingleStem]
+    full_form: str
+
+    def __repr__(self):
+        ss_str = ','.join([repr(ss) for ss in self.single_stems])
+        return f'{self.lang};{ss_str};{self.full_form}'
+
+    @classmethod
+    def from_saved_string(cls, saved_string: str) -> Stem:
+        lang, ss_str, full_form = saved_string.split(';')
+        stems = [SingleStem.from_saved_string(f'{lang};{stem_str}') for stem_str in ss_str.split(',')]
+        return cls(lang, tuple(stems), full_form)
+
+    @property
+    def ipa(self) -> FrozenSet[IpaSequence]:
+        ret = set()
+        for stem in self.single_stems:
+            ret.update(stem.ipa)
+        return frozenset(ret)
 
 
 _Signature = Tuple[str, str]
@@ -150,50 +173,67 @@ class AlignedWord:
         return cls(lost_token, lost_lemma, known_tokens, known_lemmas)
 
 
+def _check_segment_type(other: SingleSegment, required_type=None):
+    if required_type is None:
+        required_type = SingleSegment
+    if not isinstance(other, required_type):
+        raise TypeError(f'Can only compare with {required_type} instances.')
+
+
 @dataclass
-class Segment:
+class SingleSegment:
     start: int
     end: int
     content: Content
-    aligned_contents: Set[Content]
-    full_form_start: int = None
-    full_form_end: int = None
 
-    def _check_segment_type(self, other: Segment):
-        if not isinstance(other, Segment):
-            raise TypeError(f'Can only compare with Segment instances.')
-
-    def has_same_span(self, other: Segment) -> bool:
-        self._check_segment_type(other)
+    def has_same_span(self, other: SingleSegment) -> bool:
+        _check_segment_type(other)
         return self.start == other.start and self.end == other.end
 
+    def has_prefix_span(self, other: SingleSegment) -> bool:
+        _check_segment_type(other)
+        return self.start == other.start and self.end <= other.end
+
+    def __str__(self):
+        return f'{self.start}~{self.end}@{self.content}'
+
     def has_reasonable_stem_span(self, other: Segment) -> bool:
-        self._check_segment_type(other)
+        _check_segment_type(other, required_type=Segment)
         assert other.full_form_end is not None and other.full_form_start is not None
         if g.debug:
             print(repr(self), repr(other))
         return self.start == other.full_form_start and self.end <= other.full_form_end
 
+
+@dataclass
+class Segment:
+    single_segments: List[SingleSegment]
+    aligned_contents: Set[Content]
+    full_form_start: int = None
+    full_form_end: int = None
+
     def has_same_content(self, other: Segment) -> bool:
-        self._check_segment_type(other)
+        _check_segment_type(other, required_type=Segment)
         return bool(self.aligned_contents & other.aligned_contents)
 
     def has_correct_prediction(self, gold: Segment) -> bool:
-        self._check_segment_type(gold)
+        _check_segment_type(gold, required_type=Segment)
+        ret = False
         if self.has_same_content(gold):
-            if g.use_stem:
-                return self.has_reasonable_stem_span(gold)
-            else:
-                return self.has_prefix_span(gold)
+            for ss in self.single_segments:
+                if g.use_stem:
+                    ret = ret or ss.has_reasonable_stem_span(gold)
+                else:
+                    for gold_ss in gold.single_segments:
+                        ret = ret or ss.has_prefix_span(gold_ss)
+                if ret:
+                    return True
         return False
 
-    def has_prefix_span(self, other: Segment) -> bool:
-        self._check_segment_type(other)
-        return self.start == other.start and self.end <= other.end
-
     def __str__(self):
+        ss_str = ','.join([str(ss) for ss in self.single_segments])
         ac_str = ','.join(map(str, self.aligned_contents))
-        return f'{self.start}~{self.end}@{self.content}|{ac_str}'
+        return f'{ss_str};{ac_str}'
 
 
 class OverlappingAnnotation(Exception):
@@ -207,7 +247,7 @@ class UnsegmentedSentence(SequenceABC):
     is_known_ipa: bool
     segmented_content: Content = field(repr=False)
     segments: List[Segment] = field(default_factory=list)
-    # annotated: Set[int] = field(default_factory=set, repr=False)
+    annotated: Set[int] = field(default_factory=set, repr=False)
 
     def __len__(self):
         return len(self.content)
@@ -216,19 +256,25 @@ class UnsegmentedSentence(SequenceABC):
         return self.content[idx]
 
     def annotate(self,
-                 start: int,
-                 end: int,
+                 starts: List[int],
+                 ends: List[int],
                  aligned_contents: Union[Content, Set[Content]],
                  full_form_start: Optional[int] = None,
                  full_form_end: Optional[int] = None):
+        assert len(starts) == len(ends)
         if isinstance(aligned_contents, (str, IpaSequence)):
             aligned_contents = {aligned_contents}
-        segment = Segment(start, end, self.content[start: end + 1], aligned_contents, full_form_start, full_form_end)
-        # idx_set = set(range(start, end + 1))
-        # if idx_set & self.annotated:
-        #     raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
+        single_segments = list()
+        idx_set = set()
+        for start, end in zip(starts, ends):
+            ss = SingleSegment(start, end, self.content[start: end + 1])
+            idx_set |= set(range(start, end + 1))
+            single_segments.append(ss)
+        segment = Segment(single_segments, aligned_contents, full_form_start, full_form_end)
+        if idx_set & self.annotated:
+            raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
         self.segments.append(segment)  # pylint: disable=no-member
-        # self.annotated |= idx_set
+        self.annotated |= idx_set
 
 
 @dataclass
@@ -295,31 +341,28 @@ class AlignedSentence:
                 aligned_contents = union_sets(aligned_contents)
                 if aligned_contents:
                     if g.use_stem:
+                        starts = list()
+                        ends = list()
                         for stem in word.lost_stems:
-                            yield offset + stem.start, offset + stem.end, aligned_contents, offset, offset + full_length - 1
+                            for ss in stem.single_stems:
+                                starts.append(offset + ss.start)
+                                ends.append(offset + ss.end)
+                        yield starts, ends, aligned_contents, offset, offset + full_length - 1
                     else:
-                        yield offset, offset + full_length - 1, aligned_contents, None, None
+                        yield [offset], [offset + full_length - 1], aligned_contents, None, None
                 offset += full_length
 
         if annotated:
-            offset = 0
-            for start, end, aligned_contents, full_form_start, full_form_end in iter_annotation():
-                length = end - start + 1
-                if length <= g.max_word_length and length >= g.min_word_length:
-                    uss.annotate(start, end, aligned_contents,
+            for starts, ends, aligned_contents, full_form_start, full_form_end in iter_annotation():
+                try:
+                    starts, ends = zip(*[(start, end) for start, end in zip(starts, ends)
+                                         if g.min_word_length <= end - start + 1 <= g.max_word_length])
+                except ValueError:
+                    starts = ends = None
+                if starts:
+                    uss.annotate(starts, ends, aligned_contents,
                                  full_form_start=full_form_start,
                                  full_form_end=full_form_end)
-            # for word in self.words:
-            #     lwl = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
-            #     if (word.known_tokens or word.known_lemmas) and lwl <= g.max_word_length and lwl >= g.min_word_length:
-            #         aligned_contents = set()
-            #         for known_word in (word.known_tokens | word.known_lemmas):
-            #             if is_known_ipa:
-            #                 aligned_contents.update(known_word.ipa)
-            #             else:
-            #                 aligned_contents.add(known_word.form)
-            #         uss.annotate(offset, offset + lwl - 1, aligned_contents)
-            #     offset += lwl
 
         return uss
 

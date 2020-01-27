@@ -408,7 +408,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 log_prob_str = f'{match.total_log_prob:.3f}'
                 word_log_prob_str = f'{match.word_log_prob:.3f}'
                 avg_char_log_prob_str = f'{match.avg_char_log_prob:.3f}'
-                segments_str = ';'.join(map(str, match.hypothesis.segments))
+                segments_str = '&'.join(map(str, match.hypothesis.segments))
                 top_matched_strings.append(
                     f'({log_prob_str}, {word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
             top_matched_seg_str = ', '.join(top_matched_strings)
@@ -436,49 +436,69 @@ class AlignedExtractEvaluator(BaseEvaluator):
             return wrapped
 
         # Get P/R/F scores.
-        flat_segment_df['exact_span_match'] = flat_segment_df[['pred', 'gold']].apply(safe_bifunc(Segment.has_same_span),
-                                                                                      axis=1)
-        flat_segment_df['prefix_span_match'] = flat_segment_df[['pred', 'gold']].apply(safe_bifunc(Segment.has_prefix_span),
-                                                                                       axis=1)
+        # flat_segment_df['exact_span_match'] = flat_segment_df[['pred', 'gold']].apply(safe_bifunc(Segment.has_same_span),
+        #                                                                               axis=1)
+        # flat_segment_df['prefix_span_match'] = flat_segment_df[['pred', 'gold']].apply(safe_bifunc(Segment.has_prefix_span),
+        #                                                                                axis=1)
         flat_segment_df['exact_content_match'] = flat_segment_df[['pred', 'gold']].apply(safe_bifunc(Segment.has_correct_prediction),
                                                                                          axis=1)
 
         flat_segment_df = flat_segment_df.fillna(value=False)
         segment_score_df = flat_segment_df.pivot_table(index='segment_idx',
-                                                       values=['exact_span_match',
-                                                               'prefix_span_match', 'exact_content_match'],
+                                                       #    values=['exact_span_match',
+                                                       #            'prefix_span_match', 'exact_content_match'],
+                                                       values=['exact_content_match'],
                                                        aggfunc=np.sum if g.use_ctc else np.max)
         segment_df = pd.merge(segment_df, segment_score_df, left_on='segment_idx', right_index=True, how='left')
+        out_df['num_gold'] = segment_df['gold'].apply(len)
+        out_df['num_pred'] = segment_df['pred'].apply(len)
         has_cognate = segment_df['gold'].apply(bool)
-        if g.use_ctc:
-            out_df['exact_positive_content_match'] = segment_df['exact_content_match'] * has_cognate.apply(int)
-        else:
-            out_df['exact_positive_content_match'] = segment_df['exact_content_match'] & has_cognate
-        out_df['exact_content_match'] = segment_df['exact_content_match']
-        out_df['exact_span_match'] = segment_df['exact_span_match']
-        out_df['prefix_span_match'] = segment_df['prefix_span_match']
+        has_cognate_int = has_cognate.apply(int)
+        out_df['num_positive_gold'] = out_df['num_gold'] * has_cognate_int
+        out_df['num_positive_pred'] = out_df['num_pred'] * has_cognate_int
+        out_df['num_exact_content_match'] = segment_df['exact_content_match'].apply(int)
+        out_df['num_positive_exact_content_match'] = out_df['num_exact_content_match'] * has_cognate_int
+
+        # has_cognate = segment_df['gold'].apply(bool)
+        # out_df['num_positive'] = segment_df['gold'].apply(len)
+        # if g.use_ctc:
+        #     out_df['exact_positive_content_match'] = segment_df['exact_content_match'] * has_cognate.apply(int)
+        # else:
+        #     out_df['exact_positive_content_match'] = segment_df['exact_content_match'] & has_cognate
+        # out_df['exact_content_match'] = segment_df['exact_content_match']
+        # # out_df['exact_span_match'] = segment_df['exact_span_match']
+        # # out_df['prefix_span_match'] = segment_df['prefix_span_match']
         out_path = g.log_dir / 'predictions' / f'aligned.{stage}.tsv'
         out_path.parent.mkdir(exist_ok=True, parents=True)
         out_df.to_csv(out_path, index=None, sep='\t')
 
-        logging.warning('num_positive_gold might be wrong.')
+        # logging.warning('num_positive_gold might be wrong.')
 
-        num_pred = segment_df['pred'].apply(len).sum()
-        if g.use_ctc:
-            num_gold = segment_df['gold'].apply(len).sum()
-        else:
-            num_gold = segment_df['gold'].apply(len).clip(upper=g.max_num_words).sum()
-        num_positive = has_cognate.sum()
-        exact_span_match = out_df['exact_span_match'].sum()
-        prefix_span_match = out_df['prefix_span_match'].sum()
-        exact_content_match = out_df['exact_content_match'].sum()
-        exact_positive_content_match = out_df['exact_positive_content_match'].sum()
-        exact_span_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_span_match, 'exact_span')
-        prefix_span_prf_scores = _get_prf_metrics(num_pred, num_gold, prefix_span_match, 'prefix_span')
-        exact_content_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_content_match, 'exact_content')
-        exact_positive_content_prf_scores = _get_prf_metrics(
-            num_positive, num_positive, exact_positive_content_match, 'exact_positive_content')
-        return analyzed_metrics + exact_span_prf_scores + prefix_span_prf_scores + exact_content_prf_scores + exact_positive_content_prf_scores
+        # num_pred = segment_df['pred'].apply(len).sum()
+        # if g.use_ctc:
+        #     num_gold = segment_df['gold'].apply(len).sum()
+        # else:
+        #     num_gold = segment_df['gold'].apply(len).clip(upper=g.max_num_words).sum()
+        # num_positive = out_df['num_positive'].sum()
+        # # exact_span_match = out_df['exact_span_match'].sum()
+        # # prefix_span_match = out_df['prefix_span_match'].sum()
+        # exact_content_match = out_df['exact_content_match'].sum()
+        # exact_positive_content_match = out_df['exact_positive_content_match'].sum()
+        # exact_span_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_span_match, 'exact_span')
+        # prefix_span_prf_scores = _get_prf_metrics(num_pred, num_gold, prefix_span_match, 'prefix_span')
+
+        sums = out_df[['num_pred', 'num_gold', 'num_exact_content_match',
+                       'num_positive_gold', 'num_positive_pred', 'num_positive_exact_content_match']].sum()
+        exact_content_prf_scores = _get_prf_metrics(sums.num_pred,
+                                                    sums.num_gold,
+                                                    sums.num_exact_content_match,
+                                                    'exact_content')
+        positive_exact_content_prf_scores = _get_prf_metrics(sums.num_positive_pred,
+                                                             sums.num_positive_gold,
+                                                             sums.num_positive_exact_content_match,
+                                                             'positive_exact_content')
+        # return analyzed_metrics + exact_span_prf_scores + prefix_span_prf_scores + exact_content_prf_scores + exact_positive_content_prf_scores
+        return analyzed_metrics + exact_content_prf_scores + positive_exact_content_prf_scores
 
     def _get_annotations_for_batch(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
         if g.use_ctc:
@@ -548,7 +568,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 if tag != 0:
                     end = pos - 1
                     start = end - offset[tag] + 1
-                    pred.annotate(start, end, self.vocab[bv[start, end - start - g.min_word_length + 1]])
+                    pred.annotate([start], [end], self.vocab[bv[start, end - start - g.min_word_length + 1]])
 
             annotation_tuple = _AnnotationTuple(sentence, gold, pred)
             ret.append(annotation_tuple)

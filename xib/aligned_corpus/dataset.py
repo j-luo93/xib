@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
@@ -70,6 +71,7 @@ class AlignedDataset(Dataset):
         self.data = list()
         # HACK(j_luo)
         if g.freq_hack:
+            logging.warning('FREQ HACK is used.')
             _data_str = set()
         for sentence in self.corpus.sentences:
             word_lengths = [word.lost_token.form_length for word in sentence.words]

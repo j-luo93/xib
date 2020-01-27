@@ -330,7 +330,7 @@ def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int, name: str) ->
 
 @dataclass
 class _Match:
-    total_log_prob: float
+    # total_log_prob: float
     word_log_prob: float
     avg_char_log_prob: float
     hypothesis: UnsegmentedSentence
@@ -341,7 +341,7 @@ class _AnnotationTuple:
     sentence: AlignedSentence
     gold: UnsegmentedSentence
     pred: UnsegmentedSentence
-    unmatched_log_prob: Optional[float] = None
+    # unmatched_log_prob: Optional[float] = None
     top_matched: Optional[List[_Match]] = field(default_factory=list)
 
 
@@ -401,24 +401,28 @@ class AlignedExtractEvaluator(BaseEvaluator):
         data = list()
         for anno in annotations:
             segmented_content = anno.gold.segmented_content
-            g_seg_str = ';'.join(map(str, anno.gold.segments))
-            p_seg_str = ';'.join(map(str, anno.pred.segments))
+            g_seg_str = '&'.join(map(str, anno.gold.segments))
+            p_seg_str = '&'.join(map(str, anno.pred.segments))
             top_matched_strings = list()
             for match in anno.top_matched:
-                log_prob_str = f'{match.total_log_prob:.3f}'
+                # log_prob_str = f'{match.total_log_prob:.3f}'
                 word_log_prob_str = f'{match.word_log_prob:.3f}'
                 avg_char_log_prob_str = f'{match.avg_char_log_prob:.3f}'
                 segments_str = '&'.join(map(str, match.hypothesis.segments))
-                top_matched_strings.append(
-                    f'({log_prob_str}, {word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
+                # top_matched_strings.append(
+                #     f'({log_prob_str}, {word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
+                top_matched_strings.append(f'({word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
             top_matched_seg_str = ', '.join(top_matched_strings)
-            try:
-                um = f'{anno.unmatched_log_prob:.3f}'
-            except TypeError:
-                um = None
-            data.append((segmented_content, g_seg_str, p_seg_str, um, top_matched_seg_str))
+            # try:
+            #     um = f'{anno.unmatched_log_prob:.3f}'
+            # except TypeError:
+            #     um = None
+            # data.append((segmented_content, g_seg_str, p_seg_str, um, top_matched_seg_str))
+            data.append((segmented_content, g_seg_str, p_seg_str, top_matched_seg_str))
+        # out_df = pd.DataFrame(data, columns=['segmented_content', 'gold',
+        #                                      'predicted', 'unmatched_log_prob', 'top_matched'])
         out_df = pd.DataFrame(data, columns=['segmented_content', 'gold',
-                                             'predicted', 'unmatched_log_prob', 'top_matched'])
+                                             'predicted', 'top_matched'])
         segment_df = pd.DataFrame({
             'gold': [anno.gold.segments for anno in annotations],
             'pred': [anno.pred.segments for anno in annotations]})
@@ -559,18 +563,30 @@ class AlignedExtractEvaluator(BaseEvaluator):
         best_vocab = bkp.best_vocab.cpu().numpy()
         ret = list()
         is_lost_ipa = (g.input_format == 'ipa')
-        for sentence, tag_seq, bv in zip(batch.sentences, tag_seqs, best_vocab):
+        log_probs = model_ret.extracted.matches.ll.cpu()
+        for i, (sentence, tag_seq, bv) in enumerate(zip(batch.sentences, tag_seqs, best_vocab)):
             gold = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=True)
             pred = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
 
-            span_seq = list()
+            top_matches = list()
             for pos, tag in tag_seq:
                 if tag != 0:
+                    length = offset[tag]
                     end = pos - 1
-                    start = end - offset[tag] + 1
-                    pred.annotate([start], [end], self.vocab[bv[start, end - start - g.min_word_length + 1]])
+                    start = end - length + 1
+                    end_idx = end - start - g.min_word_length + 1
+                    start_idx = start
+                    v_idx = bv[start_idx, end_idx]
+                    y = self.vocab[v_idx]
+                    pred.annotate([start], [end], y)
 
-            annotation_tuple = _AnnotationTuple(sentence, gold, pred)
+                    lp = log_probs[i, start_idx, end_idx, v_idx].item()
+                    uss = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
+                    uss.annotate([start], [end], y)
+                    match = _Match(lp, lp / length, uss)
+                    top_matches.append(match)
+
+            annotation_tuple = _AnnotationTuple(sentence, gold, pred, top_matches)
             ret.append(annotation_tuple)
         return ret
 

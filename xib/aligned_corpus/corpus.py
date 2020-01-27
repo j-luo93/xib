@@ -233,7 +233,10 @@ class Segment:
     def __str__(self):
         ss_str = ','.join([str(ss) for ss in self.single_segments])
         ac_str = ','.join(map(str, self.aligned_contents))
-        return f'{ss_str};{ac_str}'
+        ret = f'{ss_str};{ac_str}'
+        if self.full_form_start is not None and self.full_form_end is not None:
+            ret += f';{self.full_form_start}~{self.full_form_end}'
+        return ret
 
 
 class OverlappingAnnotation(Exception):

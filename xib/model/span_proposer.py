@@ -194,6 +194,6 @@ class AllSpanProposer(BaseSpanProposer):
             updated.add(s_key)
 
         # # HACK(j_luo)
-        # for k in self.p_weights:
-        #     if k not in updated:
-        #         self.p_weights[k] *= g.momentum
+        for k in self.p_weights:
+            if k not in updated:
+                self.p_weights[k] *= g.momentum

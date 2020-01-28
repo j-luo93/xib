@@ -184,7 +184,7 @@ class ExtractTrainer(BaseTrainer):
             self.add_callback('total_step', g.num_steps, self.update_p_weights)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
         # HACK(j_luo)
-        self._cnt = 200
+        self._cnt = 1000
 
     def update_p_weights(self):
 

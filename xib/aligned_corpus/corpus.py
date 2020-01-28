@@ -202,7 +202,7 @@ class SingleSegment:
         assert other.full_form_end is not None and other.full_form_start is not None
         if g.debug:
             print(repr(self), repr(other))
-        return self.start == other.full_form_start and self.end <= other.full_form_end
+        return (self.start >= other.full_form_start and self.end <= other.full_form_end) and any(self.start == ss.start for ss in other.single_segments)
 
 
 @dataclass

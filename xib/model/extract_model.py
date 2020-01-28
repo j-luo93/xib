@@ -1,5 +1,6 @@
 import logging
 import math
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple, Union
@@ -34,6 +35,7 @@ ExtractBatch = Union[ContinuousIpaBatch, UnbrokenTextBatch]
 class Matches(BaseBatch):
     ll: FT
     f: FT  # All these dp scores.
+    raw_ll: FT = None  # HACK(j_luo)
 
 
 @batch_class
@@ -334,6 +336,7 @@ class ExtractModel(nn.Module):
             all_ll.rename_('batch', 'len_s', 'len_e', 'vocab')
             # NOTE(j_luo) Remember to add the prior for vocab.
             matches.ll = all_ll - math.log(vocab_size)
+            matches.raw_ll = all_ll
             # NOTE(j_luo) `p_weights` is now in log scale.
             all_p_weights = get_zeros(batch_size, len_s, len_e)
             all_p_weights.fill_(-9999.9)
@@ -433,8 +436,11 @@ class ExtractModel(nn.Module):
         if g.use_ctc:
             viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
             span_log_probs = viable_ll.logsumexp(dim='vocab')
-            ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll)
+            ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
             marginal = ctc_return.final_score
+
+            if g.update_p_weights:
+                marginal = marginal * (viable_spans.p_weights.logsumexp(dim=['len_s', 'len_e'])).exp()
             # old_marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
             # old_marginal = old_marginal.logsumexp(dim='cand')
             # print(marginal.sum().item(), old_marginal.sum().item())
@@ -467,7 +473,7 @@ class ExtractModel(nn.Module):
                                        ctc_return)
         return model_ret
 
-    def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT) -> CtcReturn:
+    def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT) -> CtcReturn:
         r"""To speed up DP, everything is packed into tensors.
 
         tag \ case
@@ -487,6 +493,11 @@ class ExtractModel(nn.Module):
         else:
             log_probs, best_vocab = vocab_log_probs.max(dim='vocab')
             bookkeeper = CtcBookkeeper(best_vocab)
+
+            # warnings.warn('Only taking most confident ones.')
+            # len_range = get_named_range(log_probs.size('len_e'), 'len_e') + g.min_word_length
+            # avg = raw_vocab_log_probs.gather('vocab', best_vocab) / len_range.align_as(best_vocab)
+            # log_probs = torch.where(avg > -0.6, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
 
         def get_init():
             # ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(-9999.9)

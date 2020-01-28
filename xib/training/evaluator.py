@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -332,7 +333,9 @@ def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int, name: str) ->
 class _Match:
     # total_log_prob: float
     word_log_prob: float
+    raw_word_log_prob: float
     avg_char_log_prob: float
+    raw_avg_char_log_prob: float
     hypothesis: UnsegmentedSentence
 
 
@@ -356,20 +359,27 @@ class AlignedExtractEvaluator(BaseEvaluator):
         self._last_annotations_results: List[_AnnotationTuple] = None
 
     def get_best_spans(self, stage: str, total_num_spans: int) -> Tuple[Sequence[AlignedSentence], Sequence[Tuple[int, int]]]:
+        self.model.eval()
         with torch.no_grad():
             _, annotations = self._evaluate_core(stage)
 
-        avg_char_log_probs = [anno.top_matched[0].avg_char_log_prob for anno in annotations]
-        aclp = np.asarray(avg_char_log_probs)
-        best_idx = np.argsort(-aclp)[:total_num_spans]
+        candidates = list()
+        for i, anno in enumerate(annotations):
+            for match in anno.top_matched:
+                candidates.append((match.avg_char_log_prob, i, match.hypothesis.segments[0].single_segments[0]))
+        candidates = sorted(candidates, key=lambda item: item[0], reverse=True)[:total_num_spans]
+        # avg_char_log_probs = [anno.top_matched[0].avg_char_log_prob for anno in annotations]
+        # aclp = np.asarray(avg_char_log_probs)
+        # best_idx = np.argsort(-aclp)[:total_num_spans]
         sentences = list()
         spans = list()
-        for idx in best_idx:
+        # for idx in best_idx:
+        for avg, idx, seg in candidates:
             anno = annotations[idx]
-            try:
-                seg = anno.pred.segments[0]
-            except IndexError:
-                continue
+            # try:
+            #     seg = anno.pred.segments[0]
+            # except IndexError:
+            #     continue
             sentences.append(anno.sentence)
             spans.append((seg.start, seg.end))
         return sentences, spans
@@ -407,11 +417,14 @@ class AlignedExtractEvaluator(BaseEvaluator):
             for match in anno.top_matched:
                 # log_prob_str = f'{match.total_log_prob:.3f}'
                 word_log_prob_str = f'{match.word_log_prob:.3f}'
+                raw_word_log_prob_str = f'{match.raw_word_log_prob:.3f}'
                 avg_char_log_prob_str = f'{match.avg_char_log_prob:.3f}'
+                raw_avg_char_log_prob_str = f'{match.raw_avg_char_log_prob:.3f}'
                 segments_str = '&'.join(map(str, match.hypothesis.segments))
                 # top_matched_strings.append(
                 #     f'({log_prob_str}, {word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
-                top_matched_strings.append(f'({word_log_prob_str}, {avg_char_log_prob_str}, {segments_str})')
+                top_matched_strings.append(
+                    f'({word_log_prob_str}, {raw_word_log_prob_str}, {avg_char_log_prob_str}, {raw_avg_char_log_prob_str}, {segments_str})')
             top_matched_seg_str = ', '.join(top_matched_strings)
             # try:
             #     um = f'{anno.unmatched_log_prob:.3f}'
@@ -564,6 +577,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
         ret = list()
         is_lost_ipa = (g.input_format == 'ipa')
         log_probs = model_ret.extracted.matches.ll.cpu()
+        raw_log_probs = model_ret.extracted.matches.raw_ll.cpu()
         for i, (sentence, tag_seq, bv) in enumerate(zip(batch.sentences, tag_seqs, best_vocab)):
             gold = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=True)
             pred = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
@@ -578,12 +592,20 @@ class AlignedExtractEvaluator(BaseEvaluator):
                     start_idx = start
                     v_idx = bv[start_idx, end_idx]
                     y = self.vocab[v_idx]
+                    lp = log_probs[i, start_idx, end_idx, v_idx].item()
+                    raw_lp = raw_log_probs[i, start_idx, end_idx, v_idx].item()
+                    avg_lp = lp / length
+                    raw_avg_lp = raw_lp / length
+
+                    # if raw_avg_lp < 0.6:
+                    #     warnings.warn('Only taking most confident ones.')
+                    #     continue
+
                     pred.annotate([start], [end], y)
 
-                    lp = log_probs[i, start_idx, end_idx, v_idx].item()
                     uss = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
                     uss.annotate([start], [end], y)
-                    match = _Match(lp, lp / length, uss)
+                    match = _Match(lp, raw_lp, avg_lp, raw_avg_lp, uss)
                     top_matches.append(match)
 
             annotation_tuple = _AnnotationTuple(sentence, gold, pred, top_matches)

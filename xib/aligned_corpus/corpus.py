@@ -342,6 +342,7 @@ class AlignedSentence:
                 full_length = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
                 aligned_contents = {wos.ipa if is_known_ipa else {wos.form} for wos in words_or_stems}
                 aligned_contents = union_sets(aligned_contents)
+                aligned_contents = {ac for ac in aligned_contents if g.min_word_length <= len(ac) <= g.max_word_length}
                 if aligned_contents:
                     if g.use_stem:
                         starts = list()

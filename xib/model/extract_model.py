@@ -125,7 +125,7 @@ class ExtractModel(nn.Module):
         logging.imp('Unit aligner initialized to 0.')
         self.unit_aligner.weight.data.fill_(0.0)
         # logging.imp('Unit aligner initialized uniformly.')
-        # nn.init.uniform_(self.unit_aligner.weight, -0.05, 0.05)
+        # nn.init.uniform_(self.unit_aligner.weight, -0.01, 0.01)
         self.conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.ins_conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
@@ -194,7 +194,7 @@ class ExtractModel(nn.Module):
                 known_unit_emb = self.base_embeddings(vocab.unit_dense_feat_matrix)
             known_unit_emb = self.dropout(known_unit_emb)
             with NoName(known_unit_emb):
-                known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.log(7)
+                known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(5)
         else:
             with NoName(*vocab.unit_dense_feat_matrix.values()):
                 known_unit_emb = torch.cat([vocab.unit_dense_feat_matrix[cat]
@@ -202,7 +202,7 @@ class ExtractModel(nn.Module):
                 if g.use_base_embedding:
                     known_unit_emb = known_unit_emb @ self.base_embeddings.weight
                     known_unit_emb = self.dropout(known_unit_emb)
-                    known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.log(7)
+                    known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(5)
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
 
         # Get known embedding sequences for the entire vocabulary.
@@ -227,6 +227,9 @@ class ExtractModel(nn.Module):
         # Get lost unit embeddings.
         lost_unit_weight = self.unit_aligner.weight
         lost_unit_emb = lost_unit_weight @ known_unit_emb
+        # with NoName(lost_unit_emb):
+        #     lost_unit_emb = (lost_unit_emb / (1e-8 + lost_unit_emb.norm(dim=-1, keepdim=True))) * math.sqrt(7)
+        #     lost_unit_emb.rename_('lost_unit', 'char_emb')
 
         # Get global (non-contextualized) log probs.
         unit_logits = known_unit_emb @ lost_unit_emb.t()
@@ -522,15 +525,18 @@ class ExtractModel(nn.Module):
             O2_mask = get_init()
             O2_mask[:, 1:] = 0.0
 
+        non_span_bias = math.log(0.2)
+        span_bias = math.log(0.8 / (g.max_word_length - g.min_word_length + 1))
+
         for l in range(1, max_length + 1):
             transitions = list()
             if g.one_span_hack:
                 # Case 'O'.
-                transitions.append(ctc[l - 1] + O_mask + self.lp_per_unmatched)
+                transitions.append(ctc[l - 1] + O_mask + self.lp_per_unmatched + non_span_bias)
                 # Case 'O2'.
-                transitions.append(ctc[l - 1] + O2_mask + self.lp_per_unmatched)
+                transitions.append(ctc[l - 1] + O2_mask + self.lp_per_unmatched + non_span_bias)
             else:
-                transitions.append(ctc[l - 1] + self.lp_per_unmatched)
+                transitions.append(ctc[l - 1] + self.lp_per_unmatched + non_span_bias)
             # Case 'E's.
             for word_len in range(g.min_word_length, g.max_word_length + 1):
                 prev_l = l - word_len
@@ -540,10 +546,10 @@ class ExtractModel(nn.Module):
                     end_idx = word_len - g.min_word_length
                     if g.one_span_hack:
                         transitions.append(
-                            (prev_v + E_mask + log_probs[:, start_idx, end_idx].align_as(prev_v)))
+                            (prev_v + E_mask + log_probs[:, start_idx, end_idx].align_as(prev_v)) + span_bias)
                     else:
                         transitions.append(
-                            (prev_v + log_probs[:, start_idx, end_idx].align_as(prev_v)))
+                            (prev_v + log_probs[:, start_idx, end_idx].align_as(prev_v)) + span_bias)
                 except (KeyError, IndexError):
                     transitions.append(get_init())
             # Sum up all alignments.

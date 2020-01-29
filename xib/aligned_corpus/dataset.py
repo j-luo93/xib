@@ -84,8 +84,11 @@ class AlignedDataset(Dataset):
                     uss = truncated_sentence.to_unsegmented(is_known_ipa=True,
                                                             is_lost_ipa=g.input_format == 'ipa',
                                                             annotated=True)
-                    if uss.segments and any(g.min_word_length <= segment.end - segment.start <= g.max_word_length for segment in uss.segments):
-                        to_add = True
+                    if uss.segments:
+                        for segment in uss.segments:
+                            if any(g.min_word_length <= ss.end - ss.start <= g.max_word_length for ss in segment.single_segments):
+                                to_add = True
+                                break
                 else:
                     to_add = True
 

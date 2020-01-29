@@ -336,6 +336,16 @@ class FixGotGermWithStemSmallCtcEmbedding(FixGotGermWithStemSmall):
 
 
 @reg
+class FixGotAngWithStemSmallCtcEmbedding(FixGotGermWithStemSmallCtcEmbedding):
+    known_lang: str = 'ang'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.small.got-ang.tsv'
+        self.vocab_path: str = './data/wulfila/processed/ang.small.matched.stems'
+
+
+@reg
 class FixGotAEOracleSpan(FixGotGermOracleSpan):
     known_lang: str = 'ae'
 

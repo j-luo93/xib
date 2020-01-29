@@ -323,13 +323,16 @@ class FixGotGermWithStemSmallCtcEmbedding(FixGotGermWithStemSmall):
     use_ctc: bool = True
     use_base_embedding: bool = True
     dense_embedding: bool = True
-    context_agg_mode: str = 'linear_interpolation'
+    # context_agg_mode: str = 'linear_interpolation'
     dim: int = 30
     reg_hyper: float = 0.1
-    use_s_prior: bool = False # TODO(j_luo) Remove this.
+    use_s_prior: bool = False  # TODO(j_luo) Remove this.
     dropout: float = 0.3
-    learning_rate: float = 0.3
+    # learning_rate: float = 0.3
     save_alignment: bool = True
+    min_word_length: int = 3
+    learning_rate: float = 0.1
+    context_agg_mode: str = 'log_interpolation'
 
 
 @reg

@@ -398,7 +398,7 @@ class ExtractModel(nn.Module):
             flat_ll = nh.flatten(matches.ll,
                                  ['len_s', 'len_e', 'vocab'], 'cand')
         else:
-            flat_ll = nh.flatten(matches.ll + viable_spans.p_weights.align_as(matches.ll),
+            flat_ll = nh.flatten(matches.ll,  # + viable_spans.p_weights.align_as(matches.ll),
                                  ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable = nh.flatten(viable_spans.viable.expand_as(matches.ll), ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable_ll = (~flat_viable) * (-9999.9) + flat_ll
@@ -439,11 +439,11 @@ class ExtractModel(nn.Module):
         if g.use_ctc:
             viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
             span_log_probs = viable_ll.logsumexp(dim='vocab')
-            ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
-            marginal = ctc_return.final_score
-
-            if g.update_p_weights:
-                marginal = marginal * (viable_spans.p_weights.logsumexp(dim=['len_s', 'len_e'])).exp()
+            if g.update_p_weights and self.training:
+                marginal = span_log_probs * viable_spans.p_weights.exp()
+            else:
+                ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
+                marginal = ctc_return.final_score
             # old_marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
             # old_marginal = old_marginal.logsumexp(dim='cand')
             # print(marginal.sum().item(), old_marginal.sum().item())
@@ -525,8 +525,9 @@ class ExtractModel(nn.Module):
             O2_mask = get_init()
             O2_mask[:, 1:] = 0.0
 
-        non_span_bias = math.log(0.2)
-        span_bias = math.log(0.8 / (g.max_word_length - g.min_word_length + 1))
+        # non_span_bias = math.log(0.2)
+        # span_bias = math.log(0.8 / (g.max_word_length - g.min_word_length + 1))
+        non_span_bias = span_bias = 0.0
 
         for l in range(1, max_length + 1):
             transitions = list()

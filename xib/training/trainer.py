@@ -180,11 +180,11 @@ class ExtractTrainer(BaseTrainer):
         self.ins_del_cost = g.init_ins_del_cost
         if g.save_alignment:
             self.add_callback('total_step', 1, self.save_alignment)
-        if g.update_p_weights:
-            self.add_callback('total_step', g.num_steps, self.update_p_weights)
+        # if g.update_p_weights:
+        #     self.add_callback('total_step', g.num_steps, self.update_p_weights)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
         # HACK(j_luo)
-        self._cnt = 1000
+        self._cnt = 100
 
     def update_p_weights(self):
 

@@ -195,12 +195,18 @@ class ExtractAnalyzer:
             loss_value = best_span_ll.sum()
         else:
             loss_value = model_ret.marginal.sum()
-        loss_weight = batch.batch_size if g.mean_mode == 'segment' else batch.lengths.sum()
+        not_zero = True
+        if g.update_p_weights:
+            loss_weight = model_ret.extracted.viable_spans.p_weights.exp().sum()
+            not_zero = loss_weight.item() > 1e-4
+            loss_value = loss_value * float(not_zero)
+        else:
+            loss_weight = batch.batch_size if g.mean_mode == 'segment' else batch.lengths.sum()
         loss_metric = Metric(loss_name, loss_value, loss_weight)
         metrics += loss_metric
 
         almt = model_ret.alignment
         if almt is not None:
-            reg = ((almt.sum(dim=0) - 1.0) ** 2).sum()
+            reg = ((almt.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
             metrics += Metric('reg', reg, loss_weight)
         return metrics

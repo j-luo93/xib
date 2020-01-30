@@ -584,7 +584,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
 
             top_matches = list()
             for pos, tag in tag_seq:
-                if tag != 0:
+                if tag != 0 and (not g.one_span_hack or tag != 1):
                     length = offset[tag]
                     end = pos - 1
                     start = end - length + 1

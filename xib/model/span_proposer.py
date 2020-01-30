@@ -105,8 +105,8 @@ class OracleStemSpanProposer(BaseSpanProposer):
         for i, sentence in enumerate(sentences):
             uss = sentence.to_unsegmented(is_lost_ipa=g.input_format == 'ipa', is_known_ipa=True, annotated=True)
             if uss.segments:
-                starts.append(uss.segments[0].start)
-                lens.append(uss.segments[0].end - starts[-1] + 1)
+                starts.append(uss.segments[0].single_segments[0].start)
+                lens.append(uss.segments[0].single_segments[0].end - starts[-1] + 1)
             else:
                 starts.append(0)
                 lens.append(lost_lengths[i])

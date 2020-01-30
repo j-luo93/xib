@@ -55,6 +55,8 @@ def should_include(groups: str, cat: Union[Cat, 'Name']) -> bool:
         return True
     if name.startswith('T') and 't' in groups:
         return True
+    if name.startswith('SLength') and 'l' in groups:
+        return True
     return False
 
 

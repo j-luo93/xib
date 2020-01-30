@@ -122,7 +122,15 @@ def standardize(s):
 
 
 def get_string(s: str) -> IPAString:
-    return IPAString(unicode_string=clean(sub(standardize(s))))
+    s = clean(sub(standardize(s)))
+    segs = s.split('nm')
+    segs = [seg + 'n' for seg in segs[:-1]] + [segs[-1]]
+    segs = [segs[0]] + ['m' + seg for seg in segs[1:]]
+    ipas = [IPAString(unicode_string=seg) for seg in segs]
+    ret = ipas[0]
+    for ipa in ipas[1:]:
+        ret = ret + ipa
+    return ret
 
 
 def get_dg_value(s: IPAString, dg) -> List:

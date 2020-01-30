@@ -111,6 +111,7 @@ class ExtractModel(nn.Module):
     add_argument('best_ctc', dtype=bool, default=False)
     add_argument('one_span_hack', dtype=bool, default=False)
     add_argument('dense_embedding', dtype=bool, default=False)
+    add_argument('non_span_bias', dtype=float, default=0.5)
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
@@ -503,12 +504,7 @@ class ExtractModel(nn.Module):
             # log_probs = torch.where(avg > -0.6, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
 
         def get_init():
-            # ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(-9999.9)
-            # HACK(j_luo)
-            if g.one_span_hack:
-                ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 3).fill_(-9999.9)
-            else:
-                ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(-9999.9)
+            ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2 + g.one_span_hack).fill_(-9999.9)
             ret.rename_('batch', 'tag')
             return ret
 
@@ -525,8 +521,12 @@ class ExtractModel(nn.Module):
             O2_mask = get_init()
             O2_mask[:, 1:] = 0.0
 
-        # non_span_bias = math.log(0.2)
-        # span_bias = math.log(0.8 / (g.max_word_length - g.min_word_length + 1))
+        # # HACK(j_luo)
+        # hack = True
+        # hack_per_step = math.log(0.5)
+
+        # non_span_bias = math.log(g.non_span_bias + 1e-8)
+        # span_bias = math.log((1.0 - g.non_span_bias + 1e-8) / (g.max_word_length - g.min_word_length + 1 + g.one_span_hack))
         non_span_bias = span_bias = 0.0
 
         for l in range(1, max_length + 1):

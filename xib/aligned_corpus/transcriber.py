@@ -46,6 +46,8 @@ _reverse_GVS = {
 
 
 def postprocess(phoneme: str, prefix: str = '', mode: str = 'none') -> str:
+    return (prefix + phoneme).replace('hw', 'h')
+
     if mode == 'none':
         return prefix + phoneme
 
@@ -54,6 +56,7 @@ def postprocess(phoneme: str, prefix: str = '', mode: str = 'none') -> str:
 
     for k, v in _reverse_GVS.items():
         phoneme = phoneme.replace(k, v)
+
     return prefix + phoneme
 
 

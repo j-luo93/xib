@@ -227,11 +227,36 @@ class ExtractManager(BaseManager):
         self.dl_reg.register_data_loader(task, g.data_path)
 
         lu_size = ku_size = None
+        char_sets = self.dl_reg[task].dataset.corpus.char_sets
+        lcs = char_sets[g.lost_lang]
+        kcs = BaseAlignedBatch.known_vocab.char_set
         if g.input_format == 'text':
-            char_sets = self.dl_reg[task].dataset.corpus.char_sets
-            lu_size = len(char_sets[g.lost_lang])
-            ku_size = len(BaseAlignedBatch.known_vocab.char_set)
+            lu_size = len(lcs)
+            ku_size = len(kcs)
         self.model = ExtractModel(lu_size, ku_size)
+        # HACK(j_luo)
+        from xib.aligned_corpus.ipa_sequence import IpaSequence
+
+        def align(lost_char, known_char):
+            known_id = kcs.unit2id[IpaSequence(known_char)]
+            lost_id = lcs.unit2id[lost_char]
+            self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
+        # align('m', 'm')
+        # align('k', 't͡ʃ')
+        # align('k', 'k')
+        # align('d', 'd')
+        # align('l', 'l')
+
+        # align('n', 'n')
+        # align('t', 't')
+        # align('w', 'w')
+        # align('h', 'h')
+        # align('b', 'b')
+        # align('b', 'f')
+        # align('b', 'v')
+        # align('j', 'j')
+        # align('þ', 'θ')
+
         if has_gpus():
             self.model.cuda()
         logging.info(str(self.model))

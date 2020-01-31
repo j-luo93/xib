@@ -86,7 +86,7 @@ class AlignedDataset(Dataset):
                                                             annotated=True)
                     if uss.segments:
                         for segment in uss.segments:
-                            if any(g.min_word_length <= ss.end - ss.start <= g.max_word_length for ss in segment.single_segments):
+                            if any(g.min_word_length <= ss.end - ss.start + 1 <= g.max_word_length for ss in segment.single_segments):
                                 to_add = True
                                 break
                 else:

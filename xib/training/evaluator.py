@@ -18,7 +18,7 @@ from dev_misc.devlib.named_tensor import NoName, get_named_range
 from dev_misc.trainlib import Metric, Metrics
 from dev_misc.trainlib.tracker.trackable import BaseTrackable
 from dev_misc.trainlib.tracker.tracker import Tracker
-from dev_misc.utils import deprecated, pbar
+from dev_misc.utils import deprecated, global_property, pbar
 from xib.aligned_corpus.corpus import (AlignedSentence, Segment,
                                        UnsegmentedSentence)
 from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
@@ -405,6 +405,16 @@ class AlignedExtractEvaluator(BaseEvaluator):
         return analyzed_metrics, annotations
 
     def evaluate(self, stage: str) -> Metrics:
+        if g.cut_off is not None:
+            # HACK(j_luo)
+            try:
+                self._cnt += 1
+            except AttributeError:
+                self._cnt = 0
+            self.cut_off = -g.cut_off[self._cnt]
+
+            logging.imp(f'cut off is set to {self.cut_off}')
+
         analyzed_metrics, annotations = self._evaluate_core(stage)
 
         # Write to file.
@@ -522,6 +532,14 @@ class AlignedExtractEvaluator(BaseEvaluator):
             return self._get_annotations_for_batch_ctc(model_ret, batch)
         else:
             return self._get_annotations_for_batch_plain(model_ret, batch)
+
+    @global_property
+    def cut_off(self):
+        pass
+
+    @cut_off.setter
+    def cut_off(self, value):
+        pass
 
     def _get_annotations_for_batch_ctc(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
         bkp = model_ret.ctc_return.bookkeeper

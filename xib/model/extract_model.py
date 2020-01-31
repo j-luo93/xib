@@ -104,6 +104,7 @@ class ExtractModel(nn.Module):
                  choices=['all', 'oracle_word', 'oracle_stem'], default='all', msg='How to generate candidates for spans.')
     add_argument('one2two', dtype=bool, default=False, msg='Use conv on both sides.')
     add_argument('ins_del_prior', dtype=float, default=0.1, msg='Prior value for insertion/deletion operations.')
+    add_argument('cut_off', dtype=float, nargs='+')
     add_argument('include_unmatched', dtype=bool, default=True, msg='Flag to include unmatched scores in the loss.')
     add_argument('em_training', dtype=bool, default=False)
     add_argument('use_ctc', dtype=bool, default=False)
@@ -477,6 +478,10 @@ class ExtractModel(nn.Module):
                                        ctc_return)
         return model_ret
 
+    @global_property
+    def cut_off(self):
+        pass
+
     def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT) -> CtcReturn:
         r"""To speed up DP, everything is packed into tensors.
 
@@ -498,10 +503,11 @@ class ExtractModel(nn.Module):
             log_probs, best_vocab = vocab_log_probs.max(dim='vocab')
             bookkeeper = CtcBookkeeper(best_vocab)
 
-            # warnings.warn('Only taking most confident ones.')
-            # len_range = get_named_range(log_probs.size('len_e'), 'len_e') + g.min_word_length
-            # avg = raw_vocab_log_probs.gather('vocab', best_vocab) / len_range.align_as(best_vocab)
-            # log_probs = torch.where(avg > -0.6, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
+            if g.cut_off is not None:
+                warnings.warn('Only taking most confident ones.')
+                len_range = get_named_range(log_probs.size('len_e'), 'len_e') + g.min_word_length
+                avg = raw_vocab_log_probs.gather('vocab', best_vocab) / len_range.align_as(best_vocab)
+                log_probs = torch.where(avg > self.cut_off, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
 
         def get_init():
             ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2 + g.one_span_hack).fill_(-9999.9)
@@ -543,6 +549,7 @@ class ExtractModel(nn.Module):
                 prev_l = l - word_len
                 try:
                     prev_v = ctc[prev_l]
+                    # FIXME(j_luo)  This is wrong if oracle spans are used.
                     start_idx = prev_l
                     end_idx = word_len - g.min_word_length
                     if g.one_span_hack:

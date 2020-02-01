@@ -450,8 +450,10 @@ class ExtractModel(nn.Module):
             # old_marginal = old_marginal.logsumexp(dim='cand')
             # print(marginal.sum().item(), old_marginal.sum().item())
         elif g.em_training:
-            weighted_total_ll = total_ll.logsumexp(dim='vocab') * viable_spans.p_weights.exp()
-            marginal = weighted_total_ll.sum(dim=['len_s', 'len_e']) / viable_spans.viable.sum(dim=['len_s', 'len_e'])
+            viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
+            viable_span_ll = viable_ll.logsumexp(dim='vocab')
+            weighted_ll = viable_span_ll * viable_spans.p_weights.exp()
+            marginal = weighted_ll.sum(dim=['len_s', 'len_e']) / viable_spans.viable.sum(dim=['len_s', 'len_e'])
             # if g.include_unmatched:
             #     marginal = torch.stack([marginal, unmatched_ll], new_name='stacked')
             #     marginal = marginal.logsumexp(dim='stacked')

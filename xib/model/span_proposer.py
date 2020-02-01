@@ -197,4 +197,4 @@ class AllSpanProposer(BaseSpanProposer):
         for k in self.p_weights:
             if k not in updated:
                 self.p_weights[k] *= g.momentum
-            self.p_weights[k] = self.p_weights[k] / (1e-8 + self.p_weights[k].sum())
+            #self.p_weights[k] = self.p_weights[k] / (1e-8 + self.p_weights[k].sum())

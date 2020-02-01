@@ -196,7 +196,7 @@ class ExtractAnalyzer:
         else:
             loss_value = model_ret.marginal.sum()
         not_zero = True
-        if g.update_p_weights:
+        if g.update_p_weights and g.use_ctc:
             loss_weight = model_ret.extracted.viable_spans.p_weights.exp().sum()
             not_zero = loss_weight.item() > 1e-4
             loss_value = loss_value * float(not_zero)

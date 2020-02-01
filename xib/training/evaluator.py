@@ -648,14 +648,15 @@ class AlignedExtractEvaluator(BaseEvaluator):
             pred = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
             length = sentence.lost_ipa_length if is_lost_ipa else sentence.lost_form_length
             if length >= g.min_word_length and m:
-                pred.annotate(s[0], e[0], mw[0])
+                pred.annotate([s[0]], [e[0]], mw[0])
 
             top_matched = list()
             for ss, ee, mlml, wlwl, ww in zip(s, e, ml, wl, mw):
                 uss = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
-                uss.annotate(ss, ee, ww)
-                match = _Match(mlml, wlwl, wlwl / (ee - ss + 1), uss)
+                uss.annotate([ss], [ee], ww)
+                length = (ee - ss + 1)
+                match = _Match(wlwl, wlwl / length, wlwl, wlwl / length, uss)
                 top_matched.append(match)
-            annotation_tuple = _AnnotationTuple(sentence, gold, pred, um, top_matched)
+            annotation_tuple = _AnnotationTuple(sentence, gold, pred, top_matched)
             ret.append(annotation_tuple)
         return ret

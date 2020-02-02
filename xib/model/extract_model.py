@@ -62,6 +62,7 @@ class CtcReturn(BaseBatch):
     final_nodes: FT
     final_score: FT
     bookkeeper: Optional[CtcBookkeeper] = None
+    expected_num_spans: Optional[FT] = None
 
 
 @batch_class
@@ -112,7 +113,9 @@ class ExtractModel(nn.Module):
     add_argument('best_ctc', dtype=bool, default=False)
     add_argument('one_span_hack', dtype=bool, default=False)
     add_argument('dense_embedding', dtype=bool, default=False)
+    add_argument('use_posterior_reg', dtype=bool, default=False)
     add_argument('non_span_bias', dtype=float, default=0.5)
+    add_argument('expected_ratio', dtype=float, default=0.2)
 
     def __init__(self, lost_size: int, known_size: int):
         super().__init__()
@@ -511,14 +514,20 @@ class ExtractModel(nn.Module):
                 avg = raw_vocab_log_probs.gather('vocab', best_vocab) / len_range.align_as(best_vocab)
                 log_probs = torch.where(avg > self.cut_off, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
 
-        def get_init():
-            ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2 + g.one_span_hack).fill_(-9999.9)
+        def get_init(init_value: float = -9999.9):
+            ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2 + g.one_span_hack).fill_(init_value)
             ret.rename_('batch', 'tag')
             return ret
 
         start = get_init()
         start[:, 0] = 0.0
         ctc[0] = start
+
+        if g.use_posterior_reg:
+            pr = dict()
+            pr_start = get_init()
+            pr_start[:, 0] = -99.9
+            pr[0] = pr_start
 
         # HACK(j_luo)
         if g.one_span_hack:
@@ -533,12 +542,16 @@ class ExtractModel(nn.Module):
         # hack = True
         # hack_per_step = math.log(0.5)
 
-        # non_span_bias = math.log(g.non_span_bias + 1e-8)
-        # span_bias = math.log((1.0 - g.non_span_bias + 1e-8) / (g.max_word_length - g.min_word_length + 1 + g.one_span_hack))
-        non_span_bias = span_bias = 0.0
+        non_span_bias = math.log(g.non_span_bias + 1e-8)
+        span_bias = math.log((1.0 - g.non_span_bias + 1e-8) /
+                             (g.max_word_length - g.min_word_length + 1 + g.one_span_hack))
+        # non_span_bias = span_bias = 0.0
 
         for l in range(1, max_length + 1):
             transitions = list()
+            pr_trans = list()
+            tmp = list()
+            another_tmp = list()
             if g.one_span_hack:
                 # Case 'O'.
                 transitions.append(ctc[l - 1] + O_mask + self.lp_per_unmatched + non_span_bias)
@@ -546,6 +559,11 @@ class ExtractModel(nn.Module):
                 transitions.append(ctc[l - 1] + O2_mask + self.lp_per_unmatched + non_span_bias)
             else:
                 transitions.append(ctc[l - 1] + self.lp_per_unmatched + non_span_bias)
+                if g.use_posterior_reg:
+                    # pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias))
+                    pr_trans.append((pr[l - 1] + self.lp_per_unmatched +
+                                     non_span_bias).align_to('batch', 'tag', 'new_tag'))
+
             # Case 'E's.
             for word_len in range(g.min_word_length, g.max_word_length + 1):
                 prev_l = l - word_len
@@ -558,27 +576,54 @@ class ExtractModel(nn.Module):
                         transitions.append(
                             (prev_v + E_mask + log_probs[:, start_idx, end_idx].align_as(prev_v)) + span_bias)
                     else:
-                        transitions.append(
-                            (prev_v + log_probs[:, start_idx, end_idx].align_as(prev_v)) + span_bias)
+                        e_trans = (prev_v + log_probs[:, start_idx, end_idx].align_as(prev_v)) + span_bias
+                        transitions.append(e_trans)
+                        if g.use_posterior_reg:
+                            tmp.extend([ctc[prev_l] + math.log(word_len), pr[prev_l]])
+                            another_tmp.append(span_bias + log_probs[:, start_idx, end_idx].expand_as(prev_v))
+                            # tmp = torch.stack([ctc[prev_l] + math.log(word_len), pr[prev_l]],
+                            #                   new_name='stacked').logsumexp(dim='stacked')
+                            # pr_trans.append(span_bias + log_probs[:, start_idx, end_idx].align_as(prev_v) + tmp)
                 except (KeyError, IndexError):
                     transitions.append(get_init())
+                    if g.use_posterior_reg:
+                        tmp.extend([get_init(), get_init()])
+                        another_tmp.append(get_init())
+                        # pr_trans.append(get_init())
+
+            if g.use_posterior_reg:
+                tmp = torch.stack(tmp, new_name='stacked').unflatten(
+                    'stacked', [('new_tag', g.max_word_length - g.min_word_length + 1), ('tmp', 2)])
+                tmp = tmp.logsumexp(dim='tmp')
+                pr_trans.append(torch.stack(another_tmp, new_name='new_tag') + tmp)
             # Sum up all alignments.
             if self.training:
                 if g.best_ctc:
                     ctc[l] = torch.stack(transitions, new_name='new_tag').max(dim='tag')[0].rename(new_tag='tag')
                 else:
                     ctc[l] = torch.stack(transitions, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+                    if g.use_posterior_reg:
+                        pr[l] = torch.cat(pr_trans, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+                        # pr[l] = torch.stack(pr_trans, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
             else:
                 best_value, best_prev_tag = torch.stack(transitions, new_name='new_tag').max(dim='tag')
                 ctc[l] = best_value.rename(new_tag='tag')
                 bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
 
         ctc = torch.stack([ctc[l] for l in range(max_length + 1)], new_name='length')
+        expected_num_spans = None
         with NoName(ctc, lengths):
             final_nodes = ctc[range(batch_size), :, lengths]
             final_nodes.rename_('batch', 'tag')
+
         if g.best_ctc or not self.training:
             final_score = final_nodes.max(dim='tag')[0]
         else:
             final_score = final_nodes.logsumexp(dim='tag')
-        return CtcReturn(final_nodes, final_score, bookkeeper)
+
+        if g.use_posterior_reg and self.training:
+            pr = torch.stack([pr[l] for l in range(max_length + 1)], new_name='length')
+            with NoName(pr, lengths):
+                pr_nodes = pr[range(batch_size), :, lengths]
+                expected_num_spans = (pr_nodes.logsumexp(dim=-1) - final_score).exp()
+        return CtcReturn(final_nodes, final_score, bookkeeper, expected_num_spans)

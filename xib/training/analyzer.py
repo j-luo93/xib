@@ -209,4 +209,11 @@ class ExtractAnalyzer:
         if almt is not None:
             reg = ((almt.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
             metrics += Metric('reg', reg, loss_weight)
+
+        if g.use_posterior_reg:
+            try:
+                pr_reg = Metric('posterior_spans', model_ret.ctc_return.expected_num_spans.sum(), batch.lengths.sum())
+                metrics += pr_reg
+            except:
+                pass
         return metrics

@@ -282,6 +282,9 @@ class ExtractTrainer(BaseTrainer):
                 loss = loss + metrics.reg.mean * g.reg_hyper
             except AttributeError:
                 pass
+
+            if g.use_posterior_reg:
+                loss = loss + 10.0 * (metrics.posterior_spans.mean - g.expected_ratio) ** 2
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()
 

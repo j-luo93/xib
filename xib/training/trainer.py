@@ -168,6 +168,7 @@ class ExtractTrainer(BaseTrainer):
     model: ExtractModel
 
     add_argument('reg_hyper', default=1.0, dtype=float, msg='Hyperparameter for alignment regularization.')
+    add_argument('pr_hyper', default=1.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('update_p_weights', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('p_weight_inc', default=50, dtype=int)
@@ -284,7 +285,7 @@ class ExtractTrainer(BaseTrainer):
                 pass
 
             if g.use_posterior_reg:
-                loss = loss + 10.0 * (metrics.posterior_spans.mean - g.expected_ratio) ** 2
+                loss = loss + g.pr_hyper * (metrics.posterior_spans.mean - g.expected_ratio) ** 2
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()
 

@@ -65,6 +65,7 @@ class AlignedDataset(Dataset):
 
     add_argument('noiseless', dtype=bool, default=False)
     add_argument('freq_hack', dtype=bool, default=False)
+    add_argument('min_segment_length', dtype=int)
 
     def __init__(self, corpus: AlignedCorpus):
         self.corpus = corpus
@@ -73,9 +74,10 @@ class AlignedDataset(Dataset):
         if g.freq_hack:
             logging.warning('FREQ HACK is used.')
             _data_str = set()
+        min_length = g.min_word_length if g.min_segment_length is None else g.min_segment_length
         for sentence in self.corpus.sentences:
             word_lengths = [word.lost_token.form_length for word in sentence.words]
-            splits = split_by_length(word_lengths, g.max_segment_length, g.min_word_length)
+            splits = split_by_length(word_lengths, g.max_segment_length, min_length)
             for start, end in splits:
                 truncated_sentence = AlignedSentence(sentence.words[start: end])
 

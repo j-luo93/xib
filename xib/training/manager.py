@@ -241,11 +241,11 @@ class ExtractManager(BaseManager):
             known_id = kcs.unit2id[IpaSequence(known_char)]
             lost_id = lcs.unit2id[lost_char]
             self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
-        # align('m', 'm')
-        # align('k', 't͡ʃ')
-        # align('k', 'k')
-        # align('d', 'd')
-        # align('l', 'l')
+        #align('m', 'm')
+        #align('k', 't͡ʃ')
+        #align('k', 'k')
+        #align('d', 'd')
+        #align('l', 'l')
 
         # align('n', 'n')
         # align('t', 't')

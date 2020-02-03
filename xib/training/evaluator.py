@@ -366,7 +366,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
         candidates = list()
         for i, anno in enumerate(annotations):
             for match in anno.top_matched:
-                candidates.append((match.avg_char_log_prob, i, match.hypothesis.segments[0].single_segments[0]))
+                candidates.append((match.raw_avg_char_log_prob, i, match.hypothesis.segments[0].single_segments[0]))
         candidates = sorted(candidates, key=lambda item: item[0], reverse=True)[:total_num_spans]
         # avg_char_log_probs = [anno.top_matched[0].avg_char_log_prob for anno in annotations]
         # aclp = np.asarray(avg_char_log_probs)

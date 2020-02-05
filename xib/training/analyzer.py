@@ -216,4 +216,11 @@ class ExtractAnalyzer:
                 metrics += pr_reg
             except:
                 pass
+
+        if g.use_constrained_learning:
+            vs = model_ret.extracted.viable_spans
+            total_length = batch.lengths.sum()
+            coverage = (vs.len_candidates * vs.p_weights).sum()
+            coverage = Metric('coverage', coverage, total_length)
+            metrics += coverage
         return metrics

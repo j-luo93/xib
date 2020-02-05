@@ -8,8 +8,9 @@ import torch.nn as nn
 from dev_misc import BT, FT, LT, add_argument, g, get_zeros
 from dev_misc.devlib import BaseBatch, batch_class, get_range
 from dev_misc.devlib.named_tensor import NoName, get_named_range
-from dev_misc.utils import WithholdKeys
+from dev_misc.utils import WithholdKeys, pbar
 from xib.aligned_corpus.corpus import AlignedSentence
+from xib.aligned_corpus.data_loader import AlignedDataLoader
 
 
 @batch_class
@@ -124,9 +125,15 @@ class AllSpanProposer(BaseSpanProposer):
 
     add_argument('momentum', dtype=float, default=0.5)
 
-    def __init__(self):
+    def __init__(self, dl: AlignedDataLoader):
         super().__init__()
         self.p_weights = dict()
+        for batch in pbar(dl):
+            self._get_p_weights(batch.sentences)
+        if g.use_constrained_learning:
+            logging.warning('This is extremely hacky.')
+            for i, w in enumerate(self.p_weights.values()):
+                self.register_parameter(f'{i}', w)
 
     def cuda(self):
         super().cuda()
@@ -156,6 +163,10 @@ class AllSpanProposer(BaseSpanProposer):
             if s_key not in self.p_weights:
                 uniform_weight = get_zeros(sentence.length, g.max_word_length + 1 - g.min_word_length)
                 uniform_weight = uniform_weight.fill_(1.0)
+                if g.use_constrained_learning:
+                    # uniform_weight = uniform_weight.fill_(0.01)
+                    uniform_weight = uniform_weight.fill_(-5.0)
+                    uniform_weight = torch.nn.Parameter(uniform_weight, True)
                 self.p_weights[s_key] = uniform_weight
             p_weights.append(self.p_weights[s_key])
         p_weights = torch.nn.utils.rnn.pad_sequence(p_weights, batch_first=True)
@@ -170,7 +181,7 @@ class AllSpanProposer(BaseSpanProposer):
         len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
         len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
         p_weights = self._get_p_weights(sentences)
-        p_weights = torch.nn.utils.rnn.pad_sequence(p_weights, batch_first=True)
+        # p_weights = torch.nn.utils.rnn.pad_sequence(p_weights, batch_first=True)
         p_weights.rename_('batch', 'len_s', 'len_e')
         return start_candidates, len_candidates, p_weights
 

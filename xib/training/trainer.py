@@ -169,6 +169,7 @@ class ExtractTrainer(BaseTrainer):
 
     add_argument('reg_hyper', default=1.0, dtype=float, msg='Hyperparameter for alignment regularization.')
     add_argument('pr_hyper', default=1.0, dtype=float)
+    add_argument('coverage_hyper', default=1.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('update_p_weights', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('p_weight_inc', default=50, dtype=int)
@@ -185,7 +186,7 @@ class ExtractTrainer(BaseTrainer):
         #     self.add_callback('total_step', g.num_steps, self.update_p_weights)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
         # HACK(j_luo)
-        self._cnt = 50
+        self._cnt = 2300
 
     def update_p_weights(self):
 
@@ -286,6 +287,8 @@ class ExtractTrainer(BaseTrainer):
 
             if g.use_posterior_reg:
                 loss = loss + g.pr_hyper * (metrics.posterior_spans.mean - g.expected_ratio) ** 2
+            if g.use_constrained_learning:
+                loss = loss + g.coverage_hyper * (metrics.coverage.mean - g.expected_ratio) ** 2
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()
 

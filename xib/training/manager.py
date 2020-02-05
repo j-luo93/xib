@@ -233,7 +233,7 @@ class ExtractManager(BaseManager):
         if g.input_format == 'text':
             lu_size = len(lcs)
             ku_size = len(kcs)
-        self.model = ExtractModel(lu_size, ku_size)
+        self.model = ExtractModel(lu_size, ku_size, self.dl_reg[task])
         # HACK(j_luo)
         from xib.aligned_corpus.ipa_sequence import IpaSequence
 

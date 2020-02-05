@@ -114,10 +114,11 @@ class ExtractModel(nn.Module):
     add_argument('one_span_hack', dtype=bool, default=False)
     add_argument('dense_embedding', dtype=bool, default=False)
     add_argument('use_posterior_reg', dtype=bool, default=False)
+    add_argument('use_constrained_learning', dtype=bool, default=False)
     add_argument('non_span_bias', dtype=float, default=0.5)
     add_argument('expected_ratio', dtype=float, default=0.2)
 
-    def __init__(self, lost_size: int, known_size: int):
+    def __init__(self, lost_size: int, known_size: int, dl):  # FIXME(j_luo) type hints here
         super().__init__()
         if g.use_base_embedding:
             if g.dense_embedding:
@@ -138,7 +139,10 @@ class ExtractModel(nn.Module):
                       'oracle_word': OracleWordSpanProposer,
                       'oracle_stem': OracleStemSpanProposer}
         sp_cls = opt2sp_cls[g.span_candidates]
-        self.span_proposer = sp_cls()
+        if g.span_candidates == 'all':
+            self.span_proposer = sp_cls(dl)
+        else:
+            self.span_proposer = sp_cls()
         if g.use_base_embedding:
             if g.dense_embedding:
                 self.base_embeddings = DenseFeatEmbedding('feat_emb', 'feat_group', 'char_emb', dim=g.dim)
@@ -347,8 +351,11 @@ class ExtractModel(nn.Module):
             matches.raw_ll = all_ll
             # NOTE(j_luo) `p_weights` is now in log scale.
             all_p_weights = get_zeros(batch_size, len_s, len_e)
-            all_p_weights.fill_(-9999.9)
-            all_p_weights[v_bi, v_lsi, v_lei] = (viable_spans.p_weights + 1e-8).log()
+            if g.use_constrained_learning:
+                all_p_weights[v_bi, v_lsi, v_lei] = viable_spans.p_weights.exp()
+            else:
+                all_p_weights.fill_(-9999.9)
+                all_p_weights[v_bi, v_lsi, v_lei] = (viable_spans.p_weights + 1e-8).log()
             viable_spans.p_weights = all_p_weights.rename('batch', 'len_s', 'len_e')
 
         extracted = Extracted(batch_size,
@@ -403,7 +410,7 @@ class ExtractModel(nn.Module):
             flat_ll = nh.flatten(matches.ll,
                                  ['len_s', 'len_e', 'vocab'], 'cand')
         else:
-            flat_ll = nh.flatten(matches.ll,# + viable_spans.p_weights.align_as(matches.ll),
+            flat_ll = nh.flatten(matches.ll,  # + viable_spans.p_weights.align_as(matches.ll),
                                  ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable = nh.flatten(viable_spans.viable.expand_as(matches.ll), ['len_s', 'len_e', 'vocab'], 'cand')
         flat_viable_ll = (~flat_viable) * (-9999.9) + flat_ll
@@ -441,7 +448,11 @@ class ExtractModel(nn.Module):
             best_span_ll = torch.max(best_span_ll, unmatched_ll)
         # Get marginal.
         ctc_return = None
-        if g.use_ctc:
+        if g.use_constrained_learning:
+            viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
+            span_log_probs = viable_ll.logsumexp(dim='vocab')
+            marginal = span_log_probs * viable_spans.p_weights
+        elif g.use_ctc:
             viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
             span_log_probs = viable_ll.logsumexp(dim='vocab')
             if g.update_p_weights and self.training and g.em_training:
@@ -453,14 +464,15 @@ class ExtractModel(nn.Module):
             # old_marginal = old_marginal.logsumexp(dim='cand')
             # print(marginal.sum().item(), old_marginal.sum().item())
         elif g.em_training:
-            #if self.training:
+            # if self.training:
             #    breakpoint()
             viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
             viable_span_ll = viable_ll.logsumexp(dim='vocab')
             p_exp = viable_spans.p_weights.exp()
             p_exp = torch.where(p_exp < 1e-3, torch.zeros_like(p_exp), p_exp)
             weighted_ll = viable_span_ll * p_exp
-            marginal = weighted_ll.sum(dim=['len_s', 'len_e']) / (1e-8 + p_exp.sum(dim=['len_s', 'len_e'])) # viable_spans.viable.sum(dim=['len_s', 'len_e'])
+            # viable_spans.viable.sum(dim=['len_s', 'len_e'])
+            marginal = weighted_ll.sum(dim=['len_s', 'len_e']) / (1e-8 + p_exp.sum(dim=['len_s', 'len_e']))
             # if g.include_unmatched:
             #     marginal = torch.stack([marginal, unmatched_ll], new_name='stacked')
             #     marginal = marginal.logsumexp(dim='stacked')

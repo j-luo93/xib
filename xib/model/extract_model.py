@@ -80,6 +80,37 @@ class ExtractModelReturn(BaseBatch):
     ctc_return: Optional[CtcReturn] = None
 
 
+class SpanBias(nn.Module):
+
+    add_argument('non_span_bias', dtype=float, default=0.5)
+    add_argument('bias_mode', dtype=str, default='none', choices=['none', 'fixed', 'learned'])
+
+    def __init__(self):
+        super().__init__()
+        self.span_lengths = list(range(g.min_word_length, g.max_word_length + 1))
+        if g.bias_mode == 'learned':
+            self.span_prior = nn.ParameterDict({
+                str(l): nn.Parameter(torch.tensor(0).float())
+                for l in self.span_lengths + [0]
+            })
+
+    def forward(self, is_span: bool):
+        if g.bias_mode == 'none':
+            if is_span:
+                return {l: 0.0 for l in self.span_lengths}
+            return 0.0
+        elif g.bias_mode == 'fixed':
+            if is_span:
+                return {l: math.log((1.0 - g.non_span_bias) / len(self.span_lengths)) for l in self.span_lengths}
+            return math.log(g.non_span_bias)
+        else:
+            with NoName(*self.span_prior.values()):
+                prior = torch.stack(list(self.span_prior.values()), new_name='stacked').log_softmax(dim='stacked')
+                if is_span:
+                    return {l: prior[l - g.min_word_length] for l in self.span_lengths}
+                return prior[-1]
+
+
 class ExtractModel(nn.Module):
 
     add_argument('g2p_window_size', default=3, dtype=int, msg='Window size for g2p layer.')
@@ -115,7 +146,6 @@ class ExtractModel(nn.Module):
     add_argument('dense_embedding', dtype=bool, default=False)
     add_argument('use_posterior_reg', dtype=bool, default=False)
     add_argument('use_constrained_learning', dtype=bool, default=False)
-    add_argument('non_span_bias', dtype=float, default=0.5)
     add_argument('expected_ratio', dtype=float, default=0.2)
 
     def __init__(self, lost_size: int, known_size: int, dl):  # FIXME(j_luo) type hints here
@@ -150,6 +180,8 @@ class ExtractModel(nn.Module):
                 self.base_embeddings = nn.Embedding(60, g.base_embedding_dim)
                 logging.imp('Base embeddigns initialized uniformly.')
                 nn.init.uniform_(self.base_embeddings.weight, -0.05, 0.05)
+
+        self.span_bias = SpanBias()
 
     @global_property
     def ins_del_cost(self):
@@ -396,7 +428,11 @@ class ExtractModel(nn.Module):
 
     @property
     def lp_per_unmatched(self) -> float:
+        # if self.training:
+        #     return 0.0
+            # return math.log(3.0 / self.unit_aligner.num_embeddings)
         return math.log(1.0 / self.unit_aligner.num_embeddings)
+        # return math.log(3.0 / self.unit_aligner.num_embeddings)
 
     def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, alignment: FT) -> ExtractModelReturn:
         # Get the best score and span.
@@ -406,6 +442,14 @@ class ExtractModel(nn.Module):
         # NOTE(j_luo) Some segments don't have any viable spans.
         nh = NameHelper()
         viable_spans = extracted.viable_spans
+
+        # try:
+        #     self._cnt += 1
+        # except:
+        #     self._cnt = 0
+        # if self._cnt == 2:
+        #     breakpoint()  # BREAKPOINT(j_luo)
+
         if g.em_training:
             flat_ll = nh.flatten(matches.ll,
                                  ['len_s', 'len_e', 'vocab'], 'cand')
@@ -519,6 +563,9 @@ class ExtractModel(nn.Module):
         batch_size = span_log_probs.size('batch')
         if self.training:
             log_probs = span_log_probs
+            vs = vocab_log_probs.size('vocab')
+            # HACK(j_luo)
+            hack = log_probs - math.log(vs)
             bookkeeper = None
         else:
             log_probs, best_vocab = vocab_log_probs.max(dim='vocab')
@@ -558,10 +605,13 @@ class ExtractModel(nn.Module):
         # hack = True
         # hack_per_step = math.log(0.5)
 
-        non_span_bias = math.log(g.non_span_bias + 1e-8)
-        span_bias = math.log((1.0 - g.non_span_bias + 1e-8) /
-                             (g.max_word_length - g.min_word_length + 1 + g.one_span_hack))
-        #non_span_bias = span_bias = 0.0
+        # non_span_bias = math.log(g.non_span_bias + 1e-8)
+        # span_bias = math.log((1.0 - g.non_span_bias + 1e-8) /
+        #                      (g.max_word_length - g.min_word_length + 1 + g.one_span_hack))
+        # non_span_bias = span_bias = 0.0
+
+        non_span_bias = self.span_bias(False)
+        span_biases = self.span_bias(True)
 
         for l in range(1, max_length + 1):
             transitions = list()
@@ -578,10 +628,13 @@ class ExtractModel(nn.Module):
                 if g.use_posterior_reg and self.training:
                     # pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias))
                     pr_trans.append((pr[l - 1] + self.lp_per_unmatched +
-                                     non_span_bias).align_to('batch', 'tag', 'new_tag'))
+ ).align_to('batch', 'tag', 'new_tag'))
+                    # pr_trans.append((pr[l - 1] + self.lp_per_unmatched +
+                    #                  non_span_bias).align_to('batch', 'tag', 'new_tag'))
 
             # Case 'E's.
             for word_len in range(g.min_word_length, g.max_word_length + 1):
+                span_bias = span_biases[word_len]
                 prev_l = l - word_len
                 try:
                     prev_v = ctc[prev_l]

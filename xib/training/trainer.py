@@ -186,7 +186,7 @@ class ExtractTrainer(BaseTrainer):
         #     self.add_callback('total_step', g.num_steps, self.update_p_weights)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
         # HACK(j_luo)
-        self._cnt = 2300
+        self._cnt = 100
 
     def update_p_weights(self):
 
@@ -244,7 +244,7 @@ class ExtractTrainer(BaseTrainer):
     def load(self, path: Path):
         saved = torch.load(path)
         smsd = saved['model']
-        self.model.load_state_dict(smsd)
+        self.model.load_state_dict(smsd, strict=False)
         logging.imp(f'Loading model from {path}.')
 
     def save(self, eval_metrics: Metrics):
@@ -286,7 +286,8 @@ class ExtractTrainer(BaseTrainer):
                 pass
 
             if g.use_posterior_reg:
-                loss = loss + g.pr_hyper * (metrics.posterior_spans.mean - g.expected_ratio) ** 2
+                loss = loss + g.pr_hyper * (metrics.posterior_spans.mean -
+                                            g.expected_ratio).clamp(max=0.0).abs()  # ** 2
             if g.use_constrained_learning:
                 loss = loss + g.coverage_hyper * (metrics.coverage.mean - g.expected_ratio) ** 2
             loss_per_split = loss / g.accum_gradients

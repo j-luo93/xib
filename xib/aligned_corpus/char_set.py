@@ -64,6 +64,8 @@ class CharSetFactory(Singleton):
                 all_units.update(content.cv_list)
             else:
                 all_units.update(content)
+        if not all_units:
+            raise ValueError(f'Contents cannot be empty or not iterable.')
 
         logging.imp(f'Getting the char set for {key}.')
         char_set = CharSet(all_units, lang, is_ipa)

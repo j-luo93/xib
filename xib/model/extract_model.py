@@ -17,6 +17,7 @@ from dev_misc.utils import WithholdKeys, cached_property, global_property
 from xib.aligned_corpus.char_set import DELETE_ID
 from xib.aligned_corpus.corpus import AlignedSentence
 from xib.aligned_corpus.data_loader import AlignedBatch
+from xib.aligned_corpus.vocabulary import Vocabulary
 from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
                              convert_to_dense)
 from xib.ipa import Category, Index, get_enum_by_cat, should_include
@@ -149,7 +150,7 @@ class ExtractModel(nn.Module):
     add_argument('use_constrained_learning', dtype=bool, default=False)
     add_argument('expected_ratio', dtype=float, default=0.2)
 
-    def __init__(self, lost_size: int, known_size: int, dl):  # FIXME(j_luo) type hints here
+    def __init__(self, lost_size: int, known_size: int, dl, vocab):  # FIXME(j_luo) type hints here
         super().__init__()
         if g.use_base_embedding:
             if g.dense_embedding:
@@ -183,6 +184,7 @@ class ExtractModel(nn.Module):
                 nn.init.uniform_(self.base_embeddings.weight, -0.05, 0.05)
 
         self.span_bias = SpanBias()
+        self.vocab = vocab
 
     @global_property
     def ins_del_cost(self):
@@ -228,8 +230,7 @@ class ExtractModel(nn.Module):
 
         return model_ret
 
-    def _get_repr(self, batch: AlignedBatch) -> Tuple[FT, FT, FT]:
-        vocab = batch.known_vocab
+    def get_known_unit_emb(self, vocab: Vocabulary) -> FT:
         # Get unit embeddings for each known unit.
         if g.dense_embedding and g.use_base_embedding:
             with Rename(*vocab.unit_dense_feat_matrix.values(), unit='batch'):
@@ -247,6 +248,11 @@ class ExtractModel(nn.Module):
                     known_unit_emb = known_unit_emb / \
                         (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(5)
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
+        return known_unit_emb
+
+    def _get_repr(self, batch: AlignedBatch) -> Tuple[FT, FT, FT]:
+        vocab = batch.known_vocab
+        known_unit_emb = self.get_known_unit_emb(vocab)
 
         # Get known embedding sequences for the entire vocabulary.
         max_len = vocab.indexed_segments.size('length')
@@ -266,17 +272,31 @@ class ExtractModel(nn.Module):
 
         return known_unit_emb, known_ctx_repr, known_ins_ctx_repr
 
-    def _get_costs(self, vocab_unit_id_seqs: LT, known_unit_emb: FT, known_ctx_repr: FT, known_ins_ctx_repr: FT) -> Tuple[Costs, FT]:
-        # Get lost unit embeddings.
+    def get_lost_unit_emb(self, known_unit_emb: FT) -> FT:
         lost_unit_weight = self.unit_aligner.weight
         lost_unit_emb = lost_unit_weight @ known_unit_emb
+        return lost_unit_emb
+
+    def _get_alignment_log_probs(self, known_unit_emb: FT, lost_unit_emb: FT) -> FT:
+        unit_logits = known_unit_emb @ lost_unit_emb.t()
+        unit_log_probs = unit_logits.log_softmax(dim=-1)
+        return unit_log_probs
+
+    def get_alignment(self) -> FT:
+        known_unit_emb = self.get_known_unit_emb(self.vocab)
+        lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
+        unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb)
+        return unit_log_probs.exp()
+
+    def _get_costs(self, vocab_unit_id_seqs: LT, known_unit_emb: FT, known_ctx_repr: FT, known_ins_ctx_repr: FT) -> Tuple[Costs, FT]:
+        # Get lost unit embeddings.
+        lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
         # with NoName(lost_unit_emb):
         #     lost_unit_emb = (lost_unit_emb / (1e-8 + lost_unit_emb.norm(dim=-1, keepdim=True))) * math.sqrt(7)
         #     lost_unit_emb.rename_('lost_unit', 'char_emb')
 
         # Get global (non-contextualized) log probs.
-        unit_logits = known_unit_emb @ lost_unit_emb.t()
-        unit_log_probs = unit_logits.log_softmax(dim=-1)
+        unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb)
         alignment = unit_log_probs.exp()
         with NoName(unit_log_probs, vocab_unit_id_seqs):
             global_log_probs = unit_log_probs[vocab_unit_id_seqs].rename('vocab', 'length', 'lost_unit')

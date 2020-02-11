@@ -172,7 +172,7 @@ class ExtractTrainer(BaseTrainer):
     add_argument('main_loss_hyper', default=1.0, dtype=float)
     add_argument('l_pr_hyper', default=1.0, dtype=float)
     add_argument('coverage_hyper', default=1.0, dtype=float)
-    add_argument('weight_hyper', default=0.1, dtype=float)
+    add_argument('weight_hyper', default=0.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('update_p_weights', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('p_weight_inc', default=50, dtype=int)
@@ -205,7 +205,7 @@ class ExtractTrainer(BaseTrainer):
                 }
             except:
                 to_save = {
-                    'unit_aligner': self.model.unit_aligner.state_dict(),
+                    'alignment': self.model.get_alignment().rename(None)
                 }
         else:
             to_save = {

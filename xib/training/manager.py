@@ -229,11 +229,12 @@ class ExtractManager(BaseManager):
         lu_size = ku_size = None
         char_sets = self.dl_reg[task].dataset.corpus.char_sets
         lcs = char_sets[g.lost_lang]
-        kcs = BaseAlignedBatch.known_vocab.char_set
+        vocab = BaseAlignedBatch.known_vocab
+        kcs = vocab.char_set
         if g.input_format == 'text':
             lu_size = len(lcs)
             ku_size = len(kcs)
-        self.model = ExtractModel(lu_size, ku_size, self.dl_reg[task])
+        self.model = ExtractModel(lu_size, ku_size, self.dl_reg[task], vocab)
         # HACK(j_luo)
         from xib.aligned_corpus.ipa_sequence import IpaSequence
 

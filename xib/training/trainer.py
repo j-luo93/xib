@@ -169,7 +169,10 @@ class ExtractTrainer(BaseTrainer):
 
     add_argument('reg_hyper', default=1.0, dtype=float, msg='Hyperparameter for alignment regularization.')
     add_argument('pr_hyper', default=1.0, dtype=float)
+    add_argument('main_loss_hyper', default=1.0, dtype=float)
+    add_argument('l_pr_hyper', default=1.0, dtype=float)
     add_argument('coverage_hyper', default=1.0, dtype=float)
+    add_argument('weight_hyper', default=0.1, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('update_p_weights', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('p_weight_inc', default=50, dtype=int)
@@ -229,6 +232,14 @@ class ExtractTrainer(BaseTrainer):
     def threshold(self, value):
         logging.imp(f'Setting threshold to {value}.')
 
+    @global_property
+    def er(self):
+        pass
+
+    @er.setter
+    def er(self, value):
+        logging.imp(f'Setting er to {value}.')
+
     def add_trackables(self):
         self.tracker.add_trackable('round', endless=True)
         self.tracker.add_trackable('total_step', total=g.num_steps)
@@ -276,20 +287,34 @@ class ExtractTrainer(BaseTrainer):
             ret = self.model(batch)
             metrics = self.analyzer.analyze(ret, batch)
 
+            wc = Metric('weight', self.model.unit_aligner.weight.abs().sum(), batch.batch_size)
+            metrics += wc
+
             if g.take_best_span:
                 loss = -metrics.best_ll.mean
             else:
                 loss = -metrics.marginal.mean
+
+            if g.use_posterior_reg:
+                # loss = loss + g.pr_hyper * (metrics.posterior_spans.mean -
+                #                             g.expected_ratio).clamp(max=0.0).abs()  # ** 2
+
+                pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0).abs()
+                # pr_loss = (metrics.posterior_spans.mean - g.expected_ratio).clamp(max=0.0) ** 2
+                # pr_loss = -metrics.posterior_spans.mean
+                l_pr_loss = -metrics.avg_log_probs.mean
+                loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
+
+            if g.use_constrained_learning:
+                loss = g.main_loss_hyper * loss + g.coverage_hyper * (metrics.coverage.mean - g.expected_ratio) ** 2
+
             try:
                 loss = loss + metrics.reg.mean * g.reg_hyper
             except AttributeError:
                 pass
 
-            if g.use_posterior_reg:
-                loss = loss + g.pr_hyper * (metrics.posterior_spans.mean -
-                                            g.expected_ratio).clamp(max=0.0).abs()  # ** 2
-            if g.use_constrained_learning:
-                loss = loss + g.coverage_hyper * (metrics.coverage.mean - g.expected_ratio) ** 2
+            loss = loss + g.weight_hyper * wc.mean
+
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()
 

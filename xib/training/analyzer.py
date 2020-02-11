@@ -214,6 +214,10 @@ class ExtractAnalyzer:
             try:
                 pr_reg = Metric('posterior_spans', model_ret.ctc_return.expected_num_spans.sum(), batch.lengths.sum())
                 metrics += pr_reg
+
+                # FIXME(j_luo) The weight is wrongly computed.
+                l_pr_reg = Metric('avg_log_probs', model_ret.ctc_return.expected_avg_log_probs.sum(), batch.batch_size)
+                metrics += l_pr_reg
             except:
                 pass
 

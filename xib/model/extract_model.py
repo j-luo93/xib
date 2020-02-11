@@ -63,6 +63,7 @@ class CtcReturn(BaseBatch):
     final_score: FT
     bookkeeper: Optional[CtcBookkeeper] = None
     expected_num_spans: Optional[FT] = None
+    expected_avg_log_probs: Optional[FT] = None
 
 
 @batch_class
@@ -243,7 +244,8 @@ class ExtractModel(nn.Module):
                 if g.use_base_embedding:
                     known_unit_emb = known_unit_emb @ self.base_embeddings.weight
                     known_unit_emb = self.dropout(known_unit_emb)
-                    known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(5)
+                    known_unit_emb = known_unit_emb / \
+                        (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(5)
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
 
         # Get known embedding sequences for the entire vocabulary.
@@ -443,13 +445,6 @@ class ExtractModel(nn.Module):
         nh = NameHelper()
         viable_spans = extracted.viable_spans
 
-        # try:
-        #     self._cnt += 1
-        # except:
-        #     self._cnt = 0
-        # if self._cnt == 2:
-        #     breakpoint()  # BREAKPOINT(j_luo)
-
         if g.em_training:
             flat_ll = nh.flatten(matches.ll,
                                  ['len_s', 'len_e', 'vocab'], 'cand')
@@ -589,8 +584,13 @@ class ExtractModel(nn.Module):
         if g.use_posterior_reg and self.training:
             pr = dict()
             pr_start = get_init()
-            pr_start[:, 0] = -99.9
+            pr_start[:, 0] = -20.0  # 99.9
             pr[0] = pr_start
+
+            l_pr = dict()
+            l_pr_start = get_init()
+            l_pr_start[:, 0] = 0.0
+            l_pr[0] = l_pr_start
 
         # HACK(j_luo)
         if g.one_span_hack:
@@ -618,6 +618,9 @@ class ExtractModel(nn.Module):
             pr_trans = list()
             tmp = list()
             another_tmp = list()
+
+            l_trans = list()
+            l_tmp = list()
             if g.one_span_hack:
                 # Case 'O'.
                 transitions.append(ctc[l - 1] + O_mask + self.lp_per_unmatched + non_span_bias)
@@ -627,8 +630,11 @@ class ExtractModel(nn.Module):
                 transitions.append(ctc[l - 1] + self.lp_per_unmatched + non_span_bias)
                 if g.use_posterior_reg and self.training:
                     # pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias))
-                    pr_trans.append((pr[l - 1] + self.lp_per_unmatched +
- ).align_to('batch', 'tag', 'new_tag'))
+                    pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias
+                                     ).align_to('batch', 'tag', 'new_tag'))
+                    add = torch.stack([l_pr[l - 1], ctc[l - 1]], new_name='stacked').logsumexp(dim='stacked')
+                    l_trans.append((add + self.lp_per_unmatched + non_span_bias
+                                    ).align_to('batch', 'tag', 'new_tag'))
                     # pr_trans.append((pr[l - 1] + self.lp_per_unmatched +
                     #                  non_span_bias).align_to('batch', 'tag', 'new_tag'))
 
@@ -645,11 +651,15 @@ class ExtractModel(nn.Module):
                         transitions.append(
                             (prev_v + E_mask + log_probs[:, start_idx, end_idx].align_as(prev_v)) + span_bias)
                     else:
-                        e_trans = (prev_v + log_probs[:, start_idx, end_idx].align_as(prev_v)) + span_bias
+                        lp = log_probs[:, start_idx, end_idx].expand_as(prev_v)
+                        e_trans = (prev_v + lp) + span_bias
                         transitions.append(e_trans)
                         if g.use_posterior_reg and self.training:
                             tmp.extend([ctc[prev_l] + math.log(word_len), pr[prev_l]])
-                            another_tmp.append(span_bias + log_probs[:, start_idx, end_idx].expand_as(prev_v))
+                            another_tmp.append(span_bias + lp)
+                            l_tmp.extend([ctc[prev_l] + lp / word_len, l_pr[prev_l]])
+                            # l_tmp.extend([ctc[prev_l] + lp, pr[prev_l]])
+
                             # tmp = torch.stack([ctc[prev_l] + math.log(word_len), pr[prev_l]],
                             #                   new_name='stacked').logsumexp(dim='stacked')
                             # pr_trans.append(span_bias + log_probs[:, start_idx, end_idx].align_as(prev_v) + tmp)
@@ -657,6 +667,7 @@ class ExtractModel(nn.Module):
                     transitions.append(get_init())
                     if g.use_posterior_reg and self.training:
                         tmp.extend([get_init(), get_init()])
+                        l_tmp.extend([get_init(), get_init()])
                         another_tmp.append(get_init())
                         # pr_trans.append(get_init())
 
@@ -664,7 +675,14 @@ class ExtractModel(nn.Module):
                 tmp = torch.stack(tmp, new_name='stacked').unflatten(
                     'stacked', [('new_tag', g.max_word_length - g.min_word_length + 1), ('tmp', 2)])
                 tmp = tmp.logsumexp(dim='tmp')
-                pr_trans.append(torch.stack(another_tmp, new_name='new_tag') + tmp)
+
+                l_tmp = torch.stack(l_tmp, new_name='stacked').unflatten(
+                    'stacked', [('new_tag', g.max_word_length - g.min_word_length + 1), ('tmp', 2)])
+                l_tmp = l_tmp.logsumexp(dim='tmp')
+
+                stacked_another_tmp = torch.stack(another_tmp, new_name='new_tag')
+                pr_trans.append(stacked_another_tmp + tmp)
+                l_trans.append(stacked_another_tmp + l_tmp)
             # Sum up all alignments.
             if self.training:
                 if g.best_ctc:
@@ -673,6 +691,7 @@ class ExtractModel(nn.Module):
                     ctc[l] = torch.stack(transitions, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
                     if g.use_posterior_reg and self.training:
                         pr[l] = torch.cat(pr_trans, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+                        l_pr[l] = torch.cat(l_trans, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
                         # pr[l] = torch.stack(pr_trans, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
             else:
                 best_value, best_prev_tag = torch.stack(transitions, new_name='new_tag').max(dim='tag')
@@ -680,7 +699,7 @@ class ExtractModel(nn.Module):
                 bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
 
         ctc = torch.stack([ctc[l] for l in range(max_length + 1)], new_name='length')
-        expected_num_spans = None
+        expected_num_spans = expected_avg_log_probs = None
         with NoName(ctc, lengths):
             final_nodes = ctc[range(batch_size), :, lengths]
             final_nodes.rename_('batch', 'tag')
@@ -692,7 +711,11 @@ class ExtractModel(nn.Module):
 
         if g.use_posterior_reg and self.training:
             pr = torch.stack([pr[l] for l in range(max_length + 1)], new_name='length')
-            with NoName(pr, lengths):
+            l_pr = torch.stack([l_pr[l] for l in range(max_length + 1)], new_name='length')
+            with NoName(pr, l_pr, lengths):
                 pr_nodes = pr[range(batch_size), :, lengths]
+                l_pr_nodes = l_pr[range(batch_size), :, lengths]
                 expected_num_spans = (pr_nodes.logsumexp(dim=-1) - final_score).exp()
-        return CtcReturn(final_nodes, final_score, bookkeeper, expected_num_spans)
+                expected_avg_log_probs = (l_pr_nodes.logsumexp(dim=-1) - final_score).exp()  # / expected_num_spans
+
+        return CtcReturn(final_nodes, final_score, bookkeeper, expected_num_spans, expected_avg_log_probs)

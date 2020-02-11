@@ -284,6 +284,7 @@ class ExtractManager(BaseManager):
         self.trainer.save_to(out_path)
         # # HACK(j_luo)
         # self.trainer.reset(reset_params=True)
+        self.trainer.er = 1.0
         while self.trainer.threshold > g.min_threshold:
             if g.update_p_weights:
                 # HACK(j_luo)
@@ -293,6 +294,10 @@ class ExtractManager(BaseManager):
 
             self.trainer.train(self.dl_reg)
             self.trainer.tracker.update('round')
+
+            # HACK(j_luo)
+            self.trainer.er *= 0.9
+            self.trainer.er = max(self.trainer.er, g.expected_ratio)
 
 
 class PrepareManager(BaseManager):

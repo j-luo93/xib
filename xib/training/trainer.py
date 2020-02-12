@@ -334,7 +334,7 @@ class ExtractTrainer(BaseTrainer):
             except AttributeError:
                 pass
 
-            loss = loss + g.weight_hyper * wc.mean
+            # loss = loss + g.weight_hyper * wc.mean
 
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()

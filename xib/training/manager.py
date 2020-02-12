@@ -278,7 +278,8 @@ class ExtractManager(BaseManager):
     def run(self):
         optim_cls = self._name2cls[g.optim_cls]
         self.trainer.threshold = g.init_threshold
-        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)  # , momentum=0.9, nesterov=True)
+        # , momentum=0.9, nesterov=True)
+        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
         # Save init parameters.
 
         out_path = g.log_dir / f'saved.init'
@@ -291,7 +292,7 @@ class ExtractManager(BaseManager):
                 # HACK(j_luo)
                 self.trainer.update_p_weights()
             self.trainer.reset()
-            self.trainer.set_optimizer(optim_cls, lr=g.learning_rate)
+            self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
 
             self.trainer.train(self.dl_reg)
             self.trainer.tracker.update('round')

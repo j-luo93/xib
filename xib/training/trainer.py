@@ -17,7 +17,7 @@ from dev_misc.trainlib.tb_writer import MetricWriter
 from dev_misc.utils import deprecated, global_property, pbar
 from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
 from xib.model.decipher_model import DecipherModel
-from xib.model.extract_model import ExtractModel
+from xib.model.extract_model import ExtractModel, ExtractModelReturn
 from xib.model.lm_model import LM, AdaptLM
 from xib.training.analyzer import (AdaptLMAnalyzer, DecipherAnalyzer,
                                    ExtractAnalyzer, LMAnalyzer)
@@ -294,8 +294,19 @@ class ExtractTrainer(BaseTrainer):
 
         for _ in pbar(range(g.accum_gradients), desc='accum_gradients'):
             batch = dl.get_next_batch()
-            ret = self.model(batch)
+            ret: ExtractModelReturn = self.model(batch)
             metrics = self.analyzer.analyze(ret, batch)
+
+            # HACK(j_luo)
+            if self.tracker['check'].value % self.check_interval == 0:
+                self.metric_writer.add_histogram(
+                    'known_unit_emb', ret.emb_repr.known_unit_emb, global_step=self.global_step)
+                self.metric_writer.add_histogram(
+                    'lost_unit_emb', ret.emb_repr.lost_unit_emb, global_step=self.global_step)
+                self.metric_writer.add_histogram(
+                    'known_ctx_repr', ret.emb_repr.known_ctx_repr, global_step=self.global_step)
+                self.metric_writer.add_histogram(
+                    'known_ins_ctx_repr', ret.emb_repr.known_ins_ctx_repr, global_step=self.global_step)
 
             wc = Metric('weight', self.model.unit_aligner.weight.abs().sum(), batch.batch_size)
             metrics += wc

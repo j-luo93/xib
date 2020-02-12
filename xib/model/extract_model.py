@@ -40,6 +40,14 @@ class Matches(BaseBatch):
 
 
 @batch_class
+class EmbAndRepr(BaseBatch):
+    known_unit_emb: FT
+    known_ctx_repr: FT
+    known_ins_ctx_repr: FT
+    lost_unit_emb: FT
+
+
+@batch_class
 class Extracted(BaseBatch):
     batch_size: int
     matches: Matches
@@ -80,6 +88,7 @@ class ExtractModelReturn(BaseBatch):
     extracted: Extracted
     alignment: Optional[FT] = None
     ctc_return: Optional[CtcReturn] = None
+    emb_repr: Optional[EmbAndRepr] = None
 
 
 class SpanBias(nn.Module):
@@ -207,13 +216,10 @@ class ExtractModel(nn.Module):
     def forward(self, batch: AlignedBatch) -> ExtractModelReturn:
         vocab = batch.known_vocab
         # Get relevant representations -- one for all the known units, and one for a contextualized representation.
-        known_unit_emb, known_ctx_repr, known_ins_ctx_repr = self._get_repr(batch)
+        emb_repr = self._get_repr(batch)
 
         # Get cost matrix.
-        costs, alignment = self._get_costs(vocab.indexed_segments,
-                                           known_unit_emb,
-                                           known_ctx_repr,
-                                           known_ins_ctx_repr)
+        costs, alignment = self._get_costs(vocab.indexed_segments, emb_repr)
 
         # Get span candidates:
         viable_spans = self.span_proposer(batch.unit_id_seqs, batch.lengths, batch.sentences)
@@ -227,7 +233,7 @@ class ExtractModel(nn.Module):
         extracted = self._get_extracted(matches, viable_spans, len(vocab))
 
         # Prepare return.
-        model_ret = self._prepare_return(batch, extracted, alignment)
+        model_ret = self._prepare_return(batch, extracted, alignment, emb_repr)
 
         return model_ret
 
@@ -251,7 +257,7 @@ class ExtractModel(nn.Module):
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
         return known_unit_emb
 
-    def _get_repr(self, batch: AlignedBatch) -> Tuple[FT, FT, FT]:
+    def _get_repr(self, batch: AlignedBatch) -> EmbAndRepr:
         vocab = batch.known_vocab
         known_unit_emb = self.get_known_unit_emb(vocab)
 
@@ -271,7 +277,10 @@ class ExtractModel(nn.Module):
         known_ctx_repr = known_ctx_repr.align_to('vocab', 'length', 'char_emb')
         known_ins_ctx_repr = known_ins_ctx_repr.align_to('vocab', 'length', 'char_emb')
 
-        return known_unit_emb, known_ctx_repr, known_ins_ctx_repr
+        lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
+
+        emb_repr = EmbAndRepr(known_unit_emb, known_ctx_repr, known_ins_ctx_repr, lost_unit_emb)
+        return emb_repr
 
     def get_lost_unit_emb(self, known_unit_emb: FT) -> FT:
         lost_unit_weight = self.unit_aligner.weight
@@ -290,26 +299,22 @@ class ExtractModel(nn.Module):
         unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=reverse)
         return unit_log_probs.exp()
 
-    def _get_costs(self, vocab_unit_id_seqs: LT, known_unit_emb: FT, known_ctx_repr: FT, known_ins_ctx_repr: FT) -> Tuple[Costs, FT]:
-        # Get lost unit embeddings.
-        lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
-        # with NoName(lost_unit_emb):
-        #     lost_unit_emb = (lost_unit_emb / (1e-8 + lost_unit_emb.norm(dim=-1, keepdim=True))) * math.sqrt(7)
-        #     lost_unit_emb.rename_('lost_unit', 'char_emb')
-
+    def _get_costs(self, vocab_unit_id_seqs: LT, emb_repr: EmbAndRepr) -> Tuple[Costs, FT]:
         # Get global (non-contextualized) log probs.
-        unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb)
+        unit_log_probs = self._get_alignment_log_probs(emb_repr.known_unit_emb, emb_repr.lost_unit_emb)
         with NoName(unit_log_probs, vocab_unit_id_seqs):
             global_log_probs = unit_log_probs[vocab_unit_id_seqs].rename('vocab', 'length', 'lost_unit')
         # Compute alignment -- set reverse to True if entropy regularization is used.
         if g.use_entropy_reg:
-            rev_unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=True)
+            rev_unit_log_probs = self._get_alignment_log_probs(emb_repr.known_unit_emb,
+                                                               emb_repr.lost_unit_emb,
+                                                               reverse=True)
             alignment = rev_unit_log_probs.exp()
         else:
             alignment = unit_log_probs.exp()
 
         # Get contextualized log probs.
-        sub_ctx_logits = known_ctx_repr @ lost_unit_emb.t()
+        sub_ctx_logits = emb_repr.known_ctx_repr @ emb_repr.lost_unit_emb.t()
         sub_ctx_log_probs = sub_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
 
         def interpolate(ctx, plain):
@@ -329,7 +334,7 @@ class ExtractModel(nn.Module):
         sub = -sub_weighted_log_probs
 
         # Get secondary costs for insertions.
-        ins_ctx_logits = known_ins_ctx_repr @ lost_unit_emb.t()
+        ins_ctx_logits = emb_repr.known_ins_ctx_repr @ emb_repr.lost_unit_emb.t()
         ins_ctx_log_probs = ins_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
         ins = -ins_weighted_log_probs + self.ins_del_cost
@@ -463,7 +468,7 @@ class ExtractModel(nn.Module):
         return math.log(1.0 / self.unit_aligner.num_embeddings)
         # return math.log(3.0 / self.unit_aligner.num_embeddings)
 
-    def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, alignment: FT) -> ExtractModelReturn:
+    def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, alignment: FT, emb_repr: EmbAndRepr) -> ExtractModelReturn:
         # Get the best score and span.
         matches = extracted.matches
         len_e = matches.ll.size('len_e')
@@ -562,7 +567,8 @@ class ExtractModel(nn.Module):
                                        best_span_ll,
                                        extracted,
                                        alignment,
-                                       ctc_return)
+                                       ctc_return,
+                                       emb_repr)
         return model_ret
 
     @global_property

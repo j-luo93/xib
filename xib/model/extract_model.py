@@ -148,6 +148,7 @@ class ExtractModel(nn.Module):
     add_argument('dense_embedding', dtype=bool, default=False)
     add_argument('use_posterior_reg', dtype=bool, default=False)
     add_argument('use_constrained_learning', dtype=bool, default=False)
+    add_argument('use_entropy_reg', dtype=bool, default=False)
     add_argument('expected_ratio', dtype=float, default=0.2)
 
     def __init__(self, lost_size: int, known_size: int, dl, vocab):  # FIXME(j_luo) type hints here
@@ -277,15 +278,16 @@ class ExtractModel(nn.Module):
         lost_unit_emb = lost_unit_weight @ known_unit_emb
         return lost_unit_emb
 
-    def _get_alignment_log_probs(self, known_unit_emb: FT, lost_unit_emb: FT) -> FT:
+    def _get_alignment_log_probs(self, known_unit_emb: FT, lost_unit_emb: FT, reverse: bool = False) -> FT:
         unit_logits = known_unit_emb @ lost_unit_emb.t()
-        unit_log_probs = unit_logits.log_softmax(dim=-1)
+        dim = 0 if reverse else -1
+        unit_log_probs = unit_logits.log_softmax(dim=dim)
         return unit_log_probs
 
-    def get_alignment(self) -> FT:
+    def get_alignment(self, reverse: bool = False) -> FT:
         known_unit_emb = self.get_known_unit_emb(self.vocab)
         lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
-        unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb)
+        unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=reverse)
         return unit_log_probs.exp()
 
     def _get_costs(self, vocab_unit_id_seqs: LT, known_unit_emb: FT, known_ctx_repr: FT, known_ins_ctx_repr: FT) -> Tuple[Costs, FT]:
@@ -297,9 +299,14 @@ class ExtractModel(nn.Module):
 
         # Get global (non-contextualized) log probs.
         unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb)
-        alignment = unit_log_probs.exp()
         with NoName(unit_log_probs, vocab_unit_id_seqs):
             global_log_probs = unit_log_probs[vocab_unit_id_seqs].rename('vocab', 'length', 'lost_unit')
+        # Compute alignment -- set reverse to True if entropy regularization is used.
+        if g.use_entropy_reg:
+            rev_unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=True)
+            alignment = rev_unit_log_probs.exp()
+        else:
+            alignment = unit_log_probs.exp()
 
         # Get contextualized log probs.
         sub_ctx_logits = known_ctx_repr @ lost_unit_emb.t()

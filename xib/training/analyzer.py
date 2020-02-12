@@ -207,7 +207,10 @@ class ExtractAnalyzer:
 
         almt = model_ret.alignment
         if almt is not None:
-            reg = ((almt.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
+            if g.use_entropy_reg:
+                reg = -(almt * (1e-8 + almt).log()).sum() * float(not_zero)
+            else:
+                reg = ((almt.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
             metrics += Metric('reg', reg, loss_weight)
 
         if g.use_posterior_reg:

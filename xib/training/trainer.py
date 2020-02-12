@@ -188,14 +188,20 @@ class ExtractTrainer(BaseTrainer):
         # if g.update_p_weights:
         #     self.add_callback('total_step', g.num_steps, self.update_p_weights)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
+        self.add_callback('check', self.check_interval, self.write_summaries)
         # HACK(j_luo)
         self._cnt = 100
 
     def update_p_weights(self):
-
         sentences, spans = self.evaluator.get_best_spans(self.stage, self._cnt)
         self.model.span_proposer.update(sentences, spans)
         self._cnt += g.p_weight_inc
+
+    def write_summaries(self, metrics: Metrics):
+        metrics = metrics.with_prefix_('check')
+        self.metric_writer.add_metrics(metrics, self.global_step)
+        self.metric_writer.add_histogram(
+            'unit_aligner', self.model.unit_aligner.weight.data, global_step=self.global_step)
 
     def save_alignment(self):
         if g.input_format == 'text':
@@ -267,12 +273,16 @@ class ExtractTrainer(BaseTrainer):
                 logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
                 self.save_to(out_path)
 
-    def evaluate(self):
-        eval_metrics = super().evaluate()
+    @property
+    def global_step(self) -> int:
         # HACK(j_luo)
         nr, ns = map(int, self.stage.split('_'))
         global_step = nr * g.num_steps + ns
-        self.metric_writer.add_metrics(eval_metrics, global_step)
+        return global_step
+
+    def evaluate(self):
+        eval_metrics = super().evaluate()
+        self.metric_writer.add_metrics(eval_metrics, self.global_step)
 
     def should_terminate(self):
         return self.tracker.is_finished('total_step')

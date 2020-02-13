@@ -161,6 +161,7 @@ class ExtractModel(nn.Module):
     add_argument('expected_ratio', dtype=float, default=0.2)
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
+    add_argument('positive_reward_only', dtype=bool, default=False)
 
     def __init__(self, lost_size: int, known_size: int, dl, vocab):  # FIXME(j_luo) type hints here
         super().__init__()
@@ -602,7 +603,7 @@ class ExtractModel(nn.Module):
             log_probs = span_log_probs
             vs = vocab_log_probs.size('vocab')
             # HACK(j_luo)
-            hack = log_probs - math.log(vs)
+            hack = log_probs + math.log(vs)
             bookkeeper = None
         else:
             log_probs, best_vocab = vocab_log_probs.max(dim='vocab')
@@ -678,10 +679,10 @@ class ExtractModel(nn.Module):
                     # pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias))
                     pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias
                                      ).align_to('batch', 'tag', 'new_tag'))
-                    # # HACK(j_luo)
-                    add = torch.stack([l_pr[l - 1], ctc[l - 1] + self.baseline],
-                                      new_name='stacked').logsumexp(dim='stacked')
-                    # add = l_pr[l - 1]
+                    # # # HACK(j_luo)
+                    # add = torch.stack([l_pr[l - 1], ctc[l - 1] + self.baseline],
+                    #                   new_name='stacked').logsumexp(dim='stacked')
+                    add = l_pr[l - 1]
                     l_trans.append((add + self.lp_per_unmatched + non_span_bias
                                     ).align_to('batch', 'tag', 'new_tag'))
                     # pr_trans.append((pr[l - 1] + self.lp_per_unmatched +
@@ -706,7 +707,18 @@ class ExtractModel(nn.Module):
                         if g.use_posterior_reg and self.training:
                             tmp.extend([ctc[prev_l] + math.log(word_len), pr[prev_l]])
                             another_tmp.append(span_bias + lp)
-                            l_tmp.extend([ctc[prev_l] + lp / word_len, l_pr[prev_l]])
+
+                            # HACK(j_luo)
+                            # reward = (lp + math.log(vs)) / word_len
+                            reward = lp / word_len
+                            if g.positive_reward_only:
+                                pos = reward > self.baseline
+                                reward = torch.where(pos,
+                                                     reward - self.baseline,
+                                                     torch.full_like(reward, -9999.9))
+                            else:
+                                reward = reward - self.baseline
+                            l_tmp.extend([ctc[prev_l] + reward, l_pr[prev_l]])
                             # l_tmp.extend([ctc[prev_l] + lp, pr[prev_l]])
 
                             # tmp = torch.stack([ctc[prev_l] + math.log(word_len), pr[prev_l]],

@@ -320,7 +320,10 @@ class ExtractTrainer(BaseTrainer):
                 # loss = loss + g.pr_hyper * (metrics.posterior_spans.mean -
                 #                             g.expected_ratio).clamp(max=0.0).abs()  # ** 2
 
+                # pr_loss = (self.er - metrics.posterior_spans.mean).clamp(max=0.0).abs()
                 pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0).abs()
+                # pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0) ** 2
+
                 # pr_loss = (metrics.posterior_spans.mean - g.expected_ratio).clamp(max=0.0) ** 2
                 # pr_loss = -metrics.posterior_spans.mean
                 l_pr_loss = -metrics.avg_log_probs.mean

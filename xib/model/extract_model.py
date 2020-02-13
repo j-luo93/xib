@@ -159,6 +159,8 @@ class ExtractModel(nn.Module):
     add_argument('use_constrained_learning', dtype=bool, default=False)
     add_argument('use_entropy_reg', dtype=bool, default=False)
     add_argument('expected_ratio', dtype=float, default=0.2)
+    add_argument('init_expected_ratio', dtype=float, default=1.0)
+    add_argument('baseline', dtype=float)
 
     def __init__(self, lost_size: int, known_size: int, dl, vocab):  # FIXME(j_luo) type hints here
         super().__init__()
@@ -468,6 +470,13 @@ class ExtractModel(nn.Module):
         return math.log(1.0 / self.unit_aligner.num_embeddings)
         # return math.log(3.0 / self.unit_aligner.num_embeddings)
 
+    @property
+    def baseline(self) -> float:
+        if g.baseline is None:
+            return self.lp_per_unmatched
+        else:
+            return math.log(g.baseline)
+
     def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, alignment: FT, emb_repr: EmbAndRepr) -> ExtractModelReturn:
         # Get the best score and span.
         matches = extracted.matches
@@ -610,6 +619,10 @@ class ExtractModel(nn.Module):
             ret.rename_('batch', 'tag')
             return ret
 
+        # HACK(j_luo)
+        if g.best_ctc:
+            log_probs = log_probs / 2.0
+
         start = get_init()
         start[:, 0] = 0.0
         ctc[0] = start
@@ -665,7 +678,10 @@ class ExtractModel(nn.Module):
                     # pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias))
                     pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias
                                      ).align_to('batch', 'tag', 'new_tag'))
-                    add = torch.stack([l_pr[l - 1], ctc[l - 1]], new_name='stacked').logsumexp(dim='stacked')
+                    # # HACK(j_luo)
+                    add = torch.stack([l_pr[l - 1], ctc[l - 1] + self.baseline],
+                                      new_name='stacked').logsumexp(dim='stacked')
+                    # add = l_pr[l - 1]
                     l_trans.append((add + self.lp_per_unmatched + non_span_bias
                                     ).align_to('batch', 'tag', 'new_tag'))
                     # pr_trans.append((pr[l - 1] + self.lp_per_unmatched +

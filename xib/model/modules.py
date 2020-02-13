@@ -103,7 +103,10 @@ class DenseFeatEmbedding(FeatEmbedding):
                 e = get_enum_by_cat(cat)
                 nf = len(e)
                 emb_dict[cat.name] = nn.Parameter(torch.zeros(nf, self.dim))
+                # logging.warning('dense feature embedding init to 0.0')
+                # emb_dict[cat.name].data.fill_(0.0)
                 logging.warning('dense feature embedding init')
+                torch.nn.init.uniform_(emb_dict[cat.name], -0.1, 0.1)
                 torch.nn.init.uniform_(emb_dict[cat.name], -0.1, 0.1)
         return nn.ParameterDict(emb_dict)
 

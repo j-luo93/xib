@@ -336,6 +336,21 @@ class FixGotGermWithStemSmallCtcEmbedding(FixGotGermWithStemSmall):
 
 
 @reg
+class FixSanityCheck(FixGotGermWithStemSmallCtcEmbedding):
+    pr_hyper: float = 0.0
+    main_loss_hyper: float = 0.0
+    save_alignment: bool = True
+    eval_interval: int = 250
+    num_steps: int = 500
+    l_pr_hyper: float = 10.0
+    bias_mode: str = 'learned'
+    use_posterior_reg: bool = True
+    check_interval: int = 10
+    learning_rate: float = 0.1
+    reg_hyper: float = 0.01
+
+
+@reg
 class FixGotAngWithStemSmallCtcEmbedding(FixGotGermWithStemSmallCtcEmbedding):
     known_lang: str = 'ang'
 

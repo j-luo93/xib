@@ -1,4 +1,5 @@
 import logging
+import math
 from abc import ABC, abstractmethod
 from typing import Optional, Sequence, Tuple
 
@@ -209,3 +210,34 @@ class AllSpanProposer(BaseSpanProposer):
             if k not in updated:
                 self.p_weights[k] *= g.momentum
             #self.p_weights[k] = self.p_weights[k] / (1e-8 + self.p_weights[k].sum())
+
+
+class SpanBias(nn.Module):
+
+    add_argument('non_span_bias', dtype=float, default=0.5)
+    add_argument('bias_mode', dtype=str, default='none', choices=['none', 'fixed', 'learned'])
+
+    def __init__(self):
+        super().__init__()
+        self.span_lengths = list(range(g.min_word_length, g.max_word_length + 1))
+        if g.bias_mode == 'learned':
+            self.span_prior = nn.ParameterDict({
+                str(l): nn.Parameter(torch.tensor(0).float())  # pylint: disable=not-callable
+                for l in self.span_lengths + [0]
+            })
+
+    def forward(self, is_span: bool):
+        if g.bias_mode == 'none':
+            if is_span:
+                return {l: 0.0 for l in self.span_lengths}
+            return 0.0
+        elif g.bias_mode == 'fixed':
+            if is_span:
+                return {l: math.log((1.0 - g.non_span_bias) / len(self.span_lengths)) for l in self.span_lengths}
+            return math.log(g.non_span_bias)
+        else:
+            with NoName(*self.span_prior.values()):
+                prior = torch.stack(list(self.span_prior.values()), new_name='stacked').log_softmax(dim='stacked')
+                if is_span:
+                    return {l: prior[l - g.min_word_length] for l in self.span_lengths}
+                return prior[-1]

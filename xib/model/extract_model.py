@@ -25,7 +25,8 @@ from xib.ipa.process import (Segment, Segmentation, SegmentWindow, SegmentX,
                              Span)
 from xib.model.modules import AdaptLayer, FeatEmbedding
 from xib.model.span_proposer import (AllSpanProposer, OracleStemSpanProposer,
-                                     OracleWordSpanProposer, ViableSpans)
+                                     OracleWordSpanProposer, SpanBias,
+                                     ViableSpans)
 
 from .modules import DenseFeatEmbedding
 
@@ -89,37 +90,6 @@ class ExtractModelReturn(BaseBatch):
     alignment: Optional[FT] = None
     ctc_return: Optional[CtcReturn] = None
     emb_repr: Optional[EmbAndRepr] = None
-
-
-class SpanBias(nn.Module):
-
-    add_argument('non_span_bias', dtype=float, default=0.5)
-    add_argument('bias_mode', dtype=str, default='none', choices=['none', 'fixed', 'learned'])
-
-    def __init__(self):
-        super().__init__()
-        self.span_lengths = list(range(g.min_word_length, g.max_word_length + 1))
-        if g.bias_mode == 'learned':
-            self.span_prior = nn.ParameterDict({
-                str(l): nn.Parameter(torch.tensor(0).float())
-                for l in self.span_lengths + [0]
-            })
-
-    def forward(self, is_span: bool):
-        if g.bias_mode == 'none':
-            if is_span:
-                return {l: 0.0 for l in self.span_lengths}
-            return 0.0
-        elif g.bias_mode == 'fixed':
-            if is_span:
-                return {l: math.log((1.0 - g.non_span_bias) / len(self.span_lengths)) for l in self.span_lengths}
-            return math.log(g.non_span_bias)
-        else:
-            with NoName(*self.span_prior.values()):
-                prior = torch.stack(list(self.span_prior.values()), new_name='stacked').log_softmax(dim='stacked')
-                if is_span:
-                    return {l: prior[l - g.min_word_length] for l in self.span_lengths}
-                return prior[-1]
 
 
 class ExtractModel(nn.Module):
@@ -436,27 +406,24 @@ class ExtractModel(nn.Module):
         transitions = list()
         if (kl - 1, ll) in fs:
             if g.one2two:
-                del_cost = costs.sub[:, kl - 1, DELETE_ID].unsqueeze(dim=-1)  # - math.log(g.ins_del_prior)
+                del_cost = costs.sub[:, kl - 1, DELETE_ID].unsqueeze(dim=-1)
             else:
                 del_cost = self.ins_del_cost
             transitions.append(fs[(kl - 1, ll)] + del_cost)
         if not g.one2two and (kl, ll - 1) in fs:
-            # if g.use_conv_both_sides:
-            #     ins_cost = costs[:, kl - 1, INSERT_ID].unsqueeze(dim=-1) - math.log(g.ins_del_prior)
-            # else:
             ins_cost = self.ins_del_cost
             transitions.append(fs[(kl, ll - 1)] + ins_cost)
         if g.one2two and (kl - 1, ll - 2) in fs:
             first_lost_ids = viable_spans.unit_id_seqs[:, ll - 2]
-            sub_cost = costs.sub[:, kl - 1, first_lost_ids]  # - math.log(g.ins_del_prior)
+            sub_cost = costs.sub[:, kl - 1, first_lost_ids]
             second_lost_ids = viable_spans.unit_id_seqs[:, ll - 1]
-            ins_cost = costs.ins[:, kl - 1, second_lost_ids]  # - math.log(g.ins_del_prior)
+            ins_cost = costs.ins[:, kl - 1, second_lost_ids]
             transitions.append(fs[(kl - 1, ll - 2)] + ins_cost + sub_cost)
         if (kl - 1, ll - 1) in fs:
             lost_ids = viable_spans.unit_id_seqs[:, ll - 1]
             sub_cost = costs.sub[:, kl - 1, lost_ids]
             if g.one2two:
-                sub_cost = sub_cost  # - math.log(1.0 - g.ins_del_prior)
+                sub_cost = sub_cost
             transitions.append(fs[(kl - 1, ll - 1)] + sub_cost)
         if transitions:
             all_s = torch.stack(transitions, dim=-1)
@@ -465,11 +432,7 @@ class ExtractModel(nn.Module):
 
     @property
     def lp_per_unmatched(self) -> float:
-        # if self.training:
-        #     return 0.0
-            # return math.log(3.0 / self.unit_aligner.num_embeddings)
         return math.log(1.0 / self.unit_aligner.num_embeddings)
-        # return math.log(3.0 / self.unit_aligner.num_embeddings)
 
     @property
     def baseline(self) -> float:
@@ -541,22 +504,13 @@ class ExtractModel(nn.Module):
             else:
                 ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
                 marginal = ctc_return.final_score
-            # old_marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
-            # old_marginal = old_marginal.logsumexp(dim='cand')
-            # print(marginal.sum().item(), old_marginal.sum().item())
         elif g.em_training:
-            # if self.training:
-            #    breakpoint()
             viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
             viable_span_ll = viable_ll.logsumexp(dim='vocab')
             p_exp = viable_spans.p_weights.exp()
             p_exp = torch.where(p_exp < 1e-3, torch.zeros_like(p_exp), p_exp)
             weighted_ll = viable_span_ll * p_exp
-            # viable_spans.viable.sum(dim=['len_s', 'len_e'])
             marginal = weighted_ll.sum(dim=['len_s', 'len_e']) / (1e-8 + p_exp.sum(dim=['len_s', 'len_e']))
-            # if g.include_unmatched:
-            #     marginal = torch.stack([marginal, unmatched_ll], new_name='stacked')
-            #     marginal = marginal.logsumexp(dim='stacked')
         elif g.include_unmatched:
             marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
             marginal = marginal.logsumexp(dim='cand')
@@ -648,15 +602,6 @@ class ExtractModel(nn.Module):
             O2_mask = get_init()
             O2_mask[:, 1:] = 0.0
 
-        # # HACK(j_luo)
-        # hack = True
-        # hack_per_step = math.log(0.5)
-
-        # non_span_bias = math.log(g.non_span_bias + 1e-8)
-        # span_bias = math.log((1.0 - g.non_span_bias + 1e-8) /
-        #                      (g.max_word_length - g.min_word_length + 1 + g.one_span_hack))
-        # non_span_bias = span_bias = 0.0
-
         non_span_bias = self.span_bias(False)
         span_biases = self.span_bias(True)
 
@@ -676,17 +621,11 @@ class ExtractModel(nn.Module):
             else:
                 transitions.append(ctc[l - 1] + self.lp_per_unmatched + non_span_bias)
                 if g.use_posterior_reg and self.training:
-                    # pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias))
                     pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias
                                      ).align_to('batch', 'tag', 'new_tag'))
-                    # # # HACK(j_luo)
-                    # add = torch.stack([l_pr[l - 1], ctc[l - 1] + self.baseline],
-                    #                   new_name='stacked').logsumexp(dim='stacked')
                     add = l_pr[l - 1]
                     l_trans.append((add + self.lp_per_unmatched + non_span_bias
                                     ).align_to('batch', 'tag', 'new_tag'))
-                    # pr_trans.append((pr[l - 1] + self.lp_per_unmatched +
-                    #                  non_span_bias).align_to('batch', 'tag', 'new_tag'))
 
             # Case 'E's.
             for word_len in range(g.min_word_length, g.max_word_length + 1):
@@ -708,8 +647,6 @@ class ExtractModel(nn.Module):
                             tmp.extend([ctc[prev_l] + math.log(word_len), pr[prev_l]])
                             another_tmp.append(span_bias + lp)
 
-                            # HACK(j_luo)
-                            # reward = (lp + math.log(vs)) / word_len
                             reward = lp / word_len
                             if g.positive_reward_only:
                                 pos = reward > self.baseline
@@ -719,11 +656,6 @@ class ExtractModel(nn.Module):
                             else:
                                 reward = reward - self.baseline
                             l_tmp.extend([ctc[prev_l] + reward, l_pr[prev_l]])
-                            # l_tmp.extend([ctc[prev_l] + lp, pr[prev_l]])
-
-                            # tmp = torch.stack([ctc[prev_l] + math.log(word_len), pr[prev_l]],
-                            #                   new_name='stacked').logsumexp(dim='stacked')
-                            # pr_trans.append(span_bias + log_probs[:, start_idx, end_idx].align_as(prev_v) + tmp)
                 except (KeyError, IndexError):
                     transitions.append(get_init())
                     if g.use_posterior_reg and self.training:

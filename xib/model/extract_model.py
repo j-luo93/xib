@@ -16,7 +16,7 @@ from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
 from dev_misc.utils import WithholdKeys, cached_property, global_property
 from xib.aligned_corpus.char_set import DELETE_ID
 from xib.aligned_corpus.corpus import AlignedSentence
-from xib.aligned_corpus.data_loader import AlignedBatch
+from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
 from xib.aligned_corpus.vocabulary import Vocabulary
 from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
                              convert_to_dense)
@@ -59,6 +59,7 @@ class Extracted(BaseBatch):
 class Costs(BaseBatch):
     sub: FT
     ins: FT
+    alignment: FT
 
 
 @batch_class
@@ -71,36 +72,24 @@ class CtcBookkeeper(BaseBatch):
 class CtcReturn(BaseBatch):
     final_nodes: FT
     final_score: FT
+    expected_num_spans: FT
+    expected_avg_log_probs: FT
     bookkeeper: Optional[CtcBookkeeper] = None
-    expected_num_spans: Optional[FT] = None
-    expected_avg_log_probs: Optional[FT] = None
 
 
 @batch_class
 class ExtractModelReturn(BaseBatch):
-    start: LT
-    end: LT
-    top_matched_ll: FT
-    top_matched_vocab: LT
-    unmatched_ll: FT
-    marginal: FT
-    top_word_ll: FT
-    best_span_ll: FT
+    emb_repr: EmbAndRepr
     extracted: Extracted
-    alignment: Optional[FT] = None
-    ctc_return: Optional[CtcReturn] = None
-    emb_repr: Optional[EmbAndRepr] = None
+    costs: Costs
+    ctc_return: CtcReturn
 
 
 class ExtractModel(nn.Module):
 
     add_argument('g2p_window_size', default=3, dtype=int, msg='Window size for g2p layer.')
-    add_argument('max_num_words', default=1, dtype=int, msg='Max number of extracted words.')
     add_argument('top_k_predictions', default=10, dtype=int, msg='Number of top predictions to keep.')
     add_argument('max_word_length', default=10, dtype=int, msg='Max length of extracted words.')
-    add_argument('init_threshold', default=0.05, dtype=float,
-                 msg='Initial value of threshold to determine whether two words are matched.')
-    add_argument('use_adapt', default=False, dtype=bool, msg='Flag to use adapter layer.')
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
@@ -108,32 +97,21 @@ class ExtractModel(nn.Module):
                  choices=['log_interpolation', 'linear_interpolation', 'log_add', 'dilute'])
     add_argument('dilute_hyper', dtype=float, default=0.5)
     add_argument('debug', dtype=bool, default=False, msg='Flag to enter debug mode.')
-    add_argument('truncate_unextracted', dtype=bool, default=False, msg='Flag to enter debug mode.')
-    add_argument('use_empty_symbol', dtype=bool, default=False, msg='Flag to use empty symbol')
     add_argument('use_base_embedding', dtype=bool, default=False,
                  msg='Flag to use base embeddings to compute character embeddings.')
     add_argument('base_embedding_dim', dtype=int, default=250, msg='Dimensionality for base embeddings.')
     add_argument('span_candidates', dtype=str,
                  choices=['all', 'oracle_word', 'oracle_stem'], default='all', msg='How to generate candidates for spans.')
     add_argument('one2two', dtype=bool, default=False, msg='Use conv on both sides.')
-    add_argument('ins_del_prior', dtype=float, default=0.1, msg='Prior value for insertion/deletion operations.')
     add_argument('cut_off', dtype=float, nargs='+')
-    add_argument('include_unmatched', dtype=bool, default=True, msg='Flag to include unmatched scores in the loss.')
-    add_argument('em_training', dtype=bool, default=False)
-    add_argument('use_ctc', dtype=bool, default=False)
-    add_argument('use_s_prior', dtype=bool, default=False)
-    add_argument('best_ctc', dtype=bool, default=False)
-    add_argument('one_span_hack', dtype=bool, default=False)
     add_argument('dense_embedding', dtype=bool, default=False)
-    add_argument('use_posterior_reg', dtype=bool, default=False)
-    add_argument('use_constrained_learning', dtype=bool, default=False)
     add_argument('use_entropy_reg', dtype=bool, default=False)
     add_argument('expected_ratio', dtype=float, default=0.2)
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
     add_argument('positive_reward_only', dtype=bool, default=False)
 
-    def __init__(self, lost_size: int, known_size: int, dl, vocab):  # FIXME(j_luo) type hints here
+    def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
         if g.use_base_embedding:
             if g.dense_embedding:
@@ -145,8 +123,6 @@ class ExtractModel(nn.Module):
         self.unit_aligner = nn.Embedding(lost_size, known_size)
         logging.imp('Unit aligner initialized to 0.')
         self.unit_aligner.weight.data.fill_(0.0)
-        # logging.imp('Unit aligner initialized uniformly.')
-        # nn.init.uniform_(self.unit_aligner.weight, -0.01, 0.01)
         self.conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.ins_conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
@@ -154,16 +130,13 @@ class ExtractModel(nn.Module):
                       'oracle_word': OracleWordSpanProposer,
                       'oracle_stem': OracleStemSpanProposer}
         sp_cls = opt2sp_cls[g.span_candidates]
-        if g.span_candidates == 'all':
-            self.span_proposer = sp_cls(dl)
-        else:
-            self.span_proposer = sp_cls()
+        self.span_proposer = sp_cls()
         if g.use_base_embedding:
             if g.dense_embedding:
                 self.base_embeddings = DenseFeatEmbedding('feat_emb', 'feat_group', 'char_emb', dim=g.dim)
             else:
                 self.base_embeddings = nn.Embedding(60, g.base_embedding_dim)
-                logging.imp('Base embeddigns initialized uniformly.')
+                logging.imp('Base embeddings initialized uniformly.')
                 nn.init.uniform_(self.base_embeddings.weight, -0.05, 0.05)
 
         self.span_bias = SpanBias()
@@ -172,11 +145,6 @@ class ExtractModel(nn.Module):
     @global_property
     def ins_del_cost(self):
         pass
-
-    def state_dict(self, *args, **kwargs):
-        sd = super().state_dict(*args, **kwargs)
-        sd['span_proposer'] = self.span_proposer.state_dict(*args, **kwargs)
-        return sd
 
     @cached_property
     def effective_categories(self) -> List[Category]:
@@ -192,7 +160,7 @@ class ExtractModel(nn.Module):
         emb_repr = self._get_repr(batch)
 
         # Get cost matrix.
-        costs, alignment = self._get_costs(vocab.indexed_segments, emb_repr)
+        costs = self._get_costs(vocab.indexed_segments, emb_repr)
 
         # Get span candidates:
         viable_spans = self.span_proposer(batch.unit_id_seqs, batch.lengths, batch.sentences)
@@ -206,7 +174,7 @@ class ExtractModel(nn.Module):
         extracted = self._get_extracted(matches, viable_spans, len(vocab))
 
         # Prepare return.
-        model_ret = self._prepare_return(batch, extracted, alignment, emb_repr)
+        model_ret = self._prepare_return(batch, extracted, costs, emb_repr)
 
         return model_ret
 
@@ -272,7 +240,7 @@ class ExtractModel(nn.Module):
         unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=reverse)
         return unit_log_probs.exp()
 
-    def _get_costs(self, vocab_unit_id_seqs: LT, emb_repr: EmbAndRepr) -> Tuple[Costs, FT]:
+    def _get_costs(self, vocab_unit_id_seqs: LT, emb_repr: EmbAndRepr) -> Costs:
         # Get global (non-contextualized) log probs.
         unit_log_probs = self._get_alignment_log_probs(emb_repr.known_unit_emb, emb_repr.lost_unit_emb)
         with NoName(unit_log_probs, vocab_unit_id_seqs):
@@ -312,9 +280,9 @@ class ExtractModel(nn.Module):
         ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
         ins = -ins_weighted_log_probs + self.ins_del_cost
 
-        costs = Costs(sub, ins)
+        costs = Costs(sub, ins, alignment)
 
-        return costs, alignment
+        return costs
 
     def _get_matches(self, costs: Costs, viable_spans: ViableSpans, vocab_lengths: LT) -> Matches:
         nk = costs.sub.size('vocab')
@@ -327,7 +295,7 @@ class ExtractModel(nn.Module):
             fs[(0, 0)] = get_zeros(nk, nl)
             with NoName(costs.sub):
                 for i in range(1, mkl + 1):
-                    del_cost = costs.sub[:, i - 1, DELETE_ID].unsqueeze(dim=-1)  # - math.log(g.ins_del_prior)
+                    del_cost = costs.sub[:, i - 1, DELETE_ID].unsqueeze(dim=-1)
                     fs[(i, 0)] = fs[(i - 1, 0)] + del_cost
         else:
             for i in range(mkl + 1):
@@ -377,7 +345,7 @@ class ExtractModel(nn.Module):
         lsi = get_named_range(len_s, 'len_s').expand_as(viable)
         lei = get_named_range(len_e, 'len_e').expand_as(viable)
         vs = matches.ll.size('vocab')
-        with NoName(bi, lsi, lei, viable, matches.ll, viable_spans.p_weights):
+        with NoName(bi, lsi, lei, viable, matches.ll):
             v_bi = bi[viable]
             v_lsi = lsi[viable]
             v_lei = lei[viable]
@@ -388,14 +356,6 @@ class ExtractModel(nn.Module):
             # NOTE(j_luo) Remember to add the prior for vocab.
             matches.ll = all_ll - math.log(vocab_size)
             matches.raw_ll = all_ll
-            # NOTE(j_luo) `p_weights` is now in log scale.
-            all_p_weights = get_zeros(batch_size, len_s, len_e)
-            if g.use_constrained_learning:
-                all_p_weights[v_bi, v_lsi, v_lei] = viable_spans.p_weights.exp()
-            else:
-                all_p_weights.fill_(-9999.9)
-                all_p_weights[v_bi, v_lsi, v_lei] = (viable_spans.p_weights + 1e-8).log()
-            viable_spans.p_weights = all_p_weights.rename('batch', 'len_s', 'len_e')
 
         extracted = Extracted(batch_size,
                               matches,
@@ -441,98 +401,20 @@ class ExtractModel(nn.Module):
         else:
             return math.log(g.baseline)
 
-    def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, alignment: FT, emb_repr: EmbAndRepr) -> ExtractModelReturn:
+    def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, costs: Costs, emb_repr: EmbAndRepr) -> ExtractModelReturn:
         # Get the best score and span.
-        matches = extracted.matches
-        len_e = matches.ll.size('len_e')
-        vs = len(batch.known_vocab)
         # NOTE(j_luo) Some segments don't have any viable spans.
-        nh = NameHelper()
+        matches = extracted.matches
         viable_spans = extracted.viable_spans
-
-        if g.em_training:
-            flat_ll = nh.flatten(matches.ll,
-                                 ['len_s', 'len_e', 'vocab'], 'cand')
-        else:
-            flat_ll = nh.flatten(matches.ll,  # + viable_spans.p_weights.align_as(matches.ll),
-                                 ['len_s', 'len_e', 'vocab'], 'cand')
-        flat_viable = nh.flatten(viable_spans.viable.expand_as(matches.ll), ['len_s', 'len_e', 'vocab'], 'cand')
-        flat_viable_ll = (~flat_viable) * (-9999.9) + flat_ll
-        # Add probs for unextracted characters.
-        if g.truncate_unextracted:
-            # Truncate unextracted segments.
-            max_lengths_to_consider = batch.lengths.clamp(max=g.max_word_length)
-            unextracted = max_lengths_to_consider.align_as(viable_spans.len_candidates) - viable_spans.len_candidates
-        else:
-            unextracted = batch.lengths.align_as(viable_spans.len_candidates) - viable_spans.len_candidates
-        unextracted = torch.where(viable_spans.viable, unextracted, torch.zeros_like(unextracted))
-        unextracted = unextracted.expand_as(matches.ll)
-        flat_unextracted = nh.flatten(unextracted, ['len_s', 'len_e', 'vocab'], 'cand')
-        flat_unextracted_ll = flat_unextracted * self.lp_per_unmatched
-        flat_total_ll = flat_viable_ll + flat_unextracted_ll
-        # Get the top candiates based on total scores.
-        k = min(g.top_k_predictions, flat_total_ll.size('cand'))
-        top_matched_ll, top_span_ind = torch.topk(flat_total_ll, k, dim='cand')
-        top_word_ll = flat_viable_ll.gather('cand', top_span_ind)
-        start_idx = top_span_ind // (len_e * vs)
-        end_idx = top_span_ind % (len_e * vs) // vs
-        batch_idx = torch.arange(batch.batch_size).unsqueeze(dim=-1)
-        with NoName(start_idx, end_idx, viable_spans.start_candidates, viable_spans.end_candidates):
-            # pylint: disable=unsubscriptable-object
-            start = viable_spans.start_candidates[batch_idx, start_idx, end_idx]
-            end = viable_spans.end_candidates[batch_idx, start_idx, end_idx]
-        top_matched_vocab = top_span_ind % vs
-        # Get unmatched scores -- no word is matched for the entire inscription.
-        unmatched_ll = batch.lengths * self.lp_per_unmatched
-        total_ll = nh.unflatten(flat_total_ll, 'cand', ['len_s', 'len_e', 'vocab'])
-        total_span_ll = nh.flatten(total_ll, ['len_s', 'len_e'], 'span')
-        best_span_ll, _ = total_span_ll.max(dim='span')
-        best_span_ll = best_span_ll.logsumexp(dim='vocab')
-        if g.include_unmatched:
-            best_span_ll = torch.max(best_span_ll, unmatched_ll)
+        not_viable_mask = (~viable_spans.viable).expand_as(matches.ll)
+        viable_ll = matches.ll + (-9999.9) * not_viable_mask.float()
         # Get marginal.
-        ctc_return = None
-        if g.use_constrained_learning:
-            viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
-            span_log_probs = viable_ll.logsumexp(dim='vocab')
-            marginal = span_log_probs * viable_spans.p_weights
-        elif g.use_ctc:
-            viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
-            span_log_probs = viable_ll.logsumexp(dim='vocab')
-            if g.update_p_weights and self.training and g.em_training:
-                marginal = span_log_probs * viable_spans.p_weights.exp()
-            else:
-                ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
-                marginal = ctc_return.final_score
-        elif g.em_training:
-            viable_ll = nh.unflatten(flat_viable_ll, 'cand', ['len_s', 'len_e', 'vocab'])
-            viable_span_ll = viable_ll.logsumexp(dim='vocab')
-            p_exp = viable_spans.p_weights.exp()
-            p_exp = torch.where(p_exp < 1e-3, torch.zeros_like(p_exp), p_exp)
-            weighted_ll = viable_span_ll * p_exp
-            marginal = weighted_ll.sum(dim=['len_s', 'len_e']) / (1e-8 + p_exp.sum(dim=['len_s', 'len_e']))
-        elif g.include_unmatched:
-            marginal = torch.cat([flat_total_ll, unmatched_ll.align_to('batch', 'cand')], dim='cand')
-            marginal = marginal.logsumexp(dim='cand')
-        else:
-            marginal = flat_total_ll.logsumexp(dim='cand')
-
-        if g.use_s_prior:
-            s_log_probs = -(1e-8 + viable_spans.viable.sum(dim=['len_s', 'len_e'])).log()
-            marginal = marginal + s_log_probs
-
-        model_ret = ExtractModelReturn(start,
-                                       end,
-                                       top_matched_ll,
-                                       top_matched_vocab,
-                                       unmatched_ll,
-                                       marginal,
-                                       top_word_ll,
-                                       best_span_ll,
+        span_log_probs = viable_ll.logsumexp(dim='vocab')
+        ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
+        model_ret = ExtractModelReturn(emb_repr,
                                        extracted,
-                                       alignment,
-                                       ctc_return,
-                                       emb_repr)
+                                       costs,
+                                       ctc_return)
         return model_ret
 
     @global_property
@@ -553,12 +435,9 @@ class ExtractModel(nn.Module):
         ctc = dict()
         max_length = lengths.max().item()
         batch_size = span_log_probs.size('batch')
+        bookkeeper = None
         if self.training:
             log_probs = span_log_probs
-            vs = vocab_log_probs.size('vocab')
-            # HACK(j_luo)
-            hack = log_probs + math.log(vs)
-            bookkeeper = None
         else:
             log_probs, best_vocab = vocab_log_probs.max(dim='vocab')
             bookkeeper = CtcBookkeeper(best_vocab)
@@ -570,19 +449,15 @@ class ExtractModel(nn.Module):
                 log_probs = torch.where(avg > self.cut_off, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
 
         def get_init(init_value: float = -9999.9):
-            ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2 + g.one_span_hack).fill_(init_value)
+            ret = get_zeros(batch_size, g.max_word_length - g.min_word_length + 2).fill_(init_value)
             ret.rename_('batch', 'tag')
             return ret
-
-        # HACK(j_luo)
-        if g.best_ctc:
-            log_probs = log_probs / 2.0
 
         start = get_init()
         start[:, 0] = 0.0
         ctc[0] = start
 
-        if g.use_posterior_reg and self.training:
+        if self.training:
             pr = dict()
             pr_start = get_init()
             pr_start[:, 0] = -20.0  # 99.9
@@ -592,15 +467,6 @@ class ExtractModel(nn.Module):
             l_pr_start = get_init()
             l_pr_start[:, 0] = 0.0
             l_pr[0] = l_pr_start
-
-        # HACK(j_luo)
-        if g.one_span_hack:
-            E_mask = get_init()
-            E_mask[:, 0] = 0.0
-            O_mask = get_init()
-            O_mask[:, 0] = 0.0
-            O2_mask = get_init()
-            O2_mask[:, 1:] = 0.0
 
         non_span_bias = self.span_bias(False)
         span_biases = self.span_bias(True)
@@ -613,19 +479,13 @@ class ExtractModel(nn.Module):
 
             l_trans = list()
             l_tmp = list()
-            if g.one_span_hack:
-                # Case 'O'.
-                transitions.append(ctc[l - 1] + O_mask + self.lp_per_unmatched + non_span_bias)
-                # Case 'O2'.
-                transitions.append(ctc[l - 1] + O2_mask + self.lp_per_unmatched + non_span_bias)
-            else:
-                transitions.append(ctc[l - 1] + self.lp_per_unmatched + non_span_bias)
-                if g.use_posterior_reg and self.training:
-                    pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias
-                                     ).align_to('batch', 'tag', 'new_tag'))
-                    add = l_pr[l - 1]
-                    l_trans.append((add + self.lp_per_unmatched + non_span_bias
-                                    ).align_to('batch', 'tag', 'new_tag'))
+            transitions.append(ctc[l - 1] + self.lp_per_unmatched + non_span_bias)
+            if self.training:
+                pr_trans.append((pr[l - 1] + self.lp_per_unmatched + non_span_bias
+                                 ).align_to('batch', 'tag', 'new_tag'))
+                add = l_pr[l - 1]
+                l_trans.append((add + self.lp_per_unmatched + non_span_bias
+                                ).align_to('batch', 'tag', 'new_tag'))
 
             # Case 'E's.
             for word_len in range(g.min_word_length, g.max_word_length + 1):
@@ -636,35 +496,31 @@ class ExtractModel(nn.Module):
                     # FIXME(j_luo)  This is wrong if oracle spans are used.
                     start_idx = prev_l
                     end_idx = word_len - g.min_word_length
-                    if g.one_span_hack:
-                        transitions.append(
-                            (prev_v + E_mask + log_probs[:, start_idx, end_idx].align_as(prev_v)) + span_bias)
-                    else:
-                        lp = log_probs[:, start_idx, end_idx].expand_as(prev_v)
-                        e_trans = (prev_v + lp) + span_bias
-                        transitions.append(e_trans)
-                        if g.use_posterior_reg and self.training:
-                            tmp.extend([ctc[prev_l] + math.log(word_len), pr[prev_l]])
-                            another_tmp.append(span_bias + lp)
+                    lp = log_probs[:, start_idx, end_idx].expand_as(prev_v)
+                    e_trans = (prev_v + lp) + span_bias
+                    transitions.append(e_trans)
+                    if self.training:
+                        tmp.extend([ctc[prev_l] + math.log(word_len), pr[prev_l]])
+                        another_tmp.append(span_bias + lp)
 
-                            reward = lp / word_len
-                            if g.positive_reward_only:
-                                pos = reward > self.baseline
-                                reward = torch.where(pos,
-                                                     reward - self.baseline,
-                                                     torch.full_like(reward, -9999.9))
-                            else:
-                                reward = reward - self.baseline
-                            l_tmp.extend([ctc[prev_l] + reward, l_pr[prev_l]])
+                        reward = lp / word_len
+                        if g.positive_reward_only:
+                            pos = reward > self.baseline
+                            reward = torch.where(pos,
+                                                 reward - self.baseline,
+                                                 torch.full_like(reward, -9999.9))
+                        else:
+                            reward = reward - self.baseline
+                        l_tmp.extend([ctc[prev_l] + reward, l_pr[prev_l]])
                 except (KeyError, IndexError):
                     transitions.append(get_init())
-                    if g.use_posterior_reg and self.training:
+                    if self.training:
                         tmp.extend([get_init(), get_init()])
                         l_tmp.extend([get_init(), get_init()])
                         another_tmp.append(get_init())
                         # pr_trans.append(get_init())
 
-            if g.use_posterior_reg and self.training:
+            if self.training:
                 tmp = torch.stack(tmp, new_name='stacked').unflatten(
                     'stacked', [('new_tag', g.max_word_length - g.min_word_length + 1), ('tmp', 2)])
                 tmp = tmp.logsumexp(dim='tmp')
@@ -678,14 +534,9 @@ class ExtractModel(nn.Module):
                 l_trans.append(stacked_another_tmp + l_tmp)
             # Sum up all alignments.
             if self.training:
-                if g.best_ctc:
-                    ctc[l] = torch.stack(transitions, new_name='new_tag').max(dim='tag')[0].rename(new_tag='tag')
-                else:
-                    ctc[l] = torch.stack(transitions, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
-                    if g.use_posterior_reg and self.training:
-                        pr[l] = torch.cat(pr_trans, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
-                        l_pr[l] = torch.cat(l_trans, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
-                        # pr[l] = torch.stack(pr_trans, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+                ctc[l] = torch.stack(transitions, new_name='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+                pr[l] = torch.cat(pr_trans, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+                l_pr[l] = torch.cat(l_trans, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
             else:
                 best_value, best_prev_tag = torch.stack(transitions, new_name='new_tag').max(dim='tag')
                 ctc[l] = best_value.rename(new_tag='tag')
@@ -697,12 +548,12 @@ class ExtractModel(nn.Module):
             final_nodes = ctc[range(batch_size), :, lengths]
             final_nodes.rename_('batch', 'tag')
 
-        if g.best_ctc or not self.training:
+        if not self.training:
             final_score = final_nodes.max(dim='tag')[0]
         else:
             final_score = final_nodes.logsumexp(dim='tag')
 
-        if g.use_posterior_reg and self.training:
+        if self.training:
             pr = torch.stack([pr[l] for l in range(max_length + 1)], new_name='length')
             l_pr = torch.stack([l_pr[l] for l in range(max_length + 1)], new_name='length')
             with NoName(pr, l_pr, lengths):
@@ -711,4 +562,4 @@ class ExtractModel(nn.Module):
                 expected_num_spans = (pr_nodes.logsumexp(dim=-1) - final_score).exp()
                 expected_avg_log_probs = (l_pr_nodes.logsumexp(dim=-1) - final_score).exp()  # / expected_num_spans
 
-        return CtcReturn(final_nodes, final_score, bookkeeper, expected_num_spans, expected_avg_log_probs)
+        return CtcReturn(final_nodes, final_score, expected_num_spans, expected_avg_log_probs, bookkeeper)

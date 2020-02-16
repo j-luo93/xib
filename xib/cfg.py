@@ -182,7 +182,6 @@ class ExtractEsWithP5GermanTest(DecipherEsWithP5GermanTest):
     char_per_batch: int = 100
     eval_interval: int = 500
     task: str = 'extract'
-    init_threshold: float = 10.0
     dense_input: bool = True
     check_interval: int = 50
 
@@ -199,8 +198,6 @@ class SanityCheck(ExtractEsWithP5GermanTest):
     optim_cls: str = 'sgd'
     init_ins_del: int = 100
     min_word_length: int = 4
-    init_threshold: float = 30.0
-    min_threshold: float = 0.99
     anneal_factor: float = 0.8
     num_steps: int = 1000
     reg_hyper: float = 1.0
@@ -320,13 +317,11 @@ class FixGotGermWithStemSmallCtcEmbedding(FixGotGermWithStemSmall):
     char_per_batch: int = 1000
     sort_by_length: bool = False
     context_weight: float = 0.2
-    use_ctc: bool = True
     use_base_embedding: bool = True
     dense_embedding: bool = True
     # context_agg_mode: str = 'linear_interpolation'
     dim: int = 30
     reg_hyper: float = 0.1
-    use_s_prior: bool = False  # TODO(j_luo) Remove this.
     dropout: float = 0.3
     # learning_rate: float = 0.3
     save_alignment: bool = True
@@ -344,10 +339,22 @@ class FixSanityCheck(FixGotGermWithStemSmallCtcEmbedding):
     num_steps: int = 500
     l_pr_hyper: float = 10.0
     bias_mode: str = 'learned'
-    use_posterior_reg: bool = True
     check_interval: int = 10
     learning_rate: float = 0.1
     reg_hyper: float = 0.01
+
+
+@reg
+class FixSanityCheckInit(FixSanityCheck):
+    baseline: float = 0.05
+    bias_mode: str = 'fixed'
+    reg_hyper: float = 0.1
+    expected_ratio: float = 0.7
+    init_expected_ratio: float = 1.0
+    char_per_batch: int = 400
+    l_pr_hyper: float = 1.0
+    pr_hyper: float = 20.0
+    check_interval: int = 25
 
 
 @reg

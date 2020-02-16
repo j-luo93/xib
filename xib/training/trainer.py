@@ -174,10 +174,6 @@ class ExtractTrainer(BaseTrainer):
     add_argument('coverage_hyper', default=1.0, dtype=float)
     add_argument('weight_hyper', default=0.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
-    add_argument('update_p_weights', default=False, dtype=bool, msg='Flag to save alignment every step.')
-    add_argument('p_weight_inc', default=50, dtype=int)
-    add_argument('take_best_span', default=False, dtype=bool,
-                 msg='Flag to take the best ll instead of the marginal ll.')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -185,17 +181,8 @@ class ExtractTrainer(BaseTrainer):
         self.ins_del_cost = g.init_ins_del_cost
         if g.save_alignment:
             self.add_callback('total_step', 1, self.save_alignment)
-        # if g.update_p_weights:
-        #     self.add_callback('total_step', g.num_steps, self.update_p_weights)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
         self.add_callback('check', self.check_interval, self.write_summaries)
-        # HACK(j_luo)
-        self._cnt = 100
-
-    def update_p_weights(self):
-        sentences, spans = self.evaluator.get_best_spans(self.stage, self._cnt)
-        self.model.span_proposer.update(sentences, spans)
-        self._cnt += g.p_weight_inc
 
     def write_summaries(self, metrics: Metrics):
         metrics = metrics.with_prefix_('check')
@@ -229,14 +216,6 @@ class ExtractTrainer(BaseTrainer):
     @ins_del_cost.setter
     def ins_del_cost(self, value):
         logging.imp(f'Setting ins_del_cost to {value}.')
-
-    @global_property
-    def threshold(self):
-        pass
-
-    @threshold.setter
-    def threshold(self, value):
-        logging.imp(f'Setting threshold to {value}.')
 
     @global_property
     def er(self):
@@ -311,33 +290,16 @@ class ExtractTrainer(BaseTrainer):
             wc = Metric('weight', self.model.unit_aligner.weight.abs().sum(), batch.batch_size)
             metrics += wc
 
-            if g.take_best_span:
-                loss = -metrics.best_ll.mean
-            else:
-                loss = -metrics.marginal.mean
+            loss = -metrics.marginal.mean
 
-            if g.use_posterior_reg:
-                # loss = loss + g.pr_hyper * (metrics.posterior_spans.mean -
-                #                             g.expected_ratio).clamp(max=0.0).abs()  # ** 2
-
-                # pr_loss = (self.er - metrics.posterior_spans.mean).clamp(max=0.0).abs()
-                pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0).abs()
-                # pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0) ** 2
-
-                # pr_loss = (metrics.posterior_spans.mean - g.expected_ratio).clamp(max=0.0) ** 2
-                # pr_loss = -metrics.posterior_spans.mean
-                l_pr_loss = -metrics.avg_log_probs.mean
-                loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
-
-            if g.use_constrained_learning:
-                loss = g.main_loss_hyper * loss + g.coverage_hyper * (metrics.coverage.mean - g.expected_ratio) ** 2
+            pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0).abs()
+            l_pr_loss = -metrics.avg_log_probs.mean
+            loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
 
             try:
                 loss = loss + metrics.reg.mean * g.reg_hyper
             except AttributeError:
                 pass
-
-            # loss = loss + g.weight_hyper * wc.mean
 
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()

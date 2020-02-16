@@ -216,7 +216,6 @@ class ExtractManager(BaseManager):
     # IDEA(j_luo) when to put this in manager/trainer? what about scheduler? annealing? restarting? Probably all in trainer -- you need to track them with pbars.
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
-    add_argument('min_threshold', default=0.01, dtype=float, msg='Min value for threshold')
     add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
@@ -234,7 +233,7 @@ class ExtractManager(BaseManager):
         if g.input_format == 'text':
             lu_size = len(lcs)
             ku_size = len(kcs)
-        self.model = ExtractModel(lu_size, ku_size, self.dl_reg[task], vocab)
+        self.model = ExtractModel(lu_size, ku_size, vocab)
         # HACK(j_luo)
         from xib.aligned_corpus.ipa_sequence import IpaSequence
 
@@ -277,7 +276,6 @@ class ExtractManager(BaseManager):
 
     def run(self):
         optim_cls = self._name2cls[g.optim_cls]
-        self.trainer.threshold = g.init_threshold
         # , momentum=0.9, nesterov=True)
         self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
         # Save init parameters.
@@ -287,10 +285,7 @@ class ExtractManager(BaseManager):
         # # HACK(j_luo)
         # self.trainer.reset(reset_params=True)
         self.trainer.er = g.init_expected_ratio
-        while self.trainer.threshold > g.min_threshold:
-            if g.update_p_weights:
-                # HACK(j_luo)
-                self.trainer.update_p_weights()
+        while True:
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
 

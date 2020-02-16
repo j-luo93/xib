@@ -69,8 +69,6 @@ class Vocabulary:
             if g.one2two:
                 unit_feat_matrix = {DELETE_SYM: torch.zeros(0).long()}
                 # unit_feat_matrix = {INSERT_SYM: torch.zeros(0).long(), DELETE_SYM: torch.zeros(0).long()}
-            elif g.use_empty_symbol:
-                unit_feat_matrix = {EMPTY_SYM: torch.zeros(0).long()}
             else:
                 unit_feat_matrix = dict()
             for i, segment in enumerate(self.vocab):

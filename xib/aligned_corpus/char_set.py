@@ -29,8 +29,6 @@ class CharSet:
         self.id2unit = sorted(units, key=str)
         if g.one2two:
             self.id2unit = [DELETE_SYM] + self.id2unit
-        elif g.use_empty_symbol:
-            self.id2unit = [EMPTY_SYM] + self.id2unit
         self.unit2id = {u: i for i, u in enumerate(self.id2unit)}
 
     def to_id(self, unit: Content):

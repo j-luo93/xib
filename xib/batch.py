@@ -283,4 +283,3 @@ class BatchSampler(Sampler):
                     idx_batch.append(index)
             if idx_batch:
                 yield idx_batch
-

@@ -22,13 +22,12 @@ class ViableSpans(BaseBatch):
     ends: LT
     lengths: LT
     unit_id_seqs: LT
-    p_weights: FT
     start_candidates: LT
     end_candidates: LT
     len_candidates: LT
 
 
-CandidateTuple = Tuple[LT, LT, Optional[FT]]
+CandidateTuple = Tuple[LT, LT]
 
 
 class BaseSpanProposer(nn.Module, ABC):
@@ -41,7 +40,7 @@ class BaseSpanProposer(nn.Module, ABC):
         max_length = lost_lengths.max().item()
         batch_size = lost_lengths.size('batch')
 
-        start_candidates, len_candidates, p_weights = self._propose_candidates(
+        start_candidates, len_candidates = self._propose_candidates(
             lost_unit_id_seqs, lost_lengths, sentences)
         # This is inclusive.
         end_candidates = start_candidates + len_candidates - 1
@@ -51,15 +50,13 @@ class BaseSpanProposer(nn.Module, ABC):
         start_candidates = start_candidates.expand_as(viable)
         end_candidates = end_candidates.expand_as(viable)
         len_candidates = len_candidates.expand_as(viable)
-        p_weights = torch.zeros_like(viable).fill_(1.0) if p_weights is None else p_weights
         batch_indices = get_named_range(batch_size, 'batch').expand_as(viable)
         with NoName(start_candidates, end_candidates, len_candidates,
-                    batch_indices, viable, p_weights):
+                    batch_indices, viable):
             viable_starts = start_candidates[viable].rename('viable')
             viable_ends = end_candidates[viable].rename('viable')
             viable_lengths = len_candidates[viable].rename('viable')
             viable_batch_indices = batch_indices[viable].rename('viable')
-            viable_p_weights = p_weights[viable].rename('viable')
 
         # Get the word positions to get the corresponding representations.
         viable_starts_2d = viable_starts.align_to('viable', 'len_w')
@@ -79,7 +76,6 @@ class BaseSpanProposer(nn.Module, ABC):
                            viable_ends,
                            viable_lengths,
                            viable_unit_id_seqs,
-                           viable_p_weights,
                            start_candidates,
                            end_candidates,
                            len_candidates)
@@ -94,7 +90,7 @@ class OracleWordSpanProposer(BaseSpanProposer):
         # Use full word length.
         len_candidates = lost_lengths.align_to('batch', 'len_s', 'len_e')
         len_candidates.clamp_(min=g.min_word_length, max=g.max_word_length)
-        return start_candidates, len_candidates, None
+        return start_candidates, len_candidates
 
 
 class OracleStemSpanProposer(BaseSpanProposer):
@@ -119,59 +115,12 @@ class OracleStemSpanProposer(BaseSpanProposer):
         len_candidates[:] = torch.LongTensor(lens)
         len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
         len_candidates.clamp_(min=g.min_word_length, max=g.max_word_length)
-        return start_candidates, len_candidates, None
+        return start_candidates, len_candidates
 
 
 class AllSpanProposer(BaseSpanProposer):
 
     add_argument('momentum', dtype=float, default=0.5)
-
-    def __init__(self, dl: AlignedDataLoader):
-        super().__init__()
-        self.p_weights = dict()
-        for batch in pbar(dl):
-            self._get_p_weights(batch.sentences)
-        if g.use_constrained_learning:
-            logging.warning('This is extremely hacky.')
-            for i, w in enumerate(self.p_weights.values()):
-                self.register_parameter(f'{i}', w)
-
-    def cuda(self):
-        super().cuda()
-        for k, v in self.p_weights.items():
-            self.p_weights[k] = v.cuda()
-
-    def state_dict(self, *args, **kwargs):
-        sd = super().state_dict(*args, **kwargs)
-        sd['p_weights'] = self.p_weights
-        return sd
-
-    def load_state_dict(self, state_dict, *args, **kwargs):
-        # TODO(j_luo) Phase out this kwarg.
-        kwargs['strict'] = False
-        with WithholdKeys(state_dict, 'p_weights'):
-            super().load_state_dict(state_dict, *args, **kwargs)
-        for sk, sv in state_dict['p_weights'].items():
-            if sk in self.p_weights:
-                self.p_weights[sk].copy_(sv)
-            else:
-                self.p_weights[sk] = sv
-
-    def _get_p_weights(self, sentences: Sequence[AlignedSentence]) -> FT:
-        p_weights = list()
-        for sentence in sentences:
-            s_key = str(sentence)
-            if s_key not in self.p_weights:
-                uniform_weight = get_zeros(sentence.length, g.max_word_length + 1 - g.min_word_length)
-                uniform_weight = uniform_weight.fill_(1.0)
-                if g.use_constrained_learning:
-                    # uniform_weight = uniform_weight.fill_(0.01)
-                    uniform_weight = uniform_weight.fill_(-5.0)
-                    uniform_weight = torch.nn.Parameter(uniform_weight, True)
-                self.p_weights[s_key] = uniform_weight
-            p_weights.append(self.p_weights[s_key])
-        p_weights = torch.nn.utils.rnn.pad_sequence(p_weights, batch_first=True)
-        return p_weights
 
     def _propose_candidates(self, lost_unit_id_seqs: LT, lost_lengths: LT,
                             sentences: Sequence[AlignedSentence]) -> CandidateTuple:
@@ -181,35 +130,7 @@ class AllSpanProposer(BaseSpanProposer):
         # Range from `min_word_length` to `max_word_length`.
         len_candidates = get_named_range(g.max_word_length + 1 - g.min_word_length, 'len_e') + g.min_word_length
         len_candidates = len_candidates.align_to('batch', 'len_s', 'len_e')
-        p_weights = self._get_p_weights(sentences)
-        # p_weights = torch.nn.utils.rnn.pad_sequence(p_weights, batch_first=True)
-        p_weights.rename_('batch', 'len_s', 'len_e')
-        return start_candidates, len_candidates, p_weights
-
-    def update(self, sentences: Sequence[AlignedSentence], best_spans: Sequence[Tuple[int, int]]):
-        logging.imp(f'Updating {len(sentences)} p_weights.')
-        assert len(sentences) == len(best_spans)
-        updated = set()
-        for sentence, (start, end) in zip(sentences, best_spans):
-            s_key = str(sentence)
-            if s_key in updated:
-                continue
-
-            start_idx = start
-            end_idx = end - start - g.min_word_length + 1
-            sparse_p_weights = get_zeros(sentence.length, g.max_word_length + 1 - g.min_word_length)
-            sparse_p_weights[start_idx, end_idx] = 1.0
-
-            old_p_weights = self.p_weights[s_key]
-            new_p_weights = g.momentum * old_p_weights + (1.0 - g.momentum) * sparse_p_weights
-            self.p_weights[s_key] = new_p_weights
-            updated.add(s_key)
-
-        # # HACK(j_luo)
-        for k in self.p_weights:
-            if k not in updated:
-                self.p_weights[k] *= g.momentum
-            #self.p_weights[k] = self.p_weights[k] / (1e-8 + self.p_weights[k].sum())
+        return start_candidates, len_candidates
 
 
 class SpanBias(nn.Module):

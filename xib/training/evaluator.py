@@ -475,7 +475,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
                                                        #    values=['exact_span_match',
                                                        #            'prefix_span_match', 'exact_content_match'],
                                                        values=['exact_content_match'],
-                                                       aggfunc=np.sum if g.use_ctc else np.max)
+                                                       aggfunc=np.sum)
         segment_df = pd.merge(segment_df, segment_score_df, left_on='segment_idx', right_index=True, how='left')
         out_df['num_gold'] = segment_df['gold'].apply(len)
         out_df['num_pred'] = segment_df['pred'].apply(len)
@@ -486,33 +486,9 @@ class AlignedExtractEvaluator(BaseEvaluator):
         out_df['num_exact_content_match'] = segment_df['exact_content_match'].apply(int)
         out_df['num_positive_exact_content_match'] = out_df['num_exact_content_match'] * has_cognate_int
 
-        # has_cognate = segment_df['gold'].apply(bool)
-        # out_df['num_positive'] = segment_df['gold'].apply(len)
-        # if g.use_ctc:
-        #     out_df['exact_positive_content_match'] = segment_df['exact_content_match'] * has_cognate.apply(int)
-        # else:
-        #     out_df['exact_positive_content_match'] = segment_df['exact_content_match'] & has_cognate
-        # out_df['exact_content_match'] = segment_df['exact_content_match']
-        # # out_df['exact_span_match'] = segment_df['exact_span_match']
-        # # out_df['prefix_span_match'] = segment_df['prefix_span_match']
         out_path = g.log_dir / 'predictions' / f'aligned.{stage}.tsv'
         out_path.parent.mkdir(exist_ok=True, parents=True)
         out_df.to_csv(out_path, index=None, sep='\t')
-
-        # logging.warning('num_positive_gold might be wrong.')
-
-        # num_pred = segment_df['pred'].apply(len).sum()
-        # if g.use_ctc:
-        #     num_gold = segment_df['gold'].apply(len).sum()
-        # else:
-        #     num_gold = segment_df['gold'].apply(len).clip(upper=g.max_num_words).sum()
-        # num_positive = out_df['num_positive'].sum()
-        # # exact_span_match = out_df['exact_span_match'].sum()
-        # # prefix_span_match = out_df['prefix_span_match'].sum()
-        # exact_content_match = out_df['exact_content_match'].sum()
-        # exact_positive_content_match = out_df['exact_positive_content_match'].sum()
-        # exact_span_prf_scores = _get_prf_metrics(num_pred, num_gold, exact_span_match, 'exact_span')
-        # prefix_span_prf_scores = _get_prf_metrics(num_pred, num_gold, prefix_span_match, 'prefix_span')
 
         sums = out_df[['num_pred', 'num_gold', 'num_exact_content_match',
                        'num_positive_gold', 'num_positive_pred', 'num_positive_exact_content_match']].sum()
@@ -527,12 +503,6 @@ class AlignedExtractEvaluator(BaseEvaluator):
         # return analyzed_metrics + exact_span_prf_scores + prefix_span_prf_scores + exact_content_prf_scores + exact_positive_content_prf_scores
         return analyzed_metrics + exact_content_prf_scores + positive_exact_content_prf_scores
 
-    def _get_annotations_for_batch(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
-        if g.use_ctc:
-            return self._get_annotations_for_batch_ctc(model_ret, batch)
-        else:
-            return self._get_annotations_for_batch_plain(model_ret, batch)
-
     @global_property
     def cut_off(self):
         pass
@@ -541,7 +511,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
     def cut_off(self, value):
         pass
 
-    def _get_annotations_for_batch_ctc(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
+    def _get_annotations_for_batch(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
         bkp = model_ret.ctc_return.bookkeeper
         bpt = bkp.best_prev_tags
         max_length = batch.lengths.max().item()
@@ -549,7 +519,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
         final_nodes = model_ret.ctc_return.final_nodes
         prev_tag = last_tag = final_nodes.max(dim=1)[1]
         prev_pos = last_pos = batch.lengths
-        offset = torch.LongTensor([1] + [1] * g.one_span_hack + list(range(g.min_word_length, g.max_word_length + 1)))
+        offset = torch.LongTensor([1]+ list(range(g.min_word_length, g.max_word_length + 1)))
         offset = get_tensor(offset)
         offset.rename_('tag')
         bs = final_nodes.size('batch')
@@ -602,7 +572,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
 
             top_matches = list()
             for pos, tag in tag_seq:
-                if tag != 0 and (not g.one_span_hack or tag != 1):
+                if tag != 0:
                     length = offset[tag]
                     end = pos - 1
                     start = end - length + 1
@@ -627,36 +597,5 @@ class AlignedExtractEvaluator(BaseEvaluator):
                     top_matches.append(match)
 
             annotation_tuple = _AnnotationTuple(sentence, gold, pred, top_matches)
-            ret.append(annotation_tuple)
-        return ret
-
-    def _get_annotations_for_batch_plain(self, model_ret: ExtractModelReturn, batch: AlignedBatch) -> List[_AnnotationTuple]:
-        start = model_ret.start.cpu().numpy()
-        end = model_ret.end.cpu().numpy()
-        unmatched_ll = model_ret.unmatched_ll.cpu().numpy()
-        tml = model_ret.top_matched_ll.cpu().numpy()
-        twl = model_ret.top_word_ll.cpu().numpy()
-        top_matched_vocab = model_ret.top_matched_vocab.cpu().numpy()
-        matched = tml[:, 0] > unmatched_ll
-        tmw = batch.known_vocab.vocab[top_matched_vocab]  # Top matched word.
-
-        ret = list()
-        is_lost_ipa = (g.input_format == 'ipa')
-        for sentence, s, e, m, ml, wl, mw, um in zip(batch.sentences, start, end, matched, tml, twl, tmw, unmatched_ll):
-            # NOTE(j_luo) IPA is always used on the known side.
-            gold = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=True)
-            pred = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
-            length = sentence.lost_ipa_length if is_lost_ipa else sentence.lost_form_length
-            if length >= g.min_word_length and m:
-                pred.annotate([s[0]], [e[0]], mw[0])
-
-            top_matched = list()
-            for ss, ee, mlml, wlwl, ww in zip(s, e, ml, wl, mw):
-                uss = sentence.to_unsegmented(is_lost_ipa=is_lost_ipa, is_known_ipa=True, annotated=False)
-                uss.annotate([ss], [ee], ww)
-                length = (ee - ss + 1)
-                match = _Match(wlwl, wlwl / length, wlwl, wlwl / length, uss)
-                top_matched.append(match)
-            annotation_tuple = _AnnotationTuple(sentence, gold, pred, top_matched)
             ret.append(annotation_tuple)
         return ret

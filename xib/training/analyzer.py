@@ -189,23 +189,13 @@ class ExtractAnalyzer:
 
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
-        loss_name = 'best_ll' if g.take_best_span else 'marginal'
-        if g.take_best_span:
-            best_span_ll = model_ret.best_span_ll.align_to('batch')
-            loss_value = best_span_ll.sum()
-        else:
-            loss_value = model_ret.marginal.sum()
+        loss_value = model_ret.ctc_return.final_score.sum()
         not_zero = True
-        if g.update_p_weights and g.use_ctc:
-            loss_weight = model_ret.extracted.viable_spans.p_weights.exp().sum()
-            not_zero = loss_weight.item() > 1e-4
-            loss_value = loss_value * float(not_zero)
-        else:
-            loss_weight = batch.batch_size if g.mean_mode == 'segment' else batch.lengths.sum()
-        loss_metric = Metric(loss_name, loss_value, loss_weight)
+        loss_weight = batch.batch_size if g.mean_mode == 'segment' else batch.lengths.sum()
+        loss_metric = Metric('marginal', loss_value, loss_weight)
         metrics += loss_metric
 
-        almt = model_ret.alignment
+        almt = model_ret.costs.alignment
         if almt is not None:
             if g.use_entropy_reg:
                 reg = -(almt * (1e-8 + almt).log()).sum() * float(not_zero)
@@ -213,21 +203,14 @@ class ExtractAnalyzer:
                 reg = ((almt.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
             metrics += Metric('reg', reg, loss_weight)
 
-        if g.use_posterior_reg:
-            try:
-                pr_reg = Metric('posterior_spans', model_ret.ctc_return.expected_num_spans.sum(), batch.lengths.sum())
-                metrics += pr_reg
+        try:
+            pr_reg = Metric('posterior_spans', model_ret.ctc_return.expected_num_spans.sum(), batch.lengths.sum())
+            metrics += pr_reg
 
-                # FIXME(j_luo) The weight is wrongly computed.
-                l_pr_reg = Metric('avg_log_probs', model_ret.ctc_return.expected_avg_log_probs.sum(), batch.batch_size)
-                metrics += l_pr_reg
-            except:
-                pass
+            # FIXME(j_luo) The weight is wrongly computed.
+            l_pr_reg = Metric('avg_log_probs', model_ret.ctc_return.expected_avg_log_probs.sum(), batch.batch_size)
+            metrics += l_pr_reg
+        except:
+            pass
 
-        if g.use_constrained_learning:
-            vs = model_ret.extracted.viable_spans
-            total_length = batch.lengths.sum()
-            coverage = (vs.len_candidates * vs.p_weights).sum()
-            coverage = Metric('coverage', coverage, total_length)
-            metrics += coverage
         return metrics

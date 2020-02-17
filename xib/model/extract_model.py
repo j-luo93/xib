@@ -112,6 +112,7 @@ class ExtractModel(nn.Module):
     add_argument('baseline', dtype=float)
     add_argument('positive_reward_only', dtype=bool, default=False)
     add_argument('new_version', dtype=bool, default=False)
+    add_argument('thresh_func', dtype=str, default='linear', choices=['linear', 'trunc'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -440,13 +441,16 @@ class ExtractModel(nn.Module):
         return self.num_e_tags + 1
 
     def _get_thresholded_reward(self, raw: FT) -> FT:
+        diff = raw - self.baseline
+        if g.thresh_func == 'linear':
+            reward = diff
+        elif g.thresh_func == 'trunc':
+            reward = diff.clamp_max(math.log(5.0))
         if g.positive_reward_only:
-            pos = raw > self.baseline
+            pos = diff > 0
             reward = torch.where(pos,
-                                 raw - self.baseline,
-                                 torch.full_like(reward, -9999.9))
-        else:
-            reward = raw - self.baseline
+                                 reward,
+                                 torch.full_like(raw, -9999.9))
         return reward
 
     def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: FT) -> CtcReturn:

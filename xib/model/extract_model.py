@@ -111,6 +111,7 @@ class ExtractModel(nn.Module):
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
     add_argument('positive_reward_only', dtype=bool, default=False)
+    add_argument('new_version', dtype=bool, default=False)
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -411,7 +412,14 @@ class ExtractModel(nn.Module):
         viable_ll = matches.ll + (-9999.9) * not_viable_mask.float()
         # Get marginal.
         span_log_probs = viable_ll.logsumexp(dim='vocab')
-        ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
+        span_raw_square = raw_reward = None
+        if g.new_version:
+            span_lengths = get_named_range(self.num_e_tags, 'len_e') + g.min_word_length
+            span_lengths = span_lengths.align_as(matches.raw_ll)
+            raw_reward = self._get_thresholded_reward(matches.raw_ll / span_lengths)
+            span_raw_square = (raw_reward + matches.raw_ll).logsumexp(dim='vocab') - math.log(len(self.vocab))
+        ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll,
+                                   matches.raw_ll, span_raw_square, raw_reward)
         # ctc_return = self._run_ctc_v1(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
         model_ret = ExtractModelReturn(emb_repr,
                                        extracted,
@@ -431,7 +439,17 @@ class ExtractModel(nn.Module):
     def num_tags(self) -> int:
         return self.num_e_tags + 1
 
-    def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT) -> CtcReturn:
+    def _get_thresholded_reward(self, raw: FT) -> FT:
+        if g.positive_reward_only:
+            pos = raw > self.baseline
+            reward = torch.where(pos,
+                                 raw - self.baseline,
+                                 torch.full_like(reward, -9999.9))
+        else:
+            reward = raw - self.baseline
+        return reward
+
+    def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: FT) -> CtcReturn:
         r"""To speed up DP, everything is packed into tensors.
 
         tag \ case
@@ -477,12 +495,18 @@ class ExtractModel(nn.Module):
             phi[0] = get_init(-20.0)
         padding = get_init(-9999.9)
 
+        def expand_vs(t):
+            return t.align_to(..., 'vocab').expand(batch_size, self.num_tags, len(self.vocab))
+
+        padding_vs = expand_vs(padding)
+
         non_span_bias = self.span_bias(False)
         span_biases = self.span_bias(True)
 
         # ------------------------- Main body. ------------------------- #
         all_phi_scores = dict()
         all_phi_scores[0] = get_init(0.0)
+        nh = NameHelper()
         for l in range(1, max_length + 1):
             marginal_tags = list()
             phi_tags = list()
@@ -495,7 +519,10 @@ class ExtractModel(nn.Module):
                 psi_tags.append((psi[l - 1] + non_span_const).align_to('batch', 'tag', 'new_tag'))
                 phi_tags.append((phi[l - 1] + non_span_const).align_to('batch', 'tag', 'new_tag'))
             else:
-                phi_scores.append(all_phi_scores[l - 1])
+                if g.new_version:
+                    phi_scores.append(expand_vs(all_phi_scores[l - 1]))
+                else:
+                    phi_scores.append(all_phi_scores[l - 1])
             # Case 'E's.
             phi_lse = list()
             psi_lse = list()
@@ -512,22 +539,26 @@ class ExtractModel(nn.Module):
                     marginal_tags.append(prev_marginal + lp + span_bias)
 
                     reward = lp / word_len
-                    if g.positive_reward_only:
-                        pos = reward > self.baseline
-                        reward = torch.where(pos,
-                                             reward - self.baseline,
-                                             torch.full_like(reward, -9999.9))
-                    else:
-                        reward = reward - self.baseline
+                    reward = self._get_thresholded_reward(reward)
 
                     if self.training:
-                        phi_psi_common.append(span_bias + lp)
-                        # Compute phi-related scores.
-                        phi_lse.extend([prev_marginal + reward, phi[prev_l]])
-                        # Compute psi-related scores.
-                        psi_lse.extend([prev_marginal + math.log(word_len), psi[prev_l]])
+                        if g.new_version:
+                            phi_psi_common.append(torch.full_like(lp, span_bias))
+                            srw = span_raw_square[:, start_idx, end_idx].expand_as(prev_marginal)
+                            phi_lse.extend([prev_marginal + srw, phi[prev_l] + lp])
+                            psi_lse.extend([prev_marginal + math.log(word_len) + lp, psi[prev_l] + lp])
+                        else:
+                            phi_psi_common.append(span_bias + lp)
+                            # Compute phi-related scores.
+                            phi_lse.extend([prev_marginal + reward, phi[prev_l]])
+                            # Compute psi-related scores.
+                            psi_lse.extend([prev_marginal + math.log(word_len), psi[prev_l]])
                     else:
-                        phi_scores.append(all_phi_scores[prev_l] + reward.exp())
+                        if g.new_version:
+                            rr = raw_reward[:, start_idx, end_idx].align_to('batch', 'tag', 'vocab')
+                            phi_scores.append(all_phi_scores[prev_l].align_as(rr) + rr.exp())
+                        else:
+                            phi_scores.append(all_phi_scores[prev_l] + reward.exp())
                 else:
                     marginal_tags.append(padding)
                     if self.training:
@@ -535,7 +566,10 @@ class ExtractModel(nn.Module):
                         phi_lse.extend([padding, padding])
                         psi_lse.extend([padding, padding])
                     else:
-                        phi_scores.append(padding)
+                        if g.new_version:
+                            phi_scores.append(padding_vs)
+                        else:
+                            phi_scores.append(padding)
 
             if self.training:
                 all_stacked = torch.stack(phi_lse + psi_lse, new_name='stacked')
@@ -558,7 +592,14 @@ class ExtractModel(nn.Module):
                 phi[l] = torch.cat(phi_tags, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
             else:
                 # HACK(j_luo) New way.
-                best_value, best_prev_tag = torch.stack(phi_scores, new_name='new_tag').max(dim='tag')
+                phi_stacked = torch.stack(phi_scores, new_name='new_tag')
+                if g.new_version:
+                    flat_phi = nh.flatten(phi_stacked, ['tag', 'vocab'], 'tag_X_vocab')
+                    best_value, best_index = flat_phi.max(dim='tag_X_vocab')
+                    best_prev_tag = best_index // len(self.vocab)
+                    best_prev_vocab = best_index % len(self.vocab)
+                else:
+                    best_value, best_prev_tag = phi_stacked.max(dim='tag')
                 all_phi_scores[l] = best_value.rename(new_tag='tag')
                 bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
                 # Old way here.

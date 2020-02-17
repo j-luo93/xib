@@ -13,7 +13,8 @@ from dev_misc.devlib import (BaseBatch, batch_class, get_array,
                              get_length_mask, get_range)
 from dev_misc.devlib.named_tensor import (NameHelper, NoName, Rename,
                                           drop_names, get_named_range)
-from dev_misc.utils import WithholdKeys, cached_property, global_property
+from dev_misc.utils import (WithholdKeys, cached_property, concat_lists,
+                            global_property)
 from xib.aligned_corpus.char_set import DELETE_ID
 from xib.aligned_corpus.corpus import AlignedSentence
 from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
@@ -411,6 +412,7 @@ class ExtractModel(nn.Module):
         # Get marginal.
         span_log_probs = viable_ll.logsumexp(dim='vocab')
         ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
+        # ctc_return = self._run_ctc_v1(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
         model_ret = ExtractModelReturn(emb_repr,
                                        extracted,
                                        costs,
@@ -422,8 +424,12 @@ class ExtractModel(nn.Module):
         pass
 
     @property
-    def num_tags(self) -> int:
+    def num_e_tags(self) -> int:
         return g.max_word_length - g.min_word_length + 1
+
+    @property
+    def num_tags(self) -> int:
+        return self.num_e_tags + 1
 
     def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT) -> CtcReturn:
         r"""To speed up DP, everything is packed into tensors.
@@ -460,7 +466,7 @@ class ExtractModel(nn.Module):
                 log_probs = torch.where(avg > self.cut_off, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
 
         def get_init(start: float, init_value: float = -9999.9):
-            ret = get_zeros(batch_size, self.num_tags + 1).fill_(init_value)
+            ret = get_zeros(batch_size, self.num_tags).fill_(init_value)
             ret[:, 0] = start
             ret.rename_('batch', 'tag')
             return ret
@@ -475,17 +481,21 @@ class ExtractModel(nn.Module):
         span_biases = self.span_bias(True)
 
         # ------------------------- Main body. ------------------------- #
-
+        all_phi_scores = dict()
+        all_phi_scores[0] = get_init(0.0)
         for l in range(1, max_length + 1):
             marginal_tags = list()
             phi_tags = list()
             psi_tags = list()
+            phi_scores = list()
             # Case 'O'.
             non_span_const = self.lp_per_unmatched + non_span_bias
             marginal_tags.append(marginal[l - 1] + non_span_const)
             if self.training:
                 psi_tags.append((psi[l - 1] + non_span_const).align_to('batch', 'tag', 'new_tag'))
                 phi_tags.append((phi[l - 1] + non_span_const).align_to('batch', 'tag', 'new_tag'))
+            else:
+                phi_scores.append(all_phi_scores[l - 1])
             # Case 'E's.
             phi_lse = list()
             psi_lse = list()
@@ -501,29 +511,35 @@ class ExtractModel(nn.Module):
                     lp = log_probs[:, start_idx, end_idx].expand_as(prev_marginal)
                     marginal_tags.append(prev_marginal + lp + span_bias)
 
+                    reward = lp / word_len
+                    if g.positive_reward_only:
+                        pos = reward > self.baseline
+                        reward = torch.where(pos,
+                                             reward - self.baseline,
+                                             torch.full_like(reward, -9999.9))
+                    else:
+                        reward = reward - self.baseline
+
                     if self.training:
                         phi_psi_common.append(span_bias + lp)
                         # Compute phi-related scores.
-                        reward = lp / word_len
-                        if g.positive_reward_only:
-                            pos = reward > self.baseline
-                            reward = torch.where(pos,
-                                                 reward - self.baseline,
-                                                 torch.full_like(reward, -9999.9))
-                        else:
-                            reward = reward - self.baseline
                         phi_lse.extend([prev_marginal + reward, phi[prev_l]])
                         # Compute psi-related scores.
                         psi_lse.extend([prev_marginal + math.log(word_len), psi[prev_l]])
+                    else:
+                        phi_scores.append(all_phi_scores[prev_l] + reward.exp())
                 else:
                     marginal_tags.append(padding)
-                    phi_psi_common.append(padding)
-                    phi_lse.extend([padding, padding])
-                    psi_lse.extend([padding, padding])
+                    if self.training:
+                        phi_psi_common.append(padding)
+                        phi_lse.extend([padding, padding])
+                        psi_lse.extend([padding, padding])
+                    else:
+                        phi_scores.append(padding)
 
             if self.training:
                 all_stacked = torch.stack(phi_lse + psi_lse, new_name='stacked')
-                flat_all_stacked = all_stacked.unflatten('stacked', [('new_tag', self.num_tags * 2), ('tmp', 2)])
+                flat_all_stacked = all_stacked.unflatten('stacked', [('new_tag', self.num_e_tags * 2), ('tmp', 2)])
                 phi_psi_lse = flat_all_stacked.logsumexp(dim='tmp').align_to('batch', 'tag', 'new_tag')
                 assert phi_psi_lse.size('new_tag') % 2 == 0
                 with NoName(phi_psi_lse):
@@ -541,9 +557,14 @@ class ExtractModel(nn.Module):
                 psi[l] = torch.cat(psi_tags, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
                 phi[l] = torch.cat(phi_tags, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
             else:
+                # HACK(j_luo) New way.
+                best_value, best_prev_tag = torch.stack(phi_scores, new_name='new_tag').max(dim='tag')
+                all_phi_scores[l] = best_value.rename(new_tag='tag')
+                bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
+                # Old way here.
                 best_value, best_prev_tag = torch.stack(marginal_tags, new_name='new_tag').max(dim='tag')
                 marginal[l] = best_value.rename(new_tag='tag')
-                bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
+                # bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
 
         # ------------- Get the actual phi and psi values. ------------- #
 

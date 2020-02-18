@@ -100,6 +100,8 @@ class AlignedDataset(Dataset):
                     self.data.append(truncated_sentence)
                     if g.freq_hack:
                         _data_str.add(str(truncated_sentence))
+        total_char = sum([sentence.length for sentence in self.data])
+        logging.info(f'There are {total_char} characters in total.')
 
     def __len__(self):
         return len(self.data)

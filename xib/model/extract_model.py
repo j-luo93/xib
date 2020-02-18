@@ -111,7 +111,7 @@ class ExtractModel(nn.Module):
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
     add_argument('positive_reward_only', dtype=bool, default=False)
-    add_argument('new_version', dtype=bool, default=False)
+    add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
     add_argument('thresh_func', dtype=str, default='linear', choices=['linear', 'trunc'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
@@ -414,11 +414,13 @@ class ExtractModel(nn.Module):
         # Get marginal.
         span_log_probs = viable_ll.logsumexp(dim='vocab')
         span_raw_square = raw_reward = None
-        if g.new_version:
-            span_lengths = get_named_range(self.num_e_tags, 'len_e') + g.min_word_length
+        span_lengths = get_named_range(self.num_e_tags, 'len_e') + g.min_word_length
+        if g.inference_mode == 'new':
             span_lengths = span_lengths.align_as(matches.raw_ll)
             raw_reward = self._get_thresholded_reward(matches.raw_ll / span_lengths)
             span_raw_square = (raw_reward + matches.raw_ll).logsumexp(dim='vocab') - math.log(len(self.vocab))
+        else:
+            raw_reward = self._get_thresholded_reward(span_log_probs / span_lengths)
         ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll,
                                    matches.raw_ll, span_raw_square, raw_reward)
         # ctc_return = self._run_ctc_v1(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
@@ -523,9 +525,9 @@ class ExtractModel(nn.Module):
                 psi_tags.append((psi[l - 1] + non_span_const).align_to('batch', 'tag', 'new_tag'))
                 phi_tags.append((phi[l - 1] + non_span_const).align_to('batch', 'tag', 'new_tag'))
             else:
-                if g.new_version:
+                if g.inference_mode == 'new':
                     phi_scores.append(expand_vs(all_phi_scores[l - 1]))
-                else:
+                elif g.inference_mode == 'mixed':
                     phi_scores.append(all_phi_scores[l - 1])
             # Case 'E's.
             phi_lse = list()
@@ -542,11 +544,12 @@ class ExtractModel(nn.Module):
                     lp = log_probs[:, start_idx, end_idx].expand_as(prev_marginal)
                     marginal_tags.append(prev_marginal + lp + span_bias)
 
-                    reward = lp / word_len
-                    reward = self._get_thresholded_reward(reward)
+                    # reward = lp / word_len
+                    # reward = self._get_thresholded_reward(reward)
+                    reward = raw_reward[:, start_idx, end_idx].expand_as(prev_marginal)
 
                     if self.training:
-                        if g.new_version:
+                        if g.inference_mode == 'new':
                             phi_psi_common.append(torch.full_like(lp, span_bias))
                             srw = span_raw_square[:, start_idx, end_idx].expand_as(prev_marginal)
                             phi_lse.extend([prev_marginal + srw, phi[prev_l] + lp])
@@ -558,10 +561,10 @@ class ExtractModel(nn.Module):
                             # Compute psi-related scores.
                             psi_lse.extend([prev_marginal + math.log(word_len), psi[prev_l]])
                     else:
-                        if g.new_version:
+                        if g.inference_mode == 'new':
                             rr = raw_reward[:, start_idx, end_idx].align_to('batch', 'tag', 'vocab')
                             phi_scores.append(all_phi_scores[prev_l].align_as(rr) + rr.exp())
-                        else:
+                        elif g.inference_mode == 'mixed':
                             phi_scores.append(all_phi_scores[prev_l] + reward.exp())
                 else:
                     marginal_tags.append(padding)
@@ -570,9 +573,9 @@ class ExtractModel(nn.Module):
                         phi_lse.extend([padding, padding])
                         psi_lse.extend([padding, padding])
                     else:
-                        if g.new_version:
+                        if g.inference_mode == 'new':
                             phi_scores.append(padding_vs)
-                        else:
+                        elif g.inference_mode == 'mixed':
                             phi_scores.append(padding)
 
             if self.training:
@@ -596,20 +599,22 @@ class ExtractModel(nn.Module):
                 phi[l] = torch.cat(phi_tags, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
             else:
                 # HACK(j_luo) New way.
-                phi_stacked = torch.stack(phi_scores, new_name='new_tag')
-                if g.new_version:
-                    flat_phi = nh.flatten(phi_stacked, ['tag', 'vocab'], 'tag_X_vocab')
-                    best_value, best_index = flat_phi.max(dim='tag_X_vocab')
-                    best_prev_tag = best_index // len(self.vocab)
-                    best_prev_vocab = best_index % len(self.vocab)
-                else:
-                    best_value, best_prev_tag = phi_stacked.max(dim='tag')
-                all_phi_scores[l] = best_value.rename(new_tag='tag')
-                bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
+                if g.inference_mode in ['new', 'mixed']:
+                    phi_stacked = torch.stack(phi_scores, new_name='new_tag')
+                    if g.inference_mode == 'new':
+                        flat_phi = nh.flatten(phi_stacked, ['tag', 'vocab'], 'tag_X_vocab')
+                        best_value, best_index = flat_phi.max(dim='tag_X_vocab')
+                        best_prev_tag = best_index // len(self.vocab)
+                        best_prev_vocab = best_index % len(self.vocab)
+                    else:
+                        best_value, best_prev_tag = phi_stacked.max(dim='tag')
+                    all_phi_scores[l] = best_value.rename(new_tag='tag')
+                    bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
                 # Old way here.
                 best_value, best_prev_tag = torch.stack(marginal_tags, new_name='new_tag').max(dim='tag')
                 marginal[l] = best_value.rename(new_tag='tag')
-                # bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
+                if g.inference_mode == 'old':
+                    bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
 
         # ------------- Get the actual phi and psi values. ------------- #
 

@@ -292,7 +292,8 @@ class ExtractTrainer(BaseTrainer):
 
             loss = -metrics.marginal.mean
 
-            pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0).abs()
+            # pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0).abs()
+            pr_loss = -metrics.posterior_spans.mean
             l_pr_loss = -metrics.avg_log_probs.mean
             loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
 

@@ -424,14 +424,9 @@ class ExtractModel(nn.Module):
 
     # @profile
     def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, costs: Costs, emb_repr: EmbAndRepr) -> ExtractModelReturn:
-        # Get the best score and span.
-        # NOTE(j_luo) Some segments don't have any viable spans.
         matches = extracted.matches
-        viable_spans = extracted.viable_spans
-        not_viable_mask = (~viable_spans.viable).expand_as(matches.ll)
-        viable_ll = matches.ll + (-9999.9) * not_viable_mask.float()
         # Get marginal.
-        span_log_probs = viable_ll.logsumexp(dim='vocab')
+        span_log_probs = matches.ll.logsumexp(dim='vocab')
         span_raw_square = raw_reward = None
         span_lengths = get_named_range(self.num_e_tags, 'len_e') + g.min_word_length
         if g.inference_mode == 'new':
@@ -440,8 +435,11 @@ class ExtractModel(nn.Module):
             span_raw_square = (raw_reward + matches.raw_ll).logsumexp(dim='vocab') - math.log(len(self.vocab))
         else:
             raw_reward = self._get_thresholded_reward(span_log_probs / span_lengths)
-        ctc_return = self._run_ctc_v2(batch.lengths, span_log_probs, matches.ll,
-                                      matches.raw_ll, span_raw_square, raw_reward)
+        p_x_z = LogTensor.from_torch(span_log_probs, log_scale=True)
+        p_xy_z = LogTensor.from_torch(matches.ll, log_scale=True)
+        p_x_yz = LogTensor.from_torch(matches.raw_ll, log_scale=True)
+        ctc_return = self._run_ctc_v2(batch.lengths, p_x_z, p_xy_z,
+                                      p_x_yz, span_raw_square, raw_reward)
         model_ret = ExtractModelReturn(emb_repr,
                                        extracted,
                                        costs,
@@ -466,7 +464,7 @@ class ExtractModel(nn.Module):
         reward = LogTensor.from_torch(reward, log_scale=log_scale)
         return reward
 
-    def _run_ctc_v2(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: LogTensor) -> CtcReturn:
+    def _run_ctc_v2(self, lengths: LT, p_x_z: FT, p_xy_z: FT, p_x_yz: FT, span_raw_square: FT, raw_reward: LogTensor) -> CtcReturn:
         # ------------------ Prepare everything first. ----------------- #
 
         marginal = dict()
@@ -474,25 +472,24 @@ class ExtractModel(nn.Module):
         phi = dict()
 
         max_length = lengths.max().item()
-        batch_size = span_log_probs.size('batch')
+        batch_size = p_x_z.size('batch')
         bookkeeper = None
         if self.training:
-            log_probs = span_log_probs
+            log_probs = p_x_z
         else:
-            log_probs, best_vocab = vocab_log_probs.max(dim='vocab')
+            log_probs, best_vocab = p_xy_z.max(dim='vocab')
             bookkeeper = CtcBookkeeper(best_vocab)
 
             # NOTE(j_luo) Only consider words above a certain threshold.
             if g.cut_off is not None:
                 warnings.warn('Only taking most confident ones.')
                 len_range = get_named_range(log_probs.size('len_e'), 'len_e') + g.min_word_length
-                avg = raw_vocab_log_probs.gather('vocab', best_vocab) / len_range.align_as(best_vocab)
+                avg = p_x_yz.gather('vocab', best_vocab) / len_range.align_as(best_vocab)
                 log_probs = torch.where(avg > self.cut_off, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
 
         new_size = tuple(log_probs.size()) + (self.num_tags, )
-        log_probs = log_probs.align_to(..., 'tag').expand(*new_size)
+        p_x_z = log_probs.align_to(..., 'tag').expand(*new_size)
         raw_reward = raw_reward.align_to(..., 'tag').expand(*new_size)
-        p_x_z = LogTensor.from_torch(log_probs, log_scale=True)
 
         def get_init(start: float, init_value: float = -9999.9):
             ret = get_zeros(batch_size, self.num_tags).fill_(init_value)

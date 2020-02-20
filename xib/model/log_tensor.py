@@ -90,6 +90,16 @@ def _get_sign_lst(sign_lst, storage_lst):
         return None
 
 
+def mul_sign(s1: Union[None, FT], s2: Union[None, FT]) -> Union[None, FT]:
+    if s1 is None:
+        ret = s2
+    elif s2 is None:
+        ret = s1
+    else:
+        ret = s1 * s2
+    return ret
+
+
 class LogTensor:
 
     def __init__(self, storage: FT, sign: Optional[FT] = None, value: Optional[FT] = None):
@@ -145,12 +155,7 @@ class LogTensor:
             storage = self.storage + math.log(other)
         else:
             _check_log_tensor_type(other)
-            if self.sign is None:
-                sign = other.sign
-            elif other.sign is None:
-                sign = self.sign
-            else:
-                sign = self.sign * other.sign
+            sign = mul_sign(self.sign, other.sign)
             storage = self.storage + other.storage
         return LogTensor(storage, sign)
 

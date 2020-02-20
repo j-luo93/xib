@@ -34,6 +34,8 @@ from .modules import DenseFeatEmbedding
 
 ExtractBatch = Union[ContinuousIpaBatch, UnbrokenTextBatch]
 
+# profile = lambda x: x
+
 
 @batch_class
 class Matches(BaseBatch):
@@ -163,6 +165,7 @@ class ExtractModel(nn.Module):
                 ret.append(cat)
         return ret
 
+    # @profile
     def forward(self, batch: AlignedBatch) -> ExtractModelReturn:
         vocab = batch.known_vocab
         # Get relevant representations -- one for all the known units, and one for a contextualized representation.
@@ -187,6 +190,7 @@ class ExtractModel(nn.Module):
 
         return model_ret
 
+    # @profile
     def get_known_unit_emb(self, vocab: Vocabulary) -> FT:
         # Get unit embeddings for each known unit.
         if g.dense_embedding and g.use_base_embedding:
@@ -207,6 +211,7 @@ class ExtractModel(nn.Module):
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
         return known_unit_emb
 
+    # @profile
     def _get_repr(self, batch: AlignedBatch) -> EmbAndRepr:
         vocab = batch.known_vocab
         known_unit_emb = self.get_known_unit_emb(vocab)
@@ -232,23 +237,27 @@ class ExtractModel(nn.Module):
         emb_repr = EmbAndRepr(known_unit_emb, known_ctx_repr, known_ins_ctx_repr, lost_unit_emb)
         return emb_repr
 
+    # @profile
     def get_lost_unit_emb(self, known_unit_emb: FT) -> FT:
         lost_unit_weight = self.unit_aligner.weight
         lost_unit_emb = lost_unit_weight @ known_unit_emb
         return lost_unit_emb
 
+    # @profile
     def _get_alignment_log_probs(self, known_unit_emb: FT, lost_unit_emb: FT, reverse: bool = False) -> FT:
         unit_logits = known_unit_emb @ lost_unit_emb.t()
         dim = 0 if reverse else -1
         unit_log_probs = unit_logits.log_softmax(dim=dim)
         return unit_log_probs
 
+    # @profile
     def get_alignment(self, reverse: bool = False) -> FT:
         known_unit_emb = self.get_known_unit_emb(self.vocab)
         lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
         unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=reverse)
         return unit_log_probs.exp()
 
+    # @profile
     def _get_costs(self, vocab_unit_id_seqs: LT, emb_repr: EmbAndRepr) -> Costs:
         # Get global (non-contextualized) log probs.
         unit_log_probs = self._get_alignment_log_probs(emb_repr.known_unit_emb, emb_repr.lost_unit_emb)
@@ -293,6 +302,7 @@ class ExtractModel(nn.Module):
 
         return costs
 
+    # @profile
     def _get_matches(self, costs: Costs, viable_spans: ViableSpans, vocab_lengths: LT) -> Matches:
         nk = costs.sub.size('vocab')
         nl = viable_spans.starts.size('viable')
@@ -344,6 +354,7 @@ class ExtractModel(nn.Module):
         matches = Matches(-nll, f)
         return matches
 
+    # @profile
     def _get_extracted(self, matches: Matches, viable_spans: ViableSpans, vocab_size: int) -> Extracted:
         viable = viable_spans.viable
         batch_size = viable.size('batch')
@@ -371,6 +382,7 @@ class ExtractModel(nn.Module):
                               viable_spans)
         return extracted
 
+    # @profile
     def _update_fs(self, fs: Dict[Tuple[int, int], FT], costs: Costs, viable_spans: ViableSpans, kl: int, ll: int):
         transitions = list()
         if (kl - 1, ll) in fs:
@@ -414,6 +426,7 @@ class ExtractModel(nn.Module):
         else:
             return math.log(g.baseline)
 
+    # @profile
     def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, costs: Costs, emb_repr: EmbAndRepr) -> ExtractModelReturn:
         # Get the best score and span.
         # NOTE(j_luo) Some segments don't have any viable spans.
@@ -468,6 +481,7 @@ class ExtractModel(nn.Module):
             reward = LogTensor.from_torch(reward, log_scale=log_scale)
         return reward
 
+    # @profile
     def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: FT) -> CtcReturn:
         r"""To speed up DP, everything is packed into tensors.
 
@@ -501,6 +515,9 @@ class ExtractModel(nn.Module):
                 len_range = get_named_range(log_probs.size('len_e'), 'len_e') + g.min_word_length
                 avg = raw_vocab_log_probs.gather('vocab', best_vocab) / len_range.align_as(best_vocab)
                 log_probs = torch.where(avg > self.cut_off, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
+        new_size = tuple(log_probs.size()) + (self.num_tags, )
+        log_probs = log_probs.align_to(..., 'tag').expand(*new_size)
+        raw_reward = raw_reward.align_to(..., 'tag').expand(*new_size)
         if g.use_log_tensor:
             p_x_z = LogTensor.from_torch(log_probs, log_scale=True)
 
@@ -570,15 +587,15 @@ class ExtractModel(nn.Module):
                     start_idx = prev_l
                     end_idx = word_len - g.min_word_length
                     if g.use_log_tensor:
-                        this_p_x_z = p_x_z[:, start_idx, end_idx].expand_as(prev_marginal)
+                        this_p_x_z = p_x_z[:, start_idx, end_idx]  # .expand_as(prev_marginal)
                         marginal_tags.append(prev_marginal * this_p_x_z * span_bias)
                     else:
-                        lp = log_probs[:, start_idx, end_idx].expand_as(prev_marginal)
+                        lp = log_probs[:, start_idx, end_idx]  # .expand_as(prev_marginal)
                         marginal_tags.append(prev_marginal + lp + span_bias)
 
                     # reward = lp / word_len
                     # reward = self._get_thresholded_reward(reward)
-                    reward = raw_reward[:, start_idx, end_idx].expand_as(prev_marginal)
+                    reward = raw_reward[:, start_idx, end_idx]  # .expand_as(prev_marginal)
 
                     if self.training:
                         if g.inference_mode == 'new':

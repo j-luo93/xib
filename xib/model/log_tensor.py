@@ -13,7 +13,10 @@ from dev_misc.utils import cached_property, check_explicit_arg
 
 EPS = 1e-16
 
+# profile = lambda x: x
 
+
+# @profile
 def th_logsumexp(a: FT, b: FT, dim: Union[str, int] = None, keepdims: bool = False):
     """This follows the scipy implementation here:
     https://github.com/scipy/scipy/blob/29dbc361056df93fe659dcb7362fa2c0e647a14b/scipy/special/_logsumexp.py#L8-L127
@@ -189,6 +192,7 @@ class LogTensor:
     reveal_names = _inherit('reveal_names')
     hide_names = _inherit('hide_names')
 
+    # @profile
     @classmethod
     def stack(cls, lst: Iterable[LogTensor], new_name: str = None) -> LogTensor:
         check_explicit_arg(new_name)

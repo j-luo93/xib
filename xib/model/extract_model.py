@@ -466,7 +466,6 @@ class ExtractModel(nn.Module):
             reward = LogTensor.from_torch(reward, log_scale=True)
         return reward
 
-    # @profile
     def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: FT) -> CtcReturn:
         r"""To speed up DP, everything is packed into tensors.
 

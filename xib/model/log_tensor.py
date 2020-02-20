@@ -18,10 +18,9 @@ def th_logsumexp(a: FT, b: FT, dim: Union[str, int] = None, keepdims: bool = Fal
     """This follows the scipy implementation here:
     https://github.com/scipy/scipy/blob/29dbc361056df93fe659dcb7362fa2c0e647a14b/scipy/special/_logsumexp.py#L8-L127
     """
-    if b is not None:
-        b_is_zero = (b == 0)
-        if b_is_zero.any():
-            a = a - torch.where(b_is_zero, torch.full_like(b, np.inf), torch.zeros_like(b))
+    b_is_zero = (b == 0)
+    if b_is_zero.any():
+        a = a - torch.where(b_is_zero, torch.full_like(b, np.inf), torch.zeros_like(b))
 
     a_max, _ = a.max(dim=dim, keepdims=True)
 
@@ -73,7 +72,7 @@ def _do_as(func_name: str) -> Callable:
         if self.sign is None:
             sign = None
         else:
-            sign = getattr(self.sign, func_name)(other.sign)
+            sign = getattr(self.sign, func_name)(other.storage)
         return LogTensor(storage, sign)
 
     return wrapped
@@ -169,7 +168,7 @@ class LogTensor:
             storage = a.logsumexp(dim='____')
             return LogTensor(storage)
         else:
-            if self.sign is not None or other.sign is not None:
+            if self.sign is not None and other.sign is not None:
                 b = torch.stack([self.sign, other.sign], new_name='____')
             elif self.sign is None:
                 b = torch.stack([torch.ones_like(self.storage), other.sign], new_name='____')

@@ -111,10 +111,11 @@ class ExtractModel(nn.Module):
     add_argument('expected_ratio', dtype=float, default=0.2)
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
-    add_argument('positive_reward_only', dtype=bool, default=False)
+    # add_argument('positive_reward_only', dtype=bool, default=False)
     add_argument('use_log_tensor', dtype=bool, default=False)
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
-    add_argument('thresh_func', dtype=str, default='linear', choices=['linear', 'trunc'])
+    add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div'])
+    # add_argument('thresh_func', dtype=str, default='linear', choices=['linear', 'trunc'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -452,18 +453,19 @@ class ExtractModel(nn.Module):
         return self.num_e_tags + 1
 
     def _get_thresholded_reward(self, raw: FT) -> Union[FT, LogTensor]:
-        diff = raw - self.baseline
-        if g.thresh_func == 'linear':
-            reward = diff
-        elif g.thresh_func == 'trunc':
-            reward = diff.clamp_max(math.log(5.0))
-        if g.positive_reward_only:
-            pos = diff > 0
-            reward = torch.where(pos,
-                                 reward,
-                                 torch.full_like(raw, -9999.9))
+        reward = raw - self.baseline
+        # if g.thresh_func == 'linear':
+        #     reward = diff
+        # elif g.thresh_func == 'trunc':
+        #     reward = diff.clamp_max(math.log(5.0))
+        # if g.positive_reward_only:
+        #     pos = diff > 0
+        #     reward = torch.where(pos,
+        #                          reward,
+        #                          torch.full_like(raw, -9999.9))
         if g.use_log_tensor:
-            reward = LogTensor.from_torch(reward, log_scale=True)
+            log_scale = g.reward_mode == 'div'
+            reward = LogTensor.from_torch(reward, log_scale=log_scale)
         return reward
 
     def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: FT) -> CtcReturn:

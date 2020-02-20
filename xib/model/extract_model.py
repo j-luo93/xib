@@ -463,9 +463,10 @@ class ExtractModel(nn.Module):
                                  reward,
                                  torch.full_like(raw, -9999.9))
         if g.use_log_tensor:
-            reward = LogTensor.from_torch(reward)
+            reward = LogTensor.from_torch(reward, log_scale=True)
         return reward
 
+    # @profile
     def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: FT) -> CtcReturn:
         r"""To speed up DP, everything is packed into tensors.
 
@@ -530,7 +531,6 @@ class ExtractModel(nn.Module):
         # ------------------------- Main body. ------------------------- #
         all_phi_scores = dict()
         all_phi_scores[0] = get_init(0.0)  # FIXME(j_luo) This is wrong for log_tensors.
-        breakpoint()  # BREAKPOINT(j_luo)
         nh = NameHelper()
         for l in range(1, max_length + 1):
             marginal_tags = list()

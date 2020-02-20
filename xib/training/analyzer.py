@@ -189,7 +189,7 @@ class ExtractAnalyzer:
 
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
-        loss_value = model_ret.ctc_return.final_score.sum()
+        loss_value = model_ret.ctc_return.final_score.sum(dim='batch')
         not_zero = True
         loss_weight = batch.batch_size if g.mean_mode == 'segment' else batch.lengths.sum()
         loss_metric = Metric('marginal', loss_value, loss_weight)
@@ -204,11 +204,15 @@ class ExtractAnalyzer:
             metrics += Metric('reg', reg, loss_weight)
 
         try:
-            pr_reg = Metric('posterior_spans', model_ret.ctc_return.expected_num_spans.sum(), batch.lengths.sum())
+            pr_reg = Metric('posterior_spans',
+                            model_ret.ctc_return.expected_num_spans.sum('batch'),
+                            batch.lengths.sum())
             metrics += pr_reg
 
             # FIXME(j_luo) The weight is wrongly computed.
-            l_pr_reg = Metric('avg_log_probs', model_ret.ctc_return.expected_avg_log_probs.sum(), batch.batch_size)
+            l_pr_reg = Metric('avg_log_probs',
+                              model_ret.ctc_return.expected_avg_log_probs.sum('batch'),
+                              batch.batch_size)
             metrics += l_pr_reg
         except:
             pass

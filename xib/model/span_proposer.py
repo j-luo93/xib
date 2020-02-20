@@ -153,9 +153,14 @@ class SpanBias(nn.Module):
                 return {l: 0.0 for l in self.span_lengths}
             return 0.0
         elif g.bias_mode == 'fixed':
+
+            def to_tensor(value):
+                return torch.tensor(value)
+
             if is_span:
-                return {l: math.log((1.0 - g.non_span_bias) / len(self.span_lengths)) for l in self.span_lengths}
-            return math.log(g.non_span_bias)
+                span_bias = to_tensor(math.log((1.0 - g.non_span_bias) / len(self.span_lengths)))
+                return {l: span_bias for l in self.span_lengths}
+            return to_tensor(math.log(g.non_span_bias))
         else:
             with NoName(*self.span_prior.values()):
                 prior = torch.stack(list(self.span_prior.values()), new_name='stacked').log_softmax(dim='stacked')

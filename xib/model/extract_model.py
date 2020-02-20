@@ -113,11 +113,8 @@ class ExtractModel(nn.Module):
     add_argument('expected_ratio', dtype=float, default=0.2)
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
-    # add_argument('positive_reward_only', dtype=bool, default=False)
-    add_argument('use_log_tensor', dtype=bool, default=False)
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
     add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div'])
-    # add_argument('thresh_func', dtype=str, default='linear', choices=['linear', 'trunc'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -150,8 +147,7 @@ class ExtractModel(nn.Module):
         self.span_bias = SpanBias()
         self.vocab = vocab
 
-        if g.use_log_tensor:
-            assert g.inference_mode == 'old'
+        assert g.inference_mode == 'old'
 
     @global_property
     def ins_del_cost(self):
@@ -444,9 +440,8 @@ class ExtractModel(nn.Module):
             span_raw_square = (raw_reward + matches.raw_ll).logsumexp(dim='vocab') - math.log(len(self.vocab))
         else:
             raw_reward = self._get_thresholded_reward(span_log_probs / span_lengths)
-        ctc_return = self._run_ctc(batch.lengths, span_log_probs, matches.ll,
-                                   matches.raw_ll, span_raw_square, raw_reward)
-        # ctc_return = self._run_ctc_v1(batch.lengths, span_log_probs, matches.ll, matches.raw_ll)
+        ctc_return = self._run_ctc_v2(batch.lengths, span_log_probs, matches.ll,
+                                      matches.raw_ll, span_raw_square, raw_reward)
         model_ret = ExtractModelReturn(emb_repr,
                                        extracted,
                                        costs,
@@ -467,33 +462,11 @@ class ExtractModel(nn.Module):
 
     def _get_thresholded_reward(self, raw: FT) -> Union[FT, LogTensor]:
         reward = raw - self.baseline
-        # if g.thresh_func == 'linear':
-        #     reward = diff
-        # elif g.thresh_func == 'trunc':
-        #     reward = diff.clamp_max(math.log(5.0))
-        # if g.positive_reward_only:
-        #     pos = diff > 0
-        #     reward = torch.where(pos,
-        #                          reward,
-        #                          torch.full_like(raw, -9999.9))
-        if g.use_log_tensor:
-            log_scale = g.reward_mode == 'div'
-            reward = LogTensor.from_torch(reward, log_scale=log_scale)
+        log_scale = g.reward_mode == 'div'
+        reward = LogTensor.from_torch(reward, log_scale=log_scale)
         return reward
 
-    # @profile
-    def _run_ctc(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: FT) -> CtcReturn:
-        r"""To speed up DP, everything is packed into tensors.
-
-        tag \ case
-        -------------------------------------------------------------
-        O           (l-1, O)    (l-1, E_m)      ...     (l-1, E_M)
-        E_m         (l-m, O)  (l-m, E_m)    ...     (l-m, E_M)
-        E_m+1       (l-m-1, O)    (l-m-1, E_m)      ...     (l-m-1, E_M)
-        ...
-        E_M         (l-M, O)  (l-M, E_m)    ...     (l-M, E_M)
-        """
-
+    def _run_ctc_v2(self, lengths: LT, span_log_probs: FT, vocab_log_probs: FT, raw_vocab_log_probs: FT, span_raw_square: FT, raw_reward: LogTensor) -> CtcReturn:
         # ------------------ Prepare everything first. ----------------- #
 
         marginal = dict()
@@ -515,18 +488,17 @@ class ExtractModel(nn.Module):
                 len_range = get_named_range(log_probs.size('len_e'), 'len_e') + g.min_word_length
                 avg = raw_vocab_log_probs.gather('vocab', best_vocab) / len_range.align_as(best_vocab)
                 log_probs = torch.where(avg > self.cut_off, log_probs, torch.zeros_like(log_probs).fill_(-9999.9))
+
         new_size = tuple(log_probs.size()) + (self.num_tags, )
         log_probs = log_probs.align_to(..., 'tag').expand(*new_size)
         raw_reward = raw_reward.align_to(..., 'tag').expand(*new_size)
-        if g.use_log_tensor:
-            p_x_z = LogTensor.from_torch(log_probs, log_scale=True)
+        p_x_z = LogTensor.from_torch(log_probs, log_scale=True)
 
         def get_init(start: float, init_value: float = -9999.9):
             ret = get_zeros(batch_size, self.num_tags).fill_(init_value)
             ret[:, 0] = start
             ret.rename_('batch', 'tag')
-            if g.use_log_tensor:
-                ret = LogTensor.from_torch(ret, log_scale=True)
+            ret = LogTensor.from_torch(ret, log_scale=True)
             return ret
 
         marginal[0] = get_init(0.0)
@@ -542,9 +514,8 @@ class ExtractModel(nn.Module):
 
         non_span_bias = self.span_bias(False)
         span_biases = self.span_bias(True)
-        if g.use_log_tensor:
-            non_span_bias = LogTensor.from_torch(non_span_bias, log_scale=True)
-            span_biases = {l: LogTensor.from_torch(b, log_scale=True) for l, b in span_biases.items()}
+        non_span_bias = LogTensor.from_torch(non_span_bias, log_scale=True)
+        span_biases = {l: LogTensor.from_torch(b, log_scale=True) for l, b in span_biases.items()}
 
         # ------------------------- Main body. ------------------------- #
         all_phi_scores = dict()
@@ -556,19 +527,11 @@ class ExtractModel(nn.Module):
             psi_tags = list()
             phi_scores = list()
             # Case 'O'.
-            if g.use_log_tensor:
-                non_span_const = self.p_unmatched * non_span_bias
-                marginal_tags.append(marginal[l - 1] * non_span_const)
-            else:
-                non_span_const = self.lp_per_unmatched + non_span_bias
-                marginal_tags.append(marginal[l - 1] + non_span_const)
+            non_span_const = self.p_unmatched * non_span_bias
+            marginal_tags.append(marginal[l - 1] * non_span_const)
             if self.training:
-                if g.use_log_tensor:
-                    psi_tags.append((psi[l - 1] * non_span_const).align_to('batch', 'tag', 'new_tag'))
-                    phi_tags.append((phi[l - 1] * non_span_const).align_to('batch', 'tag', 'new_tag'))
-                else:
-                    psi_tags.append((psi[l - 1] + non_span_const).align_to('batch', 'tag', 'new_tag'))
-                    phi_tags.append((phi[l - 1] + non_span_const).align_to('batch', 'tag', 'new_tag'))
+                psi_tags.append((psi[l - 1] * non_span_const).align_to('batch', 'tag', 'new_tag'))
+                phi_tags.append((phi[l - 1] * non_span_const).align_to('batch', 'tag', 'new_tag'))
             else:
                 if g.inference_mode == 'new':
                     phi_scores.append(expand_vs(all_phi_scores[l - 1]))
@@ -586,16 +549,9 @@ class ExtractModel(nn.Module):
                     # FIXME(j_luo)  This is wrong if oracle spans are used.
                     start_idx = prev_l
                     end_idx = word_len - g.min_word_length
-                    if g.use_log_tensor:
-                        this_p_x_z = p_x_z[:, start_idx, end_idx]  # .expand_as(prev_marginal)
-                        marginal_tags.append(prev_marginal * this_p_x_z * span_bias)
-                    else:
-                        lp = log_probs[:, start_idx, end_idx]  # .expand_as(prev_marginal)
-                        marginal_tags.append(prev_marginal + lp + span_bias)
-
-                    # reward = lp / word_len
-                    # reward = self._get_thresholded_reward(reward)
-                    reward = raw_reward[:, start_idx, end_idx]  # .expand_as(prev_marginal)
+                    this_p_x_z = p_x_z[:, start_idx, end_idx]
+                    marginal_tags.append(prev_marginal * this_p_x_z * span_bias)
+                    reward = raw_reward[:, start_idx, end_idx]
 
                     if self.training:
                         if g.inference_mode == 'new':
@@ -604,16 +560,9 @@ class ExtractModel(nn.Module):
                             phi_lse.extend([prev_marginal + srw, phi[prev_l] + lp])
                             psi_lse.extend([prev_marginal + math.log(word_len) + lp, psi[prev_l] + lp])
                         else:
-                            if g.use_log_tensor:
-                                phi_psi_common.append(span_bias * this_p_x_z)
-                                phi_lse.extend([prev_marginal * reward, phi[prev_l]])
-                                psi_lse.extend([prev_marginal * word_len, psi[prev_l]])
-                            else:
-                                phi_psi_common.append(span_bias + lp)
-                                # Compute phi-related scores.
-                                phi_lse.extend([prev_marginal + reward, phi[prev_l]])
-                                # Compute psi-related scores.
-                                psi_lse.extend([prev_marginal + math.log(word_len), psi[prev_l]])
+                            phi_psi_common.append(span_bias * this_p_x_z)
+                            phi_lse.extend([prev_marginal * reward, phi[prev_l]])
+                            psi_lse.extend([prev_marginal * word_len, psi[prev_l]])
                     else:
                         if g.inference_mode == 'new':
                             rr = raw_reward[:, start_idx, end_idx].align_to('batch', 'tag', 'vocab')
@@ -633,44 +582,28 @@ class ExtractModel(nn.Module):
                             phi_scores.append(padding)
 
             if self.training:
-                if g.use_log_tensor:
-                    all_lse = phi_lse + psi_lse
-                    part_1 = all_lse[::2]
-                    part_2 = all_lse[1::2]
-                    part_1 = LogTensor.stack(part_1, new_name='new_tag')
-                    part_2 = LogTensor.stack(part_2, new_name='new_tag')
-                    phi_psi_lse = part_1 + part_2
-                else:
-                    all_stacked = torch.stack(phi_lse + psi_lse, new_name='stacked')
-                    flat_all_stacked = all_stacked.unflatten('stacked', [('new_tag', self.num_e_tags * 2), ('tmp', 2)])
-                    phi_psi_lse = flat_all_stacked.logsumexp(dim='tmp').align_to('batch', 'tag', 'new_tag')
+                all_lse = phi_lse + psi_lse
+                part_1 = all_lse[::2]
+                part_2 = all_lse[1::2]
+                part_1 = LogTensor.stack(part_1, new_name='new_tag')
+                part_2 = LogTensor.stack(part_2, new_name='new_tag')
+                phi_psi_lse = part_1 + part_2
                 assert phi_psi_lse.size('new_tag') % 2 == 0
                 with NoName(phi_psi_lse):
                     phi_lse, psi_lse = phi_psi_lse.chunk(2, dim=2)
                     phi_lse.rename_('batch', 'tag', 'new_tag')
                     psi_lse.rename_('batch', 'tag', 'new_tag')
 
-                if g.use_log_tensor:
-                    stacked_common = LogTensor.stack(phi_psi_common, new_name='new_tag')
-                    psi_tags.append(stacked_common * psi_lse)
-                    phi_tags.append(stacked_common * phi_lse)
-                else:
-                    stacked_common = torch.stack(phi_psi_common, new_name='new_tag')
-                    psi_tags.append(stacked_common + psi_lse)
-                    phi_tags.append(stacked_common + phi_lse)
+                stacked_common = LogTensor.stack(phi_psi_common, new_name='new_tag')
+                psi_tags.append(stacked_common * psi_lse)
+                phi_tags.append(stacked_common * phi_lse)
 
             # Sum up all alignments.
             if self.training:
-                if g.use_log_tensor:
-                    marginal[l] = LogTensor.stack(marginal_tags, new_name='new_tag').sum(
-                        dim='tag').rename(new_tag='tag')
-                    psi[l] = LogTensor.cat(psi_tags, dim='new_tag').sum(dim='tag').rename(new_tag='tag')
-                    phi[l] = LogTensor.cat(phi_tags, dim='new_tag').sum(dim='tag').rename(new_tag='tag')
-                else:
-                    marginal[l] = torch.stack(marginal_tags, new_name='new_tag').logsumexp(
-                        dim='tag').rename(new_tag='tag')
-                    psi[l] = torch.cat(psi_tags, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
-                    phi[l] = torch.cat(phi_tags, dim='new_tag').logsumexp(dim='tag').rename(new_tag='tag')
+                marginal[l] = LogTensor.stack(marginal_tags, new_name='new_tag').sum(
+                    dim='tag').rename(new_tag='tag')
+                psi[l] = LogTensor.cat(psi_tags, dim='new_tag').sum(dim='tag').rename(new_tag='tag')
+                phi[l] = LogTensor.cat(phi_tags, dim='new_tag').sum(dim='tag').rename(new_tag='tag')
             else:
                 # HACK(j_luo) New way.
                 if g.inference_mode in ['new', 'mixed']:
@@ -685,20 +618,14 @@ class ExtractModel(nn.Module):
                     all_phi_scores[l] = best_value.rename(new_tag='tag')
                     bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
                 # Old way here.
-                if g.use_log_tensor:
-                    best_value, best_prev_tag = LogTensor.stack(marginal_tags, new_name='new_tag').max(dim='tag')
-                else:
-                    best_value, best_prev_tag = torch.stack(marginal_tags, new_name='new_tag').max(dim='tag')
+                best_value, best_prev_tag = LogTensor.stack(marginal_tags, new_name='new_tag').max(dim='tag')
                 marginal[l] = best_value.rename(new_tag='tag')
                 if g.inference_mode == 'old':
                     bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
 
         # ------------- Get the actual phi and psi values. ------------- #
 
-        if g.use_log_tensor:
-            marginal = LogTensor.stack([marginal[l] for l in range(max_length + 1)], new_name='length')
-        else:
-            marginal = torch.stack([marginal[l] for l in range(max_length + 1)], new_name='length')
+        marginal = LogTensor.stack([marginal[l] for l in range(max_length + 1)], new_name='length')
         expected_num_spans = expected_avg_log_probs = None
         with NoName(marginal, lengths):
             final_nodes = marginal[range(batch_size), :, lengths]
@@ -707,29 +634,14 @@ class ExtractModel(nn.Module):
         if not self.training:
             final_score = final_nodes.max(dim='tag')[0]
         else:
-            if g.use_log_tensor:
-                final_score = final_nodes.sum(dim='tag')
-            else:
-                final_score = final_nodes.logsumexp(dim='tag')
+            final_score = final_nodes.sum(dim='tag')
 
         if self.training:
-            if g.use_log_tensor:
-                psi = LogTensor.stack([psi[l] for l in range(max_length + 1)], new_name='length')
-                phi = LogTensor.stack([phi[l] for l in range(max_length + 1)], new_name='length')
-            else:
-                psi = torch.stack([psi[l] for l in range(max_length + 1)], new_name='length')
-                phi = torch.stack([phi[l] for l in range(max_length + 1)], new_name='length')
+            psi = LogTensor.stack([psi[l] for l in range(max_length + 1)], new_name='length')
+            phi = LogTensor.stack([phi[l] for l in range(max_length + 1)], new_name='length')
             with NoName(psi, phi, lengths):
                 phi_nodes = phi[range(batch_size), :, lengths]
                 psi_nodes = psi[range(batch_size), :, lengths]
-                if g.use_log_tensor:
-                    expected_avg_log_probs = (phi_nodes.sum(dim=-1) / final_score).value
-                    expected_num_spans = (psi_nodes.sum(dim=-1) / final_score).value
-                else:
-                    expected_avg_log_probs = (phi_nodes.logsumexp(dim=-1) - final_score).exp()  # / expected_num_spans
-                    expected_num_spans = (psi_nodes.logsumexp(dim=-1) - final_score).exp()
-        # HACK(j_luo)
-        if g.use_log_tensor:
-            return CtcReturn(final_nodes, final_score.storage, expected_num_spans, expected_avg_log_probs, bookkeeper)
-        else:
-            return CtcReturn(final_nodes, final_score, expected_num_spans, expected_avg_log_probs, bookkeeper)
+                expected_avg_log_probs = (phi_nodes.sum(dim=-1) / final_score).value
+                expected_num_spans = (psi_nodes.sum(dim=-1) / final_score).value
+        return CtcReturn(final_nodes, final_score.storage, expected_num_spans, expected_avg_log_probs, bookkeeper)

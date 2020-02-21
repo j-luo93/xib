@@ -216,6 +216,7 @@ class ExtractManager(BaseManager):
     # IDEA(j_luo) when to put this in manager/trainer? what about scheduler? annealing? restarting? Probably all in trainer -- you need to track them with pbars.
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
+    add_argument('num_rounds', default=1000, dtype=int, msg='Number of rounds')
     add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
@@ -285,7 +286,7 @@ class ExtractManager(BaseManager):
         # # HACK(j_luo)
         # self.trainer.reset(reset_params=True)
         self.trainer.er = g.init_expected_ratio
-        while True:
+        for _ in range(g.num_rounds):
             self.trainer.reset()
             self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
 

@@ -464,8 +464,8 @@ class ExtractModel(nn.Module):
             log_scale = g.reward_mode == 'div'
             reward = LogTensor.from_torch(reward, log_scale=log_scale)
         else:
-            raw = LogTensor.from_torch(raw, log_scale=True)
             b = LogTensor.from_torch(torch.full_like(raw, self.baseline), log_scale=True)
+            raw = LogTensor.from_torch(raw, log_scale=True)
             reward = raw - b
         return reward
 

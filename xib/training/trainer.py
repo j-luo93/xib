@@ -174,6 +174,7 @@ class ExtractTrainer(BaseTrainer):
     add_argument('coverage_hyper', default=1.0, dtype=float)
     add_argument('weight_hyper', default=0.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
+    add_argument('pr_mode', default='barrier', dtype=str, choices=['barrier', 'penalty'])
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -292,8 +293,10 @@ class ExtractTrainer(BaseTrainer):
 
             loss = -metrics.marginal.mean
 
-            pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0).abs()
-            # pr_loss = -metrics.posterior_spans.mean
+            if g.pr_mode == 'barrier':
+                pr_loss = (metrics.posterior_spans.mean - self.er).clamp(max=0.0).abs()
+            else:
+                pr_loss = -metrics.posterior_spans.mean
             l_pr_loss = -metrics.avg_log_probs.mean
             loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
 

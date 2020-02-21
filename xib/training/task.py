@@ -44,3 +44,4 @@ class MlmTask(DecipherTask):
 @task_class
 class ExtractTask(Task):
     name = 'extract'
+    training: bool = False

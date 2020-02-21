@@ -308,6 +308,8 @@ class ExtractTrainer(BaseTrainer):
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()
 
+            total_loss = Metric('total_loss', loss.item(), batch.batch_size)
+            metrics += total_loss
             accum_metrics += metrics
 
         grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)

@@ -1,5 +1,7 @@
 import logging
+import math
 import random
+from collections import Counter
 from dataclasses import field
 from typing import Any, Dict, Iterable, Tuple
 
@@ -230,14 +232,52 @@ class DenseIpaBatch(IpaBatch):
         self.dense_feat_matrix = {k: v.cuda() for k, v in sfms.items()}
 
 
+def get_ngrams(seq, min_ngram, max_ngram):
+    for start in range(len(seq)):
+        for len_ngram in range(min_ngram, max_ngram + 1):
+            end = start + len_ngram
+            if end > len(seq):
+                break
+
+            ngram = seq[start: end]
+            yield ngram
+
+
+def get_sample_weight(data, min_ngram, max_ngram):
+    ngram_cnt = Counter()
+    for seq in data:
+        for ngram in get_ngrams(seq, min_ngram, max_ngram):
+            ngram_cnt[ngram] += 1
+    # This is the actualy idf.
+    # total = sum(ngram_cnt.values())
+    # idf = {ngram: math.log(total / cnt) for ngram, cnt in ngram_cnt.items()}
+    idf = {ngram: 1.0 / cnt for ngram, cnt in ngram_cnt.items()}
+    total_ngram_freq = list()
+    for seq in data:
+        total_cnt = 0.0
+        total_num = 0
+        for ngram in get_ngrams(seq, min_ngram, max_ngram):
+            total_cnt += idf[ngram]
+            total_num += 1
+        total_cnt /= total_num
+        total_ngram_freq.append(total_cnt)
+    total_ngram_freq = np.asarray(total_ngram_freq)
+    return total_ngram_freq
+
+
 class BatchSampler(Sampler):
 
     add_argument('sort_by_length', default=True, dtype=bool)
+    add_argument('downsample', default=False, dtype=bool)
 
-    def __init__(self, lengths: Iterable[int], shuffle: bool = True):
+    def __init__(self, data, lengths: Iterable[int], shuffle: bool = True, training: bool = False):
         self.shuffle = shuffle
+        self.training = training
         self.lengths = np.asarray(lengths)
-        if g.sort_by_length:
+        if g.downsample and self.training:
+            self.sample_weights = get_sample_weight(data, g.min_word_length, g.max_word_length)
+            self.sample_weights = self.sample_weights / (1e-8 + self.sample_weights.sum())
+        elif not self.training or g.sort_by_length:
             # Partition the entire dataset beforehand into batches by length.
             indices = self.lengths.argsort()[::-1]  # NOTE(j_luo) Sort in descending order.
             logging.info('Partitioning the data into batches.')
@@ -258,19 +298,22 @@ class BatchSampler(Sampler):
             return None
 
     def __iter__(self):
-        if g.sort_by_length:
+        if g.sort_by_length or not self.training:
             if self.shuffle:
                 random.shuffle(self.idx_batches)
             yield from self.idx_batches
         else:
             indices = list(range(len(self.lengths)))
-            if self.shuffle:
+            if self.shuffle and not self.training:
                 random.shuffle(indices)
 
             max_length = 0
             idx_batch = list()
             while indices:
-                index = indices.pop()
+                if self.training and g.downsample:
+                    index = np.random.choice(indices, 1, p=self.sample_weights)[0]
+                else:
+                    index = indices.pop()
 
                 new_max_length = max(max_length, self.lengths[index])
                 if new_max_length * (1 + len(idx_batch)) > g.char_per_batch:

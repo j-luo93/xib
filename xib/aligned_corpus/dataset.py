@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import Dataset
 
 from dev_misc import LT, add_argument, g
+from dev_misc.utils import Singleton
 from xib.aligned_corpus.corpus import AlignedCorpus, AlignedSentence
 
 
@@ -60,7 +61,7 @@ class AlignedDatasetItem:
     feat_matrix: LT
 
 
-class AlignedDataset(Dataset):
+class AlignedDataset(Singleton):  # HACK(j_luo) Use singleton
     """A subclass of Dataset that deals with AlignedCorpus."""
 
     add_argument('noiseless', dtype=bool, default=False)
@@ -68,6 +69,7 @@ class AlignedDataset(Dataset):
     add_argument('min_segment_length', dtype=int)
 
     def __init__(self, corpus: AlignedCorpus):
+        logging.warning('Singleton pattern is used here.')
         self.corpus = corpus
         self.data = list()
         # HACK(j_luo)

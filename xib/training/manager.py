@@ -222,12 +222,14 @@ class ExtractManager(BaseManager):
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
     def __init__(self):
-        task = ExtractTask()
+        train_task = ExtractTask(training=True)
+        eval_task = ExtractTask(training=False)
         self.dl_reg = DataLoaderRegistry()
-        self.dl_reg.register_data_loader(task, g.data_path)
+        self.dl_reg.register_data_loader(train_task, g.data_path)
+        self.dl_reg.register_data_loader(eval_task, g.data_path)
 
         lu_size = ku_size = None
-        char_sets = self.dl_reg[task].dataset.corpus.char_sets
+        char_sets = self.dl_reg[train_task].dataset.corpus.char_sets
         lcs = char_sets[g.lost_lang]
         vocab = BaseAlignedBatch.known_vocab
         kcs = vocab.char_set
@@ -263,9 +265,9 @@ class ExtractManager(BaseManager):
         logging.info(str(self.model))
 
         eval_cls = AlignedExtractEvaluator if g.use_new_data_loader else ExtractEvaluator
-        self.evaluator = eval_cls(self.model, self.dl_reg[task], BaseAlignedBatch.known_vocab)
+        self.evaluator = eval_cls(self.model, self.dl_reg[eval_task], BaseAlignedBatch.known_vocab)
 
-        self.trainer = ExtractTrainer(self.model, [task], [1.0], 'total_step',
+        self.trainer = ExtractTrainer(self.model, [train_task], [1.0], 'total_step',
                                       stage_tnames=['round', 'total_step'],
                                       evaluator=self.evaluator,
                                       check_interval=g.check_interval,

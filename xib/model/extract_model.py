@@ -147,7 +147,7 @@ class ExtractModel(nn.Module):
         self.span_bias = SpanBias()
         self.vocab = vocab
 
-        assert g.inference_mode == 'old'
+        assert g.inference_mode in ['old', 'mixed']
 
     @global_property
     def ins_del_cost(self):
@@ -496,11 +496,11 @@ class ExtractModel(nn.Module):
         p_x_z = log_probs.align_to(..., 'tag').expand(*new_size)
         raw_reward = raw_reward.align_to(..., 'tag').expand(*new_size)
 
-        def get_init(start: float, init_value: float = -9999.9):
+        def get_init(start: float, init_value: float = -9999.9, log_scale: bool = True):
             ret = get_zeros(batch_size, self.num_tags).fill_(init_value)
             ret[:, 0] = start
             ret.rename_('batch', 'tag')
-            ret = LogTensor.from_torch(ret, log_scale=True)
+            ret = LogTensor.from_torch(ret, log_scale=log_scale)
             return ret
 
         marginal[0] = get_init(0.0)
@@ -521,7 +521,7 @@ class ExtractModel(nn.Module):
 
         # ------------------------- Main body. ------------------------- #
         all_phi_scores = dict()
-        all_phi_scores[0] = get_init(0.0)  # FIXME(j_luo) This is wrong for log_tensors.
+        all_phi_scores[0] = get_init(0.0, log_scale=False)
         nh = NameHelper()
         for l in range(1, max_length + 1):
             marginal_tags = list()
@@ -570,7 +570,8 @@ class ExtractModel(nn.Module):
                             rr = raw_reward[:, start_idx, end_idx].align_to('batch', 'tag', 'vocab')
                             phi_scores.append(all_phi_scores[prev_l].align_as(rr) + rr.exp())
                         elif g.inference_mode == 'mixed':
-                            phi_scores.append(all_phi_scores[prev_l] + reward.exp())
+                            # phi_scores.append(all_phi_scores[prev_l] + reward.exp())
+                            phi_scores.append(all_phi_scores[prev_l] + reward)
                 else:
                     marginal_tags.append(padding)
                     if self.training:
@@ -609,7 +610,8 @@ class ExtractModel(nn.Module):
             else:
                 # HACK(j_luo) New way.
                 if g.inference_mode in ['new', 'mixed']:
-                    phi_stacked = torch.stack(phi_scores, new_name='new_tag')
+                    phi_stacked = LogTensor.stack(phi_scores, new_name='new_tag')
+                    # phi_stacked = torch.stack(phi_scores, new_name='new_tag')
                     if g.inference_mode == 'new':
                         flat_phi = nh.flatten(phi_stacked, ['tag', 'vocab'], 'tag_X_vocab')
                         best_value, best_index = flat_phi.max(dim='tag_X_vocab')

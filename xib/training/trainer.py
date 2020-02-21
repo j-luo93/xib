@@ -187,11 +187,8 @@ class ExtractTrainer(BaseTrainer):
     def write_summaries(self, metrics: Metrics):
         metrics = metrics.with_prefix_('check')
         self.metric_writer.add_metrics(metrics, self.global_step)
-        try:
-            self.metric_writer.add_histogram(
-                'unit_aligner', self.model.unit_aligner.weight.data, global_step=self.global_step)
-        except ValueError:
-            logging.exception('')
+        self.metric_writer.add_histogram(
+            'unit_aligner', self.model.unit_aligner.weight.data, global_step=self.global_step)
 
     def save_alignment(self):
         if g.input_format == 'text':
@@ -281,17 +278,14 @@ class ExtractTrainer(BaseTrainer):
 
             # HACK(j_luo)
             if self.tracker['check'].value % self.check_interval == 0:
-                try:
-                    self.metric_writer.add_histogram(
-                        'known_unit_emb', ret.emb_repr.known_unit_emb, global_step=self.global_step)
-                    self.metric_writer.add_histogram(
-                        'lost_unit_emb', ret.emb_repr.lost_unit_emb, global_step=self.global_step)
-                    self.metric_writer.add_histogram(
-                        'known_ctx_repr', ret.emb_repr.known_ctx_repr, global_step=self.global_step)
-                    self.metric_writer.add_histogram(
-                        'known_ins_ctx_repr', ret.emb_repr.known_ins_ctx_repr, global_step=self.global_step)
-                except ValueError:
-                    logging.exception('')
+                self.metric_writer.add_histogram(
+                    'known_unit_emb', ret.emb_repr.known_unit_emb, global_step=self.global_step)
+                self.metric_writer.add_histogram(
+                    'lost_unit_emb', ret.emb_repr.lost_unit_emb, global_step=self.global_step)
+                self.metric_writer.add_histogram(
+                    'known_ctx_repr', ret.emb_repr.known_ctx_repr, global_step=self.global_step)
+                self.metric_writer.add_histogram(
+                    'known_ins_ctx_repr', ret.emb_repr.known_ins_ctx_repr, global_step=self.global_step)
 
             wc = Metric('weight', self.model.unit_aligner.weight.abs().sum(), batch.batch_size)
             metrics += wc

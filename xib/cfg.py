@@ -345,6 +345,22 @@ class FixSanityCheck(FixGotGermWithStemSmallCtcEmbedding):
 
 
 @reg
+class LTSanityCheck(FixSanityCheck):
+    baseline: float = 0.05
+    bias_mode: str = 'fixed'
+    reg_hyper: float = 0.1
+    expected_ratio: float = 0.7
+    char_per_batch: int = 400
+    l_pr_hyper: float = 1.0
+    pr_hyper: float = 10.0
+    init_expected_ratio: float = 1.0
+    random_seed: int = 74823
+    check_interval: int = 25
+    inference_mode: str = 'old'
+    reward_mode: str = 'ln_div'
+
+
+@reg
 class FixSanityCheckInit(FixSanityCheck):
     baseline: float = 0.05
     bias_mode: str = 'fixed'

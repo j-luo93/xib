@@ -114,7 +114,7 @@ class ExtractModel(nn.Module):
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
-    add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div'])
+    add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div', 'minus'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -459,9 +459,14 @@ class ExtractModel(nn.Module):
         return self.num_e_tags + 1
 
     def _get_thresholded_reward(self, raw: FT) -> Union[FT, LogTensor]:
-        reward = raw - self.baseline
-        log_scale = g.reward_mode == 'div'
-        reward = LogTensor.from_torch(reward, log_scale=log_scale)
+        if g.reward_mode in ['div', 'ln_div']:
+            reward = raw - self.baseline
+            log_scale = g.reward_mode == 'div'
+            reward = LogTensor.from_torch(reward, log_scale=log_scale)
+        else:
+            raw = LogTensor.from_torch(raw, log_scale=True)
+            b = LogTensor.from_torch(torch.full_like(raw, self.baseline), log_scale=True)
+            reward = raw - b
         return reward
 
     def _run_ctc_v2(self, lengths: LT, p_x_z: FT, p_xy_z: FT, p_x_yz: FT, span_raw_square: FT, raw_reward: LogTensor) -> CtcReturn:

@@ -185,6 +185,17 @@ class LogTensor:
             storage, sign = th_logsumexp(a, b, dim='____')
             return LogTensor(storage, sign)
 
+    def __neg__(self) -> LogTensor:
+        if self.sign is None:
+            sign = -torch.ones_like(self.storage)
+        else:
+            sign = -self.sign
+        return LogTensor(self.storage, sign)
+
+    def __sub__(self, other: LogTensor) -> LogTensor:
+        _check_log_tensor_type(other)
+        return self + (-other)
+
     align_to = _inherit('align_to')
     align_as = _do_as('align_as')
     expand = _inherit('expand')

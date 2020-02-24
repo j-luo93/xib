@@ -216,6 +216,7 @@ class ExtractManager(BaseManager):
     # IDEA(j_luo) when to put this in manager/trainer? what about scheduler? annealing? restarting? Probably all in trainer -- you need to track them with pbars.
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
+    add_argument('aligner_lr', default=0.1, dtype=float)
     add_argument('num_rounds', default=1000, dtype=int, msg='Number of rounds')
     add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
 
@@ -280,7 +281,12 @@ class ExtractManager(BaseManager):
     def run(self):
         optim_cls = self._name2cls[g.optim_cls]
         # , momentum=0.9, nesterov=True)
-        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
+        self.trainer.optimizer = SGD([
+            {'params': self.model.unit_aligner.parameters(), 'lr': g.aligner_lr},
+            {'params': [param for name, param in self.model.named_parameters() if 'unit_aligner' not in name]}
+        ], lr=g.learning_rate)
+        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate,
+                                   weight_decay=g.weight_hyper)  # , momentum=0.9, nesterov=False)
         # Save init parameters.
 
         out_path = g.log_dir / f'saved.init'

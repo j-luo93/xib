@@ -1,4 +1,5 @@
 import logging
+import math
 from typing import Dict, Optional
 
 import numpy as np
@@ -95,6 +96,8 @@ class FeatEmbedding(nn.Module):
 
 class DenseFeatEmbedding(FeatEmbedding):
 
+    add_argument('normalize', default=False, dtype=bool)
+
     @not_supported_argument_value('new_style', True)
     def _get_embeddings(self):
         emb_dict = dict()
@@ -122,6 +125,9 @@ class DenseFeatEmbedding(FeatEmbedding):
                 emb_param = self.embed_layer[cat.name]
                 sfm = sfm.align_to('batch', 'length', ...)
                 emb = sfm @ emb_param
+                if g.normalize:
+                    with NoName(emb):
+                        emb = nn.functional.normalize(emb, dim=-1) * 0.3
                 if padding is not None:
                     emb.rename(None)[padding.rename(None)] = 0.0
                 embs.append(emb)

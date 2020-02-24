@@ -361,6 +361,19 @@ class LTSanityCheck(FixSanityCheck):
 
 
 @reg
+class NoContextSanityCheck(LTSanityCheck):
+    pr_hyper: float = 40.0
+    min_segment_length: int = 10
+    reward_mode: str = 'div'
+    freq_hack: bool = False
+    downsample: bool = True
+    num_steps: int = 1000
+    main_loss_hyper: float = 1.0
+    context_weight: float = 0.0
+    reg_hyper: float = 0.1
+
+
+@reg
 class FixSanityCheckInit(FixSanityCheck):
     baseline: float = 0.05
     bias_mode: str = 'fixed'

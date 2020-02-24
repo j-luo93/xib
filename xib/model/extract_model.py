@@ -60,10 +60,16 @@ class Extracted(BaseBatch):
 
 
 @batch_class
+class Alignment(BaseBatch):
+    known2lost: FT
+    lost2known: FT
+
+
+@batch_class
 class Costs(BaseBatch):
     sub: FT
     ins: FT
-    alignment: FT
+    alignment: Alignment
 
 
 @batch_class
@@ -113,8 +119,9 @@ class ExtractModel(nn.Module):
     add_argument('expected_ratio', dtype=float, default=0.2)
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
+    add_argument('emb_norm', dtype=float, default=5.0)
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
-    add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div', 'minus'])
+    add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div', 'minus', 'div_pos'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -194,7 +201,8 @@ class ExtractModel(nn.Module):
                 known_unit_emb = self.base_embeddings(vocab.unit_dense_feat_matrix)
             known_unit_emb = self.dropout(known_unit_emb)
             with NoName(known_unit_emb):
-                known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(5)
+                known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1,
+                                                                              keepdim=True)) * math.sqrt(g.emb_norm)
         else:
             with NoName(*vocab.unit_dense_feat_matrix.values()):
                 known_unit_emb = torch.cat([vocab.unit_dense_feat_matrix[cat]
@@ -242,8 +250,9 @@ class ExtractModel(nn.Module):
     # @profile
     def _get_alignment_log_probs(self, known_unit_emb: FT, lost_unit_emb: FT, reverse: bool = False) -> FT:
         unit_logits = known_unit_emb @ lost_unit_emb.t()
-        dim = 0 if reverse else -1
-        unit_log_probs = unit_logits.log_softmax(dim=dim)
+        unit_log_probs = unit_logits.log_softmax(dim=-1)
+        if reverse:
+            unit_log_probs = unit_log_probs.log_softmax(dim=0)
         return unit_log_probs
 
     # @profile
@@ -260,13 +269,14 @@ class ExtractModel(nn.Module):
         with NoName(unit_log_probs, vocab_unit_id_seqs):
             global_log_probs = unit_log_probs[vocab_unit_id_seqs].rename('vocab', 'length', 'lost_unit')
         # Compute alignment -- set reverse to True if entropy regularization is used.
+        lost2known = None
+        known2lost = unit_log_probs.exp()
         if g.use_entropy_reg:
             rev_unit_log_probs = self._get_alignment_log_probs(emb_repr.known_unit_emb,
                                                                emb_repr.lost_unit_emb,
                                                                reverse=True)
-            alignment = rev_unit_log_probs.exp()
-        else:
-            alignment = unit_log_probs.exp()
+            lost2known = rev_unit_log_probs.exp()
+        alignment = Alignment(known2lost, lost2known)
 
         # Get contextualized log probs.
         sub_ctx_logits = emb_repr.known_ctx_repr @ emb_repr.lost_unit_emb.t()
@@ -404,7 +414,8 @@ class ExtractModel(nn.Module):
             transitions.append(fs[(kl - 1, ll - 1)] + sub_cost)
         if transitions:
             all_s = torch.stack(transitions, dim=-1)
-            new_s, _ = all_s.min(dim=-1)
+            # new_s, _ = all_s.min(dim=-1)
+            new_s = (nn.functional.softmin(all_s, dim=-1) * all_s).sum(dim=-1)
             fs[(kl, ll)] = new_s
 
     @property
@@ -459,9 +470,12 @@ class ExtractModel(nn.Module):
         return self.num_e_tags + 1
 
     def _get_thresholded_reward(self, raw: FT) -> Union[FT, LogTensor]:
-        if g.reward_mode in ['div', 'ln_div']:
+        if g.reward_mode in ['div', 'ln_div', 'div_pos']:
             reward = raw - self.baseline
-            log_scale = g.reward_mode == 'div'
+            if g.reward_mode == 'div_pos':
+                pos = reward > 0.0
+                reward = torch.where(pos, reward, torch.full_like(reward, -9999.9))
+            log_scale = g.reward_mode in ['div', 'div_pos']
             reward = LogTensor.from_torch(reward, log_scale=log_scale)
         else:
             b = LogTensor.from_torch(torch.full_like(raw, self.baseline), log_scale=True)

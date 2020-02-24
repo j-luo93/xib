@@ -173,6 +173,8 @@ class ExtractTrainer(BaseTrainer):
     add_argument('l_pr_hyper', default=1.0, dtype=float)
     add_argument('coverage_hyper', default=1.0, dtype=float)
     add_argument('weight_hyper', default=0.0, dtype=float)
+    add_argument('wc_hyper', default=0.0, dtype=float)
+    add_argument('max_grad_norm', default=5.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('pr_mode', default='barrier', dtype=str, choices=['barrier', 'penalty'])
 
@@ -199,7 +201,8 @@ class ExtractTrainer(BaseTrainer):
                 }
             except:
                 to_save = {
-                    'alignment': self.model.get_alignment().rename(None)
+                    'alignment': self.model.get_alignment().rename(None),
+                    'unit_aligner': self.model.unit_aligner.state_dict(),
                 }
         else:
             to_save = {
@@ -298,7 +301,7 @@ class ExtractTrainer(BaseTrainer):
             else:
                 pr_loss = -metrics.posterior_spans.mean
             l_pr_loss = -metrics.avg_log_probs.mean
-            loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
+            loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss + wc.mean * g.wc_hyper
 
             try:
                 loss = loss + metrics.reg.mean * g.reg_hyper
@@ -312,7 +315,7 @@ class ExtractTrainer(BaseTrainer):
             metrics += total_loss
             accum_metrics += metrics
 
-        grad_norm = clip_grad_norm_(self.model.parameters(), 5.0)
+        grad_norm = clip_grad_norm_(self.model.parameters(), g.max_grad_norm)
         self.optimizer.step()
         # FIXME(j_luo) avg for grad_norm might be wrong.
         accum_metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)

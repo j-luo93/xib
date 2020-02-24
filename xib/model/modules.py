@@ -97,6 +97,7 @@ class FeatEmbedding(nn.Module):
 class DenseFeatEmbedding(FeatEmbedding):
 
     add_argument('normalize', default=False, dtype=bool)
+    add_argument('init_interval', default=0.1, dtype=float)
 
     @not_supported_argument_value('new_style', True)
     def _get_embeddings(self):
@@ -109,8 +110,8 @@ class DenseFeatEmbedding(FeatEmbedding):
                 # logging.warning('dense feature embedding init to 0.0')
                 # emb_dict[cat.name].data.fill_(0.0)
                 logging.warning('dense feature embedding init')
-                torch.nn.init.uniform_(emb_dict[cat.name], -0.1, 0.1)
-                torch.nn.init.uniform_(emb_dict[cat.name], -0.1, 0.1)
+                torch.nn.init.uniform_(emb_dict[cat.name], -g.init_interval, g.init_interval)
+                torch.nn.init.uniform_(emb_dict[cat.name], -g.init_interval, g.init_interval)
         return nn.ParameterDict(emb_dict)
 
     # HACK(j_luo) Use kwargs to deal with masked_positions.

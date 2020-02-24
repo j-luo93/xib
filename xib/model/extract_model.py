@@ -103,6 +103,7 @@ class ExtractModel(nn.Module):
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
+    add_argument('temperature', default=1.0, dtype=float)
     add_argument('context_agg_mode', default='log_interpolation', dtype=str,
                  choices=['log_interpolation', 'linear_interpolation', 'log_add', 'dilute'])
     add_argument('dilute_hyper', dtype=float, default=0.5)
@@ -116,6 +117,7 @@ class ExtractModel(nn.Module):
     add_argument('cut_off', dtype=float, nargs='+')
     add_argument('dense_embedding', dtype=bool, default=False)
     add_argument('use_entropy_reg', dtype=bool, default=False)
+    add_argument('use_softmin', dtype=bool, default=True)
     add_argument('expected_ratio', dtype=float, default=0.2)
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
@@ -155,6 +157,8 @@ class ExtractModel(nn.Module):
         self.vocab = vocab
 
         assert g.inference_mode in ['old', 'mixed']
+        if g.use_softmin:
+            logging.warning('Using softmin.')
 
     @global_property
     def ins_del_cost(self):
@@ -201,8 +205,9 @@ class ExtractModel(nn.Module):
                 known_unit_emb = self.base_embeddings(vocab.unit_dense_feat_matrix)
             known_unit_emb = self.dropout(known_unit_emb)
             with NoName(known_unit_emb):
-                known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1,
-                                                                              keepdim=True)) * math.sqrt(g.emb_norm)
+                if g.emb_norm > 0.0:
+                    known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1,
+                                                                                  keepdim=True)) * math.sqrt(g.emb_norm)
         else:
             with NoName(*vocab.unit_dense_feat_matrix.values()):
                 known_unit_emb = torch.cat([vocab.unit_dense_feat_matrix[cat]
@@ -250,7 +255,7 @@ class ExtractModel(nn.Module):
     # @profile
     def _get_alignment_log_probs(self, known_unit_emb: FT, lost_unit_emb: FT, reverse: bool = False) -> FT:
         unit_logits = known_unit_emb @ lost_unit_emb.t()
-        unit_log_probs = unit_logits.log_softmax(dim=-1)
+        unit_log_probs = (unit_logits / g.temperature).log_softmax(dim=-1)
         if reverse:
             unit_log_probs = unit_log_probs.log_softmax(dim=0)
         return unit_log_probs
@@ -280,7 +285,7 @@ class ExtractModel(nn.Module):
 
         # Get contextualized log probs.
         sub_ctx_logits = emb_repr.known_ctx_repr @ emb_repr.lost_unit_emb.t()
-        sub_ctx_log_probs = sub_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+        sub_ctx_log_probs = (sub_ctx_logits / g.temperature).log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
 
         def interpolate(ctx, plain):
             if g.context_agg_mode == 'log_interpolation':
@@ -300,7 +305,7 @@ class ExtractModel(nn.Module):
 
         # Get secondary costs for insertions.
         ins_ctx_logits = emb_repr.known_ins_ctx_repr @ emb_repr.lost_unit_emb.t()
-        ins_ctx_log_probs = ins_ctx_logits.log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+        ins_ctx_log_probs = (ins_ctx_logits / g.temperature).log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
         ins = -ins_weighted_log_probs + self.ins_del_cost
 
@@ -414,8 +419,10 @@ class ExtractModel(nn.Module):
             transitions.append(fs[(kl - 1, ll - 1)] + sub_cost)
         if transitions:
             all_s = torch.stack(transitions, dim=-1)
-            # new_s, _ = all_s.min(dim=-1)
-            new_s = (nn.functional.softmin(all_s, dim=-1) * all_s).sum(dim=-1)
+            if g.use_softmin:
+                new_s = (nn.functional.softmin(all_s, dim=-1) * all_s).sum(dim=-1)
+            else:
+                new_s, _ = all_s.min(dim=-1)
             fs[(kl, ll)] = new_s
 
     @property

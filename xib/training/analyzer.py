@@ -197,14 +197,13 @@ class ExtractAnalyzer:
 
         almt = model_ret.costs.alignment
         if almt is not None:
-            l2k_reg = 0.0
+            bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
+            metrics += Metric('bij_reg', bijective_reg, loss_weight)
             if g.use_entropy_reg:
-                k2l_reg = -(almt.known2lost * (1e-8 + almt.known2lost).log()).sum() * float(not_zero)
-                l2k_reg = -(almt.lost2known * (1e-8 + almt.lost2known).log()).sum() * float(not_zero)
-            else:
-                k2l_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
-            metrics += Metric('reg', k2l_reg + l2k_reg, loss_weight)
-
+                ent_k2l_reg = -(almt.known2lost * (1e-8 + almt.known2lost).log()).sum() * float(not_zero)
+                ent_l2k_reg = -(almt.lost2known * (1e-8 + almt.lost2known).log()).sum() * float(not_zero)
+                metrics += Metric('ent_k2l_reg', ent_k2l_reg, loss_weight)
+                metrics += Metric('ent_l2k_reg', ent_l2k_reg, loss_weight)
         try:
             pr_reg = Metric('posterior_spans',
                             model_ret.ctc_return.expected_num_spans.sum('batch'),

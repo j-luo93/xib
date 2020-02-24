@@ -281,7 +281,7 @@ class ExtractManager(BaseManager):
     def run(self):
         optim_cls = self._name2cls[g.optim_cls]
         # , momentum=0.9, nesterov=True)
-        self.trainer.optimizer = SGD([
+        self.trainer.optimizer = optim_cls([
             {'params': self.model.unit_aligner.parameters(), 'lr': g.aligner_lr},
             {'params': [param for name, param in self.model.named_parameters() if 'unit_aligner' not in name]}
         ], lr=g.learning_rate)

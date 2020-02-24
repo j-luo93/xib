@@ -174,6 +174,8 @@ class ExtractTrainer(BaseTrainer):
     add_argument('coverage_hyper', default=1.0, dtype=float)
     add_argument('weight_hyper', default=0.0, dtype=float)
     add_argument('wc_hyper', default=0.0, dtype=float)
+    add_argument('bij_reg_hyper', default=0.1, dtype=float)
+    add_argument('ent_reg_hyper', default=0.1, dtype=float)
     add_argument('max_grad_norm', default=5.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('pr_mode', default='barrier', dtype=str, choices=['barrier', 'penalty'])
@@ -304,7 +306,9 @@ class ExtractTrainer(BaseTrainer):
             loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss + wc.mean * g.wc_hyper
 
             try:
-                loss = loss + metrics.reg.mean * g.reg_hyper
+                loss = loss + metrics.bij_reg.mean * g.bij_reg_hyper
+                loss = loss + metrics.ent_k2l_reg.mean * g.ent_reg_hyper
+                loss = loss + metrics.ent_l2k_reg.mean * g.ent_reg_hyper
             except AttributeError:
                 pass
 

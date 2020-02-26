@@ -123,7 +123,7 @@ class ExtractModel(nn.Module):
     add_argument('baseline', dtype=float)
     add_argument('emb_norm', dtype=float, default=5.0)
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
-    add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div', 'minus', 'div_pos'])
+    add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div', 'minus', 'div_pos', 'poly'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -484,10 +484,14 @@ class ExtractModel(nn.Module):
                 reward = torch.where(pos, reward, torch.full_like(reward, -9999.9))
             log_scale = g.reward_mode in ['div', 'div_pos']
             reward = LogTensor.from_torch(reward, log_scale=log_scale)
-        else:
+        elif g.reward_mode == 'minus':
             b = LogTensor.from_torch(torch.full_like(raw, self.baseline), log_scale=True)
             raw = LogTensor.from_torch(raw, log_scale=True)
             reward = raw - b
+        elif g.reward_mode == 'poly':
+            reward = LogTensor.from_torch(raw * self.baseline, log_scale=True)
+        else:
+            raise ValueError(f'Unrecognized reward_mode `reward_mode`.')
         return reward
 
     def _run_ctc_v2(self, lengths: LT, p_x_z: FT, p_xy_z: FT, p_x_yz: FT, span_raw_square: FT, raw_reward: LogTensor) -> CtcReturn:

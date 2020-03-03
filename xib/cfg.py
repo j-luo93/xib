@@ -362,15 +362,25 @@ class LTSanityCheck(FixSanityCheck):
 
 @reg
 class NoContextSanityCheck(LTSanityCheck):
-    pr_hyper: float = 40.0
-    min_segment_length: int = 10
+    pr_hyper: float = 30.0
+    min_segment_length: int = 30
     reward_mode: str = 'div'
     freq_hack: bool = False
     downsample: bool = True
     num_steps: int = 1000
-    main_loss_hyper: float = 1.0
+    main_loss_hyper: float = 0.0
     context_weight: float = 0.0
     reg_hyper: float = 0.1
+    learning_rate: float = 0.06
+    aligner_lr: float = 0.06
+    bij_reg: float = 12.0
+    emb_norm: float = 1.0
+    ent_reg: float = 0.06
+    l_pr_hyper: float = 6.0
+    max_grad_norm: float = 5.0
+    num_rounds: int = 1
+    use_entropy_reg: bool = True
+    temperature: float = 0.2
 
 
 @reg

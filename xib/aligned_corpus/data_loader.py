@@ -101,7 +101,8 @@ class AlignedDataLoader(BaseDataLoader):
             sentence.lost_ipa_length if is_ipa else sentence.lost_form_length
             for sentence in dataset.data
         ]
-        batch_sampler = BatchSampler([str(d) for d in dataset.data], lengths, shuffle=True, training=task.training)
+        batch_sampler = BatchSampler([str(d).replace(' ', '') for d in dataset.data],
+                                     lengths, shuffle=True, training=task.training)
         super().__init__(dataset, task, *args, batch_sampler=batch_sampler, **kwargs)
 
         # Assign class variables for AlignedBatch.

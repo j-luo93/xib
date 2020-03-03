@@ -244,15 +244,23 @@ def get_ngrams(seq, min_ngram, max_ngram):
 
 
 def get_sample_weight(data, min_ngram, max_ngram):
+    # ngram_cnt = Counter()
+    # for seq in data:
+    #     for ngram in get_ngrams(seq, min_ngram, max_ngram):
+    #         ngram_cnt[ngram] += 1
+    # # This is the actualy idf.
+    # # total = sum(ngram_cnt.values())
+    # # idf = {ngram: math.log(total / cnt) for ngram, cnt in ngram_cnt.items()}
+    # idf = {ngram: 1.0 / cnt for ngram, cnt in ngram_cnt.items()}
+    total_ngram_freq = list()
     ngram_cnt = Counter()
     for seq in data:
+        in_doc = set()
         for ngram in get_ngrams(seq, min_ngram, max_ngram):
-            ngram_cnt[ngram] += 1
-    # This is the actualy idf.
-    # total = sum(ngram_cnt.values())
-    # idf = {ngram: math.log(total / cnt) for ngram, cnt in ngram_cnt.items()}
-    idf = {ngram: 1.0 / cnt for ngram, cnt in ngram_cnt.items()}
-    total_ngram_freq = list()
+            if ngram not in in_doc:
+                ngram_cnt[ngram] += 1
+                in_doc.add(ngram)
+    idf = {ngram: math.log(len(data) / cnt) for ngram, cnt in ngram_cnt.items()}
     for seq in data:
         total_cnt = 0.0
         total_num = 0
@@ -263,6 +271,11 @@ def get_sample_weight(data, min_ngram, max_ngram):
         total_ngram_freq.append(total_cnt)
     total_ngram_freq = np.asarray(total_ngram_freq)
     return total_ngram_freq
+
+    # This is the actualy idf.
+    # total = sum(ngram_cnt.values())
+    # idf = {ngram: math.log(total / cnt) for ngram, cnt in ngram_cnt.items()}
+#     idf = {ngram: 1.0 / cnt for ngram, cnt in ngram_cnt.items()}
 
 
 class BatchSampler(Sampler):

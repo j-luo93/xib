@@ -186,6 +186,7 @@ class DecipherAnalyzer:
 class ExtractAnalyzer:
 
     add_argument('mean_mode', default='segment', choices=['segment', 'char'])
+    add_argument('bij_mode', default='square', choices=['square', 'abs'])
 
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
@@ -197,7 +198,10 @@ class ExtractAnalyzer:
 
         almt = model_ret.costs.alignment
         if almt is not None:
-            bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
+            if g.bij_mode == 'square':
+                bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
+            else:
+                bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0).abs()).sum() * float(not_zero)
             metrics += Metric('bij_reg', bijective_reg, loss_weight)
             if g.use_entropy_reg:
                 ent_k2l_reg = -(almt.known2lost * (1e-8 + almt.known2lost).log()).sum() * float(not_zero)

@@ -187,6 +187,20 @@ class ExtractTrainer(BaseTrainer):
         if g.save_alignment:
             self.add_callback('total_step', 1, self.save_alignment)
         self.metric_writer = MetricWriter(log_dir=g.log_dir, flush_secs=5)
+
+        def hparamify(v):
+            """`add_hparams` can only accept certain types of values."""
+            if isinstance(v, Path):
+                return str(v)
+            elif isinstance(v, (list, tuple)):
+                return ','.join(map(str, v))
+            elif v is None:
+                return 'None'
+            else:
+                return v
+
+        g_dict = {k: hparamify(v) for k, v in g.as_dict().items()}
+        self.metric_writer.add_hparams(g_dict, dict())
         self.add_callback('check', self.check_interval, self.write_summaries)
 
     def write_summaries(self, metrics: Metrics):
@@ -222,6 +236,22 @@ class ExtractTrainer(BaseTrainer):
     @ins_del_cost.setter
     def ins_del_cost(self, value):
         logging.imp(f'Setting ins_del_cost to {value}.')
+
+    @global_property
+    def bij_reg(self):
+        pass
+
+    @bij_reg.setter
+    def bij_reg(self, value):
+        logging.imp(f'Setting bij_reg to {value}.')
+
+    @global_property
+    def ent_reg(self):
+        pass
+
+    @ent_reg.setter
+    def ent_reg(self, value):
+        logging.imp(f'Setting ent_reg to {value}.')
 
     @global_property
     def er(self):
@@ -273,6 +303,8 @@ class ExtractTrainer(BaseTrainer):
         return self.tracker.is_finished('total_step')
 
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
+        # self.bij_reg += g.bij_reg_hyper / 1000.
+        # self.ent_reg += g.ent_reg_hyper / 1000.
         self.model.train()
         self.optimizer.zero_grad()
         accum_metrics = Metrics()
@@ -306,6 +338,10 @@ class ExtractTrainer(BaseTrainer):
             loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss + wc.mean * g.wc_hyper
 
             try:
+                # HACK(j_luo)
+                # loss = loss + metrics.bij_reg.mean * self.bij_reg
+                # loss = loss + metrics.ent_k2l_reg.mean * self.ent_reg
+                # loss = loss + metrics.ent_l2k_reg.mean * self.ent_reg
                 loss = loss + metrics.bij_reg.mean * g.bij_reg_hyper
                 loss = loss + metrics.ent_k2l_reg.mean * g.ent_reg_hyper
                 loss = loss + metrics.ent_l2k_reg.mean * g.ent_reg_hyper

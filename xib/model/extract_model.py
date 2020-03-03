@@ -135,8 +135,10 @@ class ExtractModel(nn.Module):
         else:
             self.dim = g.dim
         self.unit_aligner = nn.Embedding(lost_size, known_size)
-        logging.imp('Unit aligner initialized to 0.')
-        self.unit_aligner.weight.data.fill_(0.0)
+        logging.imp('Unit aligner initialized uniformly.')
+        nn.init.uniform_(self.unit_aligner.weight, -0.05, 0.05)
+        # logging.imp('Unit aligner initialized to 0.')
+        # self.unit_aligner.weight.data.fill_(0.0)
         self.conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.ins_conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
@@ -489,7 +491,7 @@ class ExtractModel(nn.Module):
             raw = LogTensor.from_torch(raw, log_scale=True)
             reward = raw - b
         elif g.reward_mode == 'poly':
-            reward = LogTensor.from_torch(raw * self.baseline, log_scale=True)
+            reward = LogTensor.from_torch(raw * math.exp(self.baseline), log_scale=True)
         else:
             raise ValueError(f'Unrecognized reward_mode `reward_mode`.')
         return reward
@@ -530,8 +532,8 @@ class ExtractModel(nn.Module):
 
         marginal[0] = get_init(0.0)
         if self.training:
-            psi[0] = get_init(-20.0)
-            phi[0] = get_init(-20.0)
+            psi[0] = get_init(-9999.9)
+            phi[0] = get_init(-9999.9)
         padding = get_init(-9999.9)
 
         def expand_vs(t):

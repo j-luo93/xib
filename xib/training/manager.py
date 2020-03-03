@@ -219,6 +219,7 @@ class ExtractManager(BaseManager):
     add_argument('aligner_lr', default=0.1, dtype=float)
     add_argument('num_rounds', default=1000, dtype=int, msg='Number of rounds')
     add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
+    add_argument('use_oracle', default=False, dtype=bool)
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -245,13 +246,35 @@ class ExtractManager(BaseManager):
             known_id = kcs.unit2id[IpaSequence(known_char)]
             lost_id = lcs.unit2id[lost_char]
             self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
-        #align('m', 'm')
+        if g.use_oracle:
+            logging.imp('Testing some oracle.')
+            oracle = [
+                # ('a', 'a'),
+                # ('b', 'b'),
+                # ('d', 'd'),
+                # ('i', 'i'),
+                # ('k', 'k'),
+                # ('l', 'l'),
+                ('m', 'm'),
+                ('n', 'n'),
+                # ('o', 'o'),
+                # ('p', 'p'),
+                # ('r', 'r'),
+                # ('s', 's'),
+                # ('t', 't'),
+                # ('g', 'g')
+            ]
+            for l, k in oracle:
+                align(l, k)
+        # align('m', 'm')
         #align('k', 't͡ʃ')
         #align('k', 'k')
         #align('d', 'd')
         #align('l', 'l')
 
         # align('n', 'n')
+        # align('p', 'p')
+        # align('g', 'g')
         # align('t', 't')
         # align('w', 'w')
         # align('h', 'h')
@@ -276,17 +299,23 @@ class ExtractManager(BaseManager):
                                       save_interval=g.save_interval)
         if g.saved_model_path:
             self.trainer.load(g.saved_model_path)
+        # # HACK(j_luo) Dilute!
+        # logging.imp('Diluting weights.')
+        # self.model.unit_aligner.weight.data.copy_(self.model.unit_aligner.weight.data * 0.1)
         # self.trainer.set_optimizer(Adam, lr=g.learning_rate)
 
     def run(self):
+        # HACK(j_luo)
+        self.trainer.bij_reg = 0.0
+        self.trainer.ent_reg = 0.0
         optim_cls = self._name2cls[g.optim_cls]
         # , momentum=0.9, nesterov=True)
         self.trainer.optimizer = optim_cls([
             {'params': self.model.unit_aligner.parameters(), 'lr': g.aligner_lr},
             {'params': [param for name, param in self.model.named_parameters() if 'unit_aligner' not in name]}
         ], lr=g.learning_rate)
-        self.trainer.set_optimizer(optim_cls, lr=g.learning_rate,
-                                   weight_decay=g.weight_hyper)  # , momentum=0.9, nesterov=False)
+        # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate,
+        #                            weight_decay=g.weight_hyper)  # , momentum=0.9, nesterov=False)
         # Save init parameters.
 
         out_path = g.log_dir / f'saved.init'
@@ -296,7 +325,7 @@ class ExtractManager(BaseManager):
         self.trainer.er = g.init_expected_ratio
         for _ in range(g.num_rounds):
             self.trainer.reset()
-            self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
+            # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
 
             self.trainer.train(self.dl_reg)
             self.trainer.tracker.update('round')

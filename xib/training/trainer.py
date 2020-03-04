@@ -246,6 +246,14 @@ class ExtractTrainer(BaseTrainer):
         logging.imp(f'Setting bij_reg to {value}.')
 
     @global_property
+    def global_baseline(self) -> float:
+        pass
+
+    @global_baseline.setter
+    def global_baseline(self, value):
+        pass
+
+    @global_property
     def ent_reg(self):
         pass
 
@@ -305,6 +313,9 @@ class ExtractTrainer(BaseTrainer):
     def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
         # self.bij_reg += g.bij_reg_hyper / 1000.
         # self.ent_reg += g.ent_reg_hyper / 1000.
+        if g.anneal_baseline:
+            self.global_baseline += (g.max_baseline - g.init_baseline) / 1000.0
+            self.metric_writer.add_scalar('baseline', self.global_baseline, global_step=self.global_step)
         self.model.train()
         self.optimizer.zero_grad()
         accum_metrics = Metrics()

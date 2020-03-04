@@ -220,6 +220,9 @@ class ExtractManager(BaseManager):
     add_argument('num_rounds', default=1000, dtype=int, msg='Number of rounds')
     add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
     add_argument('use_oracle', default=False, dtype=bool)
+    add_argument('anneal_baseline', default=True, dtype=bool)
+    add_argument('init_baseline', default=0.05, dtype=float)
+    add_argument('max_baseline', default=1.0, dtype=float)
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -246,23 +249,29 @@ class ExtractManager(BaseManager):
             known_id = kcs.unit2id[IpaSequence(known_char)]
             lost_id = lcs.unit2id[lost_char]
             self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
+
+        # # HACK(j_luo)
+        # logging.imp("Using emsemble.")
+        # import pickle
+        # saved = pickle.load(open('./notebooks/emsemble.pkl', 'rb'))
+        # self.model.unit_aligner.weight.data.copy_(torch.from_numpy(saved))
         if g.use_oracle:
             logging.imp('Testing some oracle.')
             oracle = [
-                # ('a', 'a'),
-                # ('b', 'b'),
-                # ('d', 'd'),
-                # ('i', 'i'),
-                # ('k', 'k'),
-                # ('l', 'l'),
+                ('a', 'a'),
+                ('b', 'b'),
+                ('d', 'd'),
+                ('i', 'i'),
+                ('k', 'k'),
+                ('l', 'l'),
                 ('m', 'm'),
                 ('n', 'n'),
-                # ('o', 'o'),
-                # ('p', 'p'),
-                # ('r', 'r'),
-                # ('s', 's'),
-                # ('t', 't'),
-                # ('g', 'g')
+                ('o', 'o'),
+                ('p', 'p'),
+                ('r', 'r'),
+                ('s', 's'),
+                ('t', 't'),
+                ('g', 'g')
             ]
             for l, k in oracle:
                 align(l, k)
@@ -308,6 +317,7 @@ class ExtractManager(BaseManager):
         # HACK(j_luo)
         self.trainer.bij_reg = 0.0
         self.trainer.ent_reg = 0.0
+        self.trainer.global_baseline = g.init_baseline
         optim_cls = self._name2cls[g.optim_cls]
         # , momentum=0.9, nesterov=True)
         self.trainer.optimizer = optim_cls([

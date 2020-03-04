@@ -118,12 +118,14 @@ class ExtractModel(nn.Module):
     add_argument('dense_embedding', dtype=bool, default=False)
     add_argument('use_entropy_reg', dtype=bool, default=False)
     add_argument('use_softmin', dtype=bool, default=True)
+    add_argument('use_softmax', dtype=bool, default=False)
     add_argument('expected_ratio', dtype=float, default=0.2)
     add_argument('init_expected_ratio', dtype=float, default=1.0)
     add_argument('baseline', dtype=float)
     add_argument('emb_norm', dtype=float, default=5.0)
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
-    add_argument('reward_mode', dtype=str, default='div', choices=['div', 'ln_div', 'minus', 'div_pos', 'poly'])
+    add_argument('reward_mode', dtype=str, default='div', choices=[
+                 'div', 'ln_div', 'minus', 'div_pos', 'poly', 'cutoff'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -440,15 +442,27 @@ class ExtractModel(nn.Module):
         if g.baseline is None:
             return self.lp_per_unmatched
         else:
-            return math.log(g.baseline)
+            if g.anneal_baseline:
+                return math.log(self.global_baseline)
+            else:
+                return math.log(g.baseline)
+
+    @global_property
+    def global_baseline(self) -> float:
+        pass
 
     # @profile
+
     def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, costs: Costs, emb_repr: EmbAndRepr) -> ExtractModelReturn:
         matches = extracted.matches
-        # Get marginal.
-        span_log_probs = matches.ll.logsumexp(dim='vocab')
-        span_raw_square = raw_reward = None
         span_lengths = get_named_range(self.num_e_tags, 'len_e') + g.min_word_length
+        # Get marginal.
+        if g.use_softmax:
+            span_log_probs = ((matches.raw_ll / span_lengths.align_as(matches.raw_ll)
+                               ).softmax(dim='vocab') * matches.raw_ll).sum(dim='vocab')
+        else:
+            span_log_probs = matches.ll.logsumexp(dim='vocab')
+        span_raw_square = raw_reward = None
         if g.inference_mode == 'new':
             span_lengths = span_lengths.align_as(matches.raw_ll)
             raw_reward = self._get_thresholded_reward(matches.raw_ll / span_lengths)
@@ -491,7 +505,11 @@ class ExtractModel(nn.Module):
             raw = LogTensor.from_torch(raw, log_scale=True)
             reward = raw - b
         elif g.reward_mode == 'poly':
-            reward = LogTensor.from_torch(raw * math.exp(self.baseline), log_scale=True)
+            mul = 1.0 if g.use_softmax else 20.0
+            reward = mul * LogTensor.from_torch(raw * math.exp(self.baseline), log_scale=True)
+        elif g.reward_mode == 'cutoff':
+            reward = torch.min(2 * (raw - self.baseline), torch.zeros_like(raw))
+            reward = 2.0 * LogTensor.from_torch(reward, log_scale=True)
         else:
             raise ValueError(f'Unrecognized reward_mode `reward_mode`.')
         return reward

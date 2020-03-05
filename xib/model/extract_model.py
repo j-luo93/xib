@@ -124,8 +124,9 @@ class ExtractModel(nn.Module):
     add_argument('baseline', dtype=float)
     add_argument('emb_norm', dtype=float, default=5.0)
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
+    add_argument('unit_aligner_init_mode', dtype=str, default='uniform', choices=['uniform', 'zero'])
     add_argument('reward_mode', dtype=str, default='div', choices=[
-                 'div', 'ln_div', 'minus', 'div_pos', 'poly', 'cutoff'])
+                 'div', 'ln_div', 'minus', 'div_pos', 'poly', 'cutoff', 'minus_pos'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -137,10 +138,12 @@ class ExtractModel(nn.Module):
         else:
             self.dim = g.dim
         self.unit_aligner = nn.Embedding(lost_size, known_size)
-        logging.imp('Unit aligner initialized uniformly.')
-        nn.init.uniform_(self.unit_aligner.weight, -0.05, 0.05)
-        # logging.imp('Unit aligner initialized to 0.')
-        # self.unit_aligner.weight.data.fill_(0.0)
+        if g.unit_aligner_init_mode == 'uniform':
+            logging.imp('Unit aligner initialized uniformly.')
+            nn.init.uniform_(self.unit_aligner.weight, -0.05, 0.05)
+        else:
+            logging.imp('Unit aligner initialized to 0.')
+            self.unit_aligner.weight.data.fill_(0.0)
         self.conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.ins_conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
@@ -445,7 +448,7 @@ class ExtractModel(nn.Module):
             if g.anneal_baseline:
                 return math.log(self.global_baseline)
             else:
-                return math.log(g.baseline)
+                return math.log(g.baseline + 1e-16)
 
     @global_property
     def global_baseline(self) -> float:
@@ -468,6 +471,10 @@ class ExtractModel(nn.Module):
             raw_reward = self._get_thresholded_reward(matches.raw_ll / span_lengths)
             span_raw_square = (raw_reward + matches.raw_ll).logsumexp(dim='vocab') - math.log(len(self.vocab))
         else:
+            # HACK(j_luo)
+            # if g.reward_mode == 'poly':
+            #     raw_reward = self._get_thresholded_reward(span_log_probs + span_lengths.float().log())
+            # else:
             raw_reward = self._get_thresholded_reward(span_log_probs / span_lengths)
         p_x_z = LogTensor.from_torch(span_log_probs, log_scale=True)
         p_xy_z = LogTensor.from_torch(matches.ll, log_scale=True)
@@ -504,6 +511,18 @@ class ExtractModel(nn.Module):
             b = LogTensor.from_torch(torch.full_like(raw, self.baseline), log_scale=True)
             raw = LogTensor.from_torch(raw, log_scale=True)
             reward = raw - b
+            # HACK(j_luo)
+            reward = LogTensor.from_torch(reward.storage, log_scale=True) * 20.0
+        elif g.reward_mode == 'minus_pos':
+            diff = raw - self.baseline
+            pos = diff > 0.0
+
+            b = LogTensor.from_torch(torch.full_like(raw, self.baseline), log_scale=True)
+            raw = LogTensor.from_torch(raw, log_scale=True)
+            reward = raw - b
+
+            reward = torch.where(pos, reward.storage, torch.full_like(diff, -9999.9))
+            reward = LogTensor.from_torch(reward, log_scale=True) * 20.0
         elif g.reward_mode == 'poly':
             mul = 1.0 if g.use_softmax else 20.0
             reward = mul * LogTensor.from_torch(raw * math.exp(self.baseline), log_scale=True)

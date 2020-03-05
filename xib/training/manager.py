@@ -220,7 +220,7 @@ class ExtractManager(BaseManager):
     add_argument('num_rounds', default=1000, dtype=int, msg='Number of rounds')
     add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
     add_argument('use_oracle', default=False, dtype=bool)
-    add_argument('anneal_baseline', default=True, dtype=bool)
+    add_argument('anneal_baseline', default=False, dtype=bool)
     add_argument('init_baseline', default=0.05, dtype=float)
     add_argument('max_baseline', default=1.0, dtype=float)
 
@@ -272,6 +272,9 @@ class ExtractManager(BaseManager):
                 ('s', 's'),
                 ('t', 't'),
                 ('g', 'g')
+
+                # ('þ', 'h'),
+                # ('i', 'r'),
             ]
             for l, k in oracle:
                 align(l, k)

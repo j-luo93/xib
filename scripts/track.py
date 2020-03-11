@@ -39,7 +39,10 @@ def load(prefix: str, suffix: str) -> FT:
     saved_dict = torch.load(path)
     # Compute almt.
     almt = saved_dict['alignment'].detach()
-    raw_weight = saved_dict['unit_aligner']['weight'].sigmoid().detach().cpu().numpy()
+    try:
+        raw_weight = saved_dict['unit_aligner']['weight'].sigmoid().detach().cpu().numpy()
+    except KeyError:
+        raw_weight = None
     return almt, raw_weight
 
 
@@ -171,12 +174,14 @@ def init_setup(init_path, vocab_path, data_path):
     return char_sets, vocab, model.cuda()
 
 
-def show_all(prefixes, titles, num_rounds=5, step_size=50, max_step=1000):
+def show_all(prefixes, titles, num_rounds=5, step_size=50, max_step=1000, output='test.html'):
+    output_file(output)
     to_show = list()
     for prefix, title in zip(prefixes, titles):
         print(title)
         this_row = list()
-        for raw in [True, False]:
+        # for raw in [True, False]:
+        for raw in [False]:
             img = draw_iheatmap(prefix, title, char_sets, vocab, model, num_rounds=num_rounds,
                                 step_size=step_size, max_step=max_step, raw=raw)
             this_row.append(img)
@@ -186,12 +191,11 @@ def show_all(prefixes, titles, num_rounds=5, step_size=50, max_step=1000):
 
 
 if __name__ == '__main__':
-    init_path = './log/2020-02-24/NoContextSanityCheck-bij-ent/15-50-44/saved.init'
+    init_path = './log/poly-ufa/reg-faim_zero/0/saved.init'
     vocab_path = '/scratch2/j_luo/xib/data/wulfila/processed/germ.small.matched.stems'
     data_path = '/scratch2/j_luo/xib/data/wulfila/processed/corpus.small.got-germ.tsv'
 
     char_sets, vocab, model = init_setup(init_path, vocab_path, data_path)
-    output_file('test.html')
 
     # prefixes = [
     #     './log/2020-02-23/LTSanityCheck-norm_3/19-12-57/',

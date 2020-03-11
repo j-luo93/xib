@@ -25,7 +25,7 @@ from xib.ipa import Category, Index, get_enum_by_cat, should_include
 from xib.ipa.process import (Segment, Segmentation, SegmentWindow, SegmentX,
                              Span)
 from xib.model.log_tensor import LogTensor
-from xib.model.modules import AdaptLayer, FeatEmbedding
+from xib.model.modules import AdaptLayer, FeatEmbedding, FeatureAligner
 from xib.model.span_proposer import (AllSpanProposer, OracleStemSpanProposer,
                                      OracleWordSpanProposer, SpanBias,
                                      ViableSpans)
@@ -125,6 +125,7 @@ class ExtractModel(nn.Module):
     add_argument('emb_norm', dtype=float, default=5.0)
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
     add_argument('unit_aligner_init_mode', dtype=str, default='uniform', choices=['uniform', 'zero'])
+    add_argument('use_feature_aligner', dtype=bool, default=False)
     add_argument('reward_mode', dtype=str, default='div', choices=[
                  'div', 'ln_div', 'minus', 'div_pos', 'poly', 'cutoff', 'minus_pos'])
 
@@ -137,13 +138,17 @@ class ExtractModel(nn.Module):
                 self.dim = g.base_embedding_dim
         else:
             self.dim = g.dim
-        self.unit_aligner = nn.Embedding(lost_size, known_size)
-        if g.unit_aligner_init_mode == 'uniform':
-            logging.imp('Unit aligner initialized uniformly.')
-            nn.init.uniform_(self.unit_aligner.weight, -0.05, 0.05)
+        if g.use_feature_aligner:
+            logging.imp('Using feature aligner.')
+            self.feat_aligner = FeatureAligner(lost_size)
         else:
-            logging.imp('Unit aligner initialized to 0.')
-            self.unit_aligner.weight.data.fill_(0.0)
+            self.unit_aligner = nn.Embedding(lost_size, known_size)
+            if g.unit_aligner_init_mode == 'uniform':
+                logging.imp('Unit aligner initialized uniformly.')
+                nn.init.uniform_(self.unit_aligner.weight, -0.05, 0.05)
+            else:
+                logging.imp('Unit aligner initialized to 0.')
+                self.unit_aligner.weight.data.fill_(0.0)
         self.conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.ins_conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
@@ -255,8 +260,13 @@ class ExtractModel(nn.Module):
 
     # @profile
     def get_lost_unit_emb(self, known_unit_emb: FT) -> FT:
-        lost_unit_weight = self.unit_aligner.weight
-        lost_unit_emb = lost_unit_weight @ known_unit_emb
+        if g.use_feature_aligner:
+            ids = get_range(self.feat_aligner.num_embeddings, 1, 0)
+            lost_unit_weight = self.feat_aligner(ids)
+            lost_unit_emb = self.base_embeddings(lost_unit_weight).squeeze(dim='length')
+        else:
+            lost_unit_weight = self.unit_aligner.weight
+            lost_unit_emb = lost_unit_weight @ known_unit_emb
         return lost_unit_emb
 
     # @profile
@@ -438,7 +448,10 @@ class ExtractModel(nn.Module):
 
     @property
     def p_unmatched(self) -> float:
-        return 1.0 / self.unit_aligner.num_embeddings
+        if g.use_feature_aligner:
+            return 1.0 / self.feat_aligner.num_embeddings
+        else:
+            return 1.0 / self.unit_aligner.num_embeddings
 
     @property
     def baseline(self) -> float:
@@ -524,8 +537,8 @@ class ExtractModel(nn.Module):
             reward = torch.where(pos, reward.storage, torch.full_like(diff, -9999.9))
             reward = LogTensor.from_torch(reward, log_scale=True) * 20.0
         elif g.reward_mode == 'poly':
-            mul = 1.0 if g.use_softmax else 20.0
-            reward = mul * LogTensor.from_torch(raw * math.exp(self.baseline), log_scale=True)
+            # mul = 1.0 if g.use_softmax else 20.0
+            reward = LogTensor.from_torch(raw * math.exp(self.baseline), log_scale=True)
         elif g.reward_mode == 'cutoff':
             reward = torch.min(2 * (raw - self.baseline), torch.zeros_like(raw))
             reward = 2.0 * LogTensor.from_torch(reward, log_scale=True)

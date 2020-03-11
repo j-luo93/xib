@@ -94,10 +94,40 @@ class FeatEmbedding(nn.Module):
         return feat_emb
 
 
+class FeatureAligner(nn.Module):
+
+    add_argument('feat_aligner_init_mode', default='uniform_pos', dtype=str, choices=['uniform_pos', 'zero'])
+
+    def __init__(self, num_embeddings: int):
+        super().__init__()
+        self.num_embeddings = num_embeddings
+        emb_dict = dict()
+        for cat in Category:
+            if should_include(g.feat_groups, cat):
+                e = get_enum_by_cat(cat)
+                nf = len(e)
+                emb_dict[cat.name] = nn.Parameter(torch.zeros(num_embeddings, nf))
+                if g.feat_aligner_init_mode == 'uniform_pos':
+                    logging.warning('dense feature embedding init uniformly, summing to 1.0')
+                    emb_dict[cat.name].data.fill_(1.0 / nf)
+                else:
+                    logging.warning('dense feature embedding init to zero.')
+        self.embs = nn.ParameterDict(emb_dict)
+
+    def forward(self, unit_ids: LT):
+        embeddings = dict()
+        for cat in Category:
+            if should_include(g.feat_groups, cat):
+                embeddings[cat] = self.embs[cat.name][unit_ids].rename(
+                    'batch', 'feat').align_to('batch', 'length', 'feat')
+        return embeddings
+
+
 class DenseFeatEmbedding(FeatEmbedding):
 
-    add_argument('normalize', default=False, dtype=bool)
+    add_argument('normalize', default=0.0, dtype=float)
     add_argument('init_interval', default=0.1, dtype=float)
+    add_argument('use_tanh', default=False, dtype=bool)
 
     @not_supported_argument_value('new_style', True)
     def _get_embeddings(self):
@@ -124,11 +154,13 @@ class DenseFeatEmbedding(FeatEmbedding):
             if cat.name in self.embed_layer and cat in dense_feat_matrices:
                 sfm = dense_feat_matrices[cat]
                 emb_param = self.embed_layer[cat.name]
+                if g.use_tanh:
+                    emb_param = torch.tanh(emb_param)
                 sfm = sfm.align_to('batch', 'length', ...)
                 emb = sfm @ emb_param
-                if g.normalize:
+                if g.normalize > 0.0:
                     with NoName(emb):
-                        emb = nn.functional.normalize(emb, dim=-1) * 0.3
+                        emb = nn.functional.normalize(emb, dim=-1) * g.normalize
                 if padding is not None:
                     emb.rename(None)[padding.rename(None)] = 0.0
                 embs.append(emb)

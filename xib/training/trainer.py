@@ -206,8 +206,9 @@ class ExtractTrainer(BaseTrainer):
     def write_summaries(self, metrics: Metrics):
         metrics = metrics.with_prefix_('check')
         self.metric_writer.add_metrics(metrics, self.global_step)
-        self.metric_writer.add_histogram(
-            'unit_aligner', self.model.unit_aligner.weight.data, global_step=self.global_step)
+        if not g.use_feature_aligner:
+            self.metric_writer.add_histogram(
+                'unit_aligner', self.model.unit_aligner.weight.data, global_step=self.global_step)
 
     def save_alignment(self):
         if g.input_format == 'text':
@@ -218,8 +219,11 @@ class ExtractTrainer(BaseTrainer):
             except:
                 to_save = {
                     'alignment': self.model.get_alignment().rename(None),
-                    'unit_aligner': self.model.unit_aligner.state_dict(),
                 }
+                if not g.use_feature_aligner:
+                    to_save['unit_aligner'] = self.model.unit_aligner.state_dict()
+                else:
+                    to_save['feat_aligner'] = self.model.feat_aligner.state_dict()
         else:
             to_save = {
                 'adapter': self.model.adapter.state_dict()
@@ -336,8 +340,9 @@ class ExtractTrainer(BaseTrainer):
                 self.metric_writer.add_histogram(
                     'known_ins_ctx_repr', ret.emb_repr.known_ins_ctx_repr, global_step=self.global_step)
 
-            wc = Metric('weight', self.model.unit_aligner.weight.abs().sum(), batch.batch_size)
-            metrics += wc
+            if not g.use_feature_aligner:
+                wc = Metric('weight', self.model.unit_aligner.weight.abs().sum(), batch.batch_size)
+                metrics += wc
 
             loss = -metrics.marginal.mean
 
@@ -346,7 +351,12 @@ class ExtractTrainer(BaseTrainer):
             else:
                 pr_loss = -metrics.posterior_spans.mean
             l_pr_loss = -metrics.avg_log_probs.mean
-            loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss + wc.mean * g.wc_hyper
+            loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
+
+            accum_metrics += Metric('pr_loss', g.pr_hyper * pr_loss, batch.batch_size)
+            accum_metrics += Metric('l_pr_loss', g.l_pr_hyper * l_pr_loss, batch.batch_size)
+            if not g.use_feature_aligner:
+                loss = loss + wc.mean * g.wc_hyper
 
             try:
                 # HACK(j_luo)

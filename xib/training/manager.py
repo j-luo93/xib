@@ -14,6 +14,7 @@ from torch.optim.lr_scheduler import CyclicLR
 
 from dev_misc import g
 from dev_misc.arglib import add_argument, init_g_attr
+from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metrics, has_gpus, set_random_seeds
 from dev_misc.trainlib.trainer import freeze
 from dev_misc.utils import deprecated
@@ -27,7 +28,9 @@ from xib.aligned_corpus.transcriber import (BaseTranscriber,
                                             SimpleTranscriberFactory,
                                             TranscriberWithBackoff)
 from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
-                             DenseIpaDataLoader, IpaDataLoader)
+                             DenseIpaDataLoader, IpaDataLoader,
+                             convert_to_dense)
+from xib.ipa import Category, should_include
 from xib.model.decipher_model import DecipherModel
 from xib.model.extract_model import ExtractModel
 from xib.model.lm_model import LM, AdaptLM
@@ -246,9 +249,16 @@ class ExtractManager(BaseManager):
         from xib.aligned_corpus.ipa_sequence import IpaSequence
 
         def align(lost_char, known_char):
-            known_id = kcs.unit2id[IpaSequence(known_char)]
             lost_id = lcs.unit2id[lost_char]
-            self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
+            if g.use_feature_aligner:
+                dfms = convert_to_dense(IpaSequence(known_char).feat_matrix.rename(
+                    'length', 'feat_group').align_to('length', 'batch', 'feat_group'))
+                for cat in Category:
+                    if should_include(g.feat_groups, cat):
+                        self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0])
+            else:
+                known_id = kcs.unit2id[IpaSequence(known_char)]
+                self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
 
         # # HACK(j_luo)
         # logging.imp("Using emsemble.")
@@ -323,10 +333,16 @@ class ExtractManager(BaseManager):
         self.trainer.global_baseline = g.init_baseline
         optim_cls = self._name2cls[g.optim_cls]
         # , momentum=0.9, nesterov=True)
-        self.trainer.optimizer = optim_cls([
-            {'params': self.model.unit_aligner.parameters(), 'lr': g.aligner_lr},
-            {'params': [param for name, param in self.model.named_parameters() if 'unit_aligner' not in name]}
-        ], lr=g.learning_rate)
+        if g.use_feature_aligner:
+            self.trainer.optimizer = optim_cls([
+                {'params': self.model.feat_aligner.parameters(), 'lr': g.aligner_lr},
+                {'params': [param for name, param in self.model.named_parameters() if 'feat_aligner' not in name]}
+            ], lr=g.learning_rate)
+        else:
+            self.trainer.optimizer = optim_cls([
+                {'params': self.model.unit_aligner.parameters(), 'lr': g.aligner_lr},
+                {'params': [param for name, param in self.model.named_parameters() if 'unit_aligner' not in name]}
+            ], lr=g.learning_rate)
         # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate,
         #                            weight_decay=g.weight_hyper)  # , momentum=0.9, nesterov=False)
         # Save init parameters.

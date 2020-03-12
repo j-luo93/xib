@@ -1,4 +1,6 @@
 import os
+import uuid
+from pathlib import Path
 from typing import Dict, List
 
 import bokeh
@@ -174,7 +176,7 @@ def init_setup(init_path, vocab_path, data_path):
     return char_sets, vocab, model.cuda()
 
 
-def show_all(prefixes, titles, num_rounds=5, step_size=50, max_step=1000, output='test.html'):
+def show_all(prefixes, titles, char_sets, vocab, model, num_rounds=5, step_size=50, max_step=1000, output='test.html'):
     output_file(output)
     to_show = list()
     for prefix, title in zip(prefixes, titles):
@@ -190,22 +192,24 @@ def show_all(prefixes, titles, num_rounds=5, step_size=50, max_step=1000, output
     show(to_show)
 
 
-if __name__ == '__main__':
-    init_path = './log/poly-ufa/reg-faim_zero/0/saved.init'
+def get_service_function():
+    """Turn this script into a service function."""
+
+    init_path = '/scratch2/j_luo/xib/log/poly-ufa/reg-faim_zero/0/saved.init'
     vocab_path = '/scratch2/j_luo/xib/data/wulfila/processed/germ.small.matched.stems'
     data_path = '/scratch2/j_luo/xib/data/wulfila/processed/corpus.small.got-germ.tsv'
-
     char_sets, vocab, model = init_setup(init_path, vocab_path, data_path)
 
-    # prefixes = [
-    #     './log/2020-02-23/LTSanityCheck-norm_3/19-12-57/',
-    #     './log/2020-02-23/LTSanityCheck-norm_5/19-12-56/',
-    #     './log/2020-02-23/LTSanityCheck-norm_7/19-13-01/',
-    #     './log/2020-02-23/LTSanityCheck-norm_10/19-13-03/'
-    # ]
-    # titles = [
-    #     'alr3', 'alr5', 'alr7', 'alr10'
-    # ]
-    # show_all(prefixes, titles, 1, 2, 200)
+    def run(project_root, prefixes) -> str:
+        output = (project_root / 'plot' / uuid.uuid4().hex).with_suffix('.html')
+        output.parent.mkdir(exist_ok=True)
+        output = str(output)
+        show_all(prefixes, prefixes, char_sets, vocab, model, output=output)
+        return output
 
+    return run
+
+
+if __name__ == "__main__":
+    sf = get_service_function()
     embed()

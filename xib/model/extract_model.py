@@ -402,7 +402,11 @@ class ExtractModel(nn.Module):
             all_ll[v_bi, v_lsi, v_lei] = matches.ll.t()
             all_ll.rename_('batch', 'len_s', 'len_e', 'vocab')
             # NOTE(j_luo) Remember to add the prior for vocab.
-            matches.ll = all_ll - math.log(vocab_size)
+            if g.use_vc_oracle:
+                total_vc = self.vocab.vocab_counts.sum()
+                matches.ll = all_ll + get_tensor(self.vocab.vocab_counts / total_vc).log()
+            else:
+                matches.ll = all_ll - math.log(vocab_size)
             matches.raw_ll = all_ll
 
         extracted = Extracted(batch_size,

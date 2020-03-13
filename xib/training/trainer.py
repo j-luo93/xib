@@ -340,8 +340,9 @@ class ExtractTrainer(BaseTrainer):
                 self.metric_writer.add_histogram(
                     'known_ins_ctx_repr', ret.emb_repr.known_ins_ctx_repr, global_step=self.global_step)
 
+            loss_weight = metrics.marginal.weight
             if not g.use_feature_aligner:
-                wc = Metric('weight', self.model.unit_aligner.weight.abs().sum(), batch.batch_size)
+                wc = Metric('weight', self.model.unit_aligner.weight.abs().sum(), loss_weight)
                 metrics += wc
 
             loss = -metrics.marginal.mean
@@ -353,8 +354,8 @@ class ExtractTrainer(BaseTrainer):
             l_pr_loss = -metrics.avg_log_probs.mean
             loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
 
-            accum_metrics += Metric('pr_loss', g.pr_hyper * pr_loss, batch.batch_size)
-            accum_metrics += Metric('l_pr_loss', g.l_pr_hyper * l_pr_loss, batch.batch_size)
+            accum_metrics += Metric('pr_loss', g.pr_hyper * pr_loss * loss_weight, loss_weight)
+            accum_metrics += Metric('l_pr_loss', g.l_pr_hyper * l_pr_loss * loss_weight, loss_weight)
             if not g.use_feature_aligner:
                 loss = loss + wc.mean * g.wc_hyper
 
@@ -369,16 +370,16 @@ class ExtractTrainer(BaseTrainer):
             except AttributeError:
                 pass
 
+            # FIXME(j_luo) Why divide?
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()
 
-            total_loss = Metric('total_loss', loss.item(), batch.batch_size)
+            total_loss = Metric('total_loss', loss.item() * loss_weight, loss_weight)
             metrics += total_loss
             accum_metrics += metrics
 
         grad_norm = clip_grad_norm_(self.model.parameters(), g.max_grad_norm)
         self.optimizer.step()
-        # FIXME(j_luo) avg for grad_norm might be wrong.
-        accum_metrics += Metric('grad_norm', grad_norm * batch.batch_size, batch.batch_size)
+        accum_metrics += Metric('grad_norm', grad_norm * loss_weight, loss_weight)
 
         return accum_metrics

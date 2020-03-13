@@ -7,7 +7,7 @@ from dev_misc import add_argument, g
 from dev_misc.devlib import get_array, get_length_mask
 from dev_misc.devlib.named_tensor import Rename
 from xib.aligned_corpus.char_set import DELETE_SYM, EMPTY_SYM, CharSetFactory
-from xib.aligned_corpus.corpus import Content, Stem, Word
+from xib.aligned_corpus.corpus import Content, Stem, Word, IpaSequence
 from xib.batch import convert_to_dense
 
 
@@ -15,6 +15,7 @@ class Vocabulary:
 
     add_argument('add_infinitive', dtype=bool, default=False)
     add_argument('use_stem', dtype=bool, default=False)
+    add_argument('use_vc_oracle', dtype=bool, default=False)
 
     def __init__(self):
 
@@ -45,6 +46,14 @@ class Vocabulary:
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
             self.vocab = get_array(sorted(set(expand(filter(has_proper_length, gen_word(fin)))),
                                           key=str))
+            if g.use_vc_oracle:
+                v2c = dict()
+                with open(str(g.vocab_path) + '.oracle_count', 'r', encoding='utf8') as fvc:
+                    for line in fvc:
+                        v, c = line.strip().split('\t')
+                        c = int(c)
+                        v2c[IpaSequence(v)] = c
+                self.vocab_counts = np.asarray([v2c[v] for v in self.vocab], dtype='float32')
 
             self.vocab_length = torch.LongTensor(list(map(len, self.vocab)))
             max_len = self.vocab_length.max().item()

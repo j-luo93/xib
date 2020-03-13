@@ -217,7 +217,7 @@ class ExtractAnalyzer:
             # FIXME(j_luo) The weight is wrongly computed.
             l_pr_reg = Metric('avg_log_probs',
                               model_ret.ctc_return.expected_avg_log_probs.sum('batch'),
-                              batch.batch_size)
+                              loss_weight)
             metrics += l_pr_reg
         except:
             pass

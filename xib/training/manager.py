@@ -258,7 +258,7 @@ class ExtractManager(BaseManager):
                         self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0])
             else:
                 known_id = kcs.unit2id[IpaSequence(known_char)]
-                self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
+                self.model.unit_aligner.weight.data[lost_id, known_id] = 0.1 # 2.5
 
         # # HACK(j_luo)
         # logging.imp("Using emsemble.")
@@ -269,23 +269,52 @@ class ExtractManager(BaseManager):
             logging.imp('Testing some oracle.')
             oracle = [
                 ('a', 'a'),
-                ('b', 'b'),
+                # ('w', 'b'),
                 ('d', 'd'),
+                # ('a', 'e'),
+                # ('þ', 'h'),
                 ('i', 'i'),
                 ('k', 'k'),
                 ('l', 'l'),
-                ('m', 'm'),
                 ('n', 'n'),
                 ('o', 'o'),
-                ('p', 'p'),
-                ('r', 'r'),
+                # ('b', 'p'),
+                # ('n', 'r'),
                 ('s', 's'),
                 ('t', 't'),
-                ('g', 'g')
+                ('u', 'u'),
+                # ('j', 'w'),
+                # ('h', 'z'),
+                # ('r', 'ð'),
+                # ('p', 'ɔ'),
+                # ('q', 'g'),
+                ('g', 'ɣ'),
+                ('f', 'ɸ'),
+                # ('m', 'β'),
+                # ('e', 'θ')
 
                 # ('þ', 'h'),
                 # ('i', 'r'),
             ]
+            # oracle = [
+            #     ('a', 'a'),
+            #     ('b', 'b'),
+            #     ('d', 'd'),
+            #     ('i', 'i'),
+            #     ('k', 'k'),
+            #     ('l', 'l'),
+            #     ('m', 'm'),
+            #     ('n', 'n'),
+            #     ('o', 'o'),
+            #     ('p', 'p'),
+            #     ('r', 'r'),
+            #     ('s', 's'),
+            #     ('t', 't'),
+            #     ('g', 'g')
+
+            #     # ('þ', 'h'),
+            #     # ('i', 'r'),
+            # ]
             for l, k in oracle:
                 align(l, k)
         # align('m', 'm')

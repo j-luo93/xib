@@ -104,6 +104,9 @@ class ExtractModel(nn.Module):
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
     add_argument('temperature', default=1.0, dtype=float)
+    add_argument('anneal_temperature', dtype=bool, default=False)
+    add_argument('init_temperature', default=0.2, dtype=float)
+    add_argument('end_temperature', default=0.1, dtype=float)
     add_argument('context_agg_mode', default='log_interpolation', dtype=str,
                  choices=['log_interpolation', 'linear_interpolation', 'log_add', 'dilute'])
     add_argument('dilute_hyper', dtype=float, default=0.5)
@@ -174,6 +177,10 @@ class ExtractModel(nn.Module):
 
     @global_property
     def ins_del_cost(self):
+        pass
+
+    @global_property
+    def temperature(self):
         pass
 
     @cached_property
@@ -272,7 +279,7 @@ class ExtractModel(nn.Module):
     # @profile
     def _get_alignment_log_probs(self, known_unit_emb: FT, lost_unit_emb: FT, reverse: bool = False) -> FT:
         unit_logits = known_unit_emb @ lost_unit_emb.t()
-        unit_log_probs = (unit_logits / g.temperature).log_softmax(dim=-1)
+        unit_log_probs = (unit_logits / self.temperature).log_softmax(dim=-1)
         if reverse:
             unit_log_probs = unit_log_probs.log_softmax(dim=0)
         return unit_log_probs
@@ -302,7 +309,7 @@ class ExtractModel(nn.Module):
 
         # Get contextualized log probs.
         sub_ctx_logits = emb_repr.known_ctx_repr @ emb_repr.lost_unit_emb.t()
-        sub_ctx_log_probs = (sub_ctx_logits / g.temperature).log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+        sub_ctx_log_probs = (sub_ctx_logits / self.temperature).log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
 
         def interpolate(ctx, plain):
             if g.context_agg_mode == 'log_interpolation':
@@ -322,7 +329,7 @@ class ExtractModel(nn.Module):
 
         # Get secondary costs for insertions.
         ins_ctx_logits = emb_repr.known_ins_ctx_repr @ emb_repr.lost_unit_emb.t()
-        ins_ctx_log_probs = (ins_ctx_logits / g.temperature).log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+        ins_ctx_log_probs = (ins_ctx_logits / self.temperature).log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
         ins = -ins_weighted_log_probs + self.ins_del_cost
 

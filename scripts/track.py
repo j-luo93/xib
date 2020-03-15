@@ -200,11 +200,12 @@ def get_service_function():
     data_path = '/scratch2/j_luo/xib/data/wulfila/processed/corpus.small.got-germ.tsv'
     char_sets, vocab, model = init_setup(init_path, vocab_path, data_path)
 
-    def run(project_root, prefixes) -> str:
+    def run(project_root, prefixes, step_size, max_step, num_rounds) -> str:
         output = (project_root / 'plot' / uuid.uuid4().hex).with_suffix('.html')
         output.parent.mkdir(exist_ok=True)
         output = str(output)
-        show_all(prefixes, prefixes, char_sets, vocab, model, output=output)
+        show_all(prefixes, prefixes, char_sets, vocab, model, output=output,
+                 step_size=step_size, max_step=max_step, num_rounds=num_rounds)
         return output
 
     return run

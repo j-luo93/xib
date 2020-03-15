@@ -1,4 +1,5 @@
 import logging
+import math
 from abc import ABCMeta
 from dataclasses import dataclass
 from pathlib import Path
@@ -242,6 +243,14 @@ class ExtractTrainer(BaseTrainer):
         logging.imp(f'Setting ins_del_cost to {value}.')
 
     @global_property
+    def temperature(self):
+        pass
+
+    @temperature.setter
+    def temperature(self, value):
+        logging.imp(f'Setting temperature to {value}.')
+
+    @global_property
     def bij_reg(self):
         pass
 
@@ -320,6 +329,11 @@ class ExtractTrainer(BaseTrainer):
         if g.anneal_baseline:
             self.global_baseline += (g.max_baseline - g.init_baseline) / 1000.0
             self.metric_writer.add_scalar('baseline', self.global_baseline, global_step=self.global_step)
+        if g.anneal_temperature:
+            # self.temperature += (g.end_temperature - g.init_temperature) / 1000.0
+            self.temperature *= math.exp((math.log(g.end_temperature) - math.log(g.init_temperature)) / 1000.0)
+            self.metric_writer.add_scalar('temperature', self.temperature, global_step=self.global_step)
+
         self.model.train()
         self.optimizer.zero_grad()
         accum_metrics = Metrics()

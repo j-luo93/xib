@@ -258,7 +258,7 @@ class ExtractManager(BaseManager):
                         self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0])
             else:
                 known_id = kcs.unit2id[IpaSequence(known_char)]
-                self.model.unit_aligner.weight.data[lost_id, known_id] = 0.1 # 2.5
+                self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
 
         # # HACK(j_luo)
         # logging.imp("Using emsemble.")
@@ -270,16 +270,19 @@ class ExtractManager(BaseManager):
             oracle = [
                 ('a', 'a'),
                 # ('w', 'b'),
+                ('b', 'b'),
                 ('d', 'd'),
                 # ('a', 'e'),
                 # ('þ', 'h'),
                 ('i', 'i'),
                 ('k', 'k'),
                 ('l', 'l'),
+                ('m', 'm'),
                 ('n', 'n'),
                 ('o', 'o'),
                 # ('b', 'p'),
                 # ('n', 'r'),
+                # ('r', 'r'),
                 ('s', 's'),
                 ('t', 't'),
                 ('u', 'u'),
@@ -288,8 +291,8 @@ class ExtractManager(BaseManager):
                 # ('r', 'ð'),
                 # ('p', 'ɔ'),
                 # ('q', 'g'),
-                ('g', 'ɣ'),
-                ('f', 'ɸ'),
+                # ('g', 'ɣ'),
+                # ('f', 'ɸ'),
                 # ('m', 'β'),
                 # ('e', 'θ')
 
@@ -361,6 +364,11 @@ class ExtractManager(BaseManager):
         self.trainer.ent_reg = 0.0
         self.trainer.global_baseline = g.init_baseline
         optim_cls = self._name2cls[g.optim_cls]
+        if g.anneal_temperature:
+            self.trainer.temperature = g.init_temperature
+        else:
+            self.trainer.temperature = g.temperature
+
         # , momentum=0.9, nesterov=True)
         if g.use_feature_aligner:
             self.trainer.optimizer = optim_cls([

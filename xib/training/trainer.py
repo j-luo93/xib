@@ -179,6 +179,9 @@ class ExtractTrainer(BaseTrainer):
     add_argument('ent_reg_hyper', default=0.1, dtype=float)
     add_argument('max_grad_norm', default=5.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
+    add_argument('anneal_pr_hyper', default=False, dtype=bool)
+    add_argument('init_pr_hyper', default=10.0, dtype=float)
+    add_argument('end_pr_hyper', default=0.0, dtype=float)
     add_argument('pr_mode', default='barrier', dtype=str, choices=['barrier', 'penalty'])
 
     def __init__(self, *args, **kwargs):
@@ -275,6 +278,14 @@ class ExtractTrainer(BaseTrainer):
         logging.imp(f'Setting ent_reg to {value}.')
 
     @global_property
+    def pr_hyper(self):
+        pass
+
+    @pr_hyper.setter
+    def pr_hyper(self, value):
+        logging.imp(f'Setting pr_hyper to {value}.')
+
+    @global_property
     def er(self):
         pass
 
@@ -333,6 +344,9 @@ class ExtractTrainer(BaseTrainer):
             # self.temperature += (g.end_temperature - g.init_temperature) / 1000.0
             self.temperature *= math.exp((math.log(g.end_temperature) - math.log(g.init_temperature)) / 1000.0)
             self.metric_writer.add_scalar('temperature', self.temperature, global_step=self.global_step)
+        if g.anneal_pr_hyper:
+            self.pr_hyper += (g.end_pr_hyper - g.init_pr_hyper) / 1000.0
+            self.metric_writer.add_scalar('pr_hyper', self.pr_hyper, global_step=self.global_step)
 
         self.model.train()
         self.optimizer.zero_grad()
@@ -366,9 +380,9 @@ class ExtractTrainer(BaseTrainer):
             else:
                 pr_loss = -metrics.posterior_spans.mean
             l_pr_loss = -metrics.avg_log_probs.mean
-            loss = g.main_loss_hyper * loss + g.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
+            loss = g.main_loss_hyper * loss + self.pr_hyper * pr_loss + g.l_pr_hyper * l_pr_loss
 
-            accum_metrics += Metric('pr_loss', g.pr_hyper * pr_loss * loss_weight, loss_weight)
+            accum_metrics += Metric('pr_loss', self.pr_hyper * pr_loss * loss_weight, loss_weight)
             accum_metrics += Metric('l_pr_loss', g.l_pr_hyper * l_pr_loss * loss_weight, loss_weight)
             if not g.use_feature_aligner:
                 loss = loss + wc.mean * g.wc_hyper

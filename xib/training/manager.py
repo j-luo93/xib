@@ -368,6 +368,10 @@ class ExtractManager(BaseManager):
             self.trainer.temperature = g.init_temperature
         else:
             self.trainer.temperature = g.temperature
+        if g.anneal_pr_hyper:
+            self.trainer.pr_hyper = g.init_pr_hyper
+        else:
+            self.trainer.pr_hyper = g.pr_hyper
 
         # , momentum=0.9, nesterov=True)
         if g.use_feature_aligner:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dev_misc.utils import global_property
 import logging
 import warnings
 from abc import ABC, abstractmethod
@@ -350,6 +351,8 @@ class _AnnotationTuple:
 
 class AlignedExtractEvaluator(BaseEvaluator):
 
+    add_argument('evaluate_baselines', nargs='+', dtype=float, default=[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3])
+
     def __init__(self, model: ExtractModel, dl: AlignedDataLoader, vocab: Vocabulary):
         self.model = model
         self.dl = dl
@@ -384,6 +387,14 @@ class AlignedExtractEvaluator(BaseEvaluator):
             spans.append((seg.start, seg.end))
         return sentences, spans
 
+    @global_property
+    def global_baseline(self):
+        pass
+
+    @global_baseline.setter
+    def global_baseline(self, value):
+        pass
+
     def _evaluate_core(self, stage: str) -> Tuple[Metrics, List[_AnnotationTuple]]:
         if self._last_eval_stage is not None and self._last_eval_stage == stage:
             return self._last_annotations_results
@@ -391,15 +402,27 @@ class AlignedExtractEvaluator(BaseEvaluator):
         total_num_samples = 0
         analyzed_metrics = Metrics()
         annotations = list()
-        for batch in pbar(self.dl, desc='eval_batch'):
-            if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
-                logging.imp(
-                    f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
-                break
-            ret = self.model(batch)
-            analyzed_metrics += self.analyzer.analyze(ret, batch)
-            total_num_samples += batch.batch_size
-            annotations.extend(self._get_annotations_for_batch(ret, batch))
+        orig_baseline = self.global_baseline
+        baselines = [None] + list(g.evaluate_baselines) if g.anneal_baseline else [None]
+        for baseline in baselines:
+            if baseline is not None:
+                self.global_baseline = baseline
+                self.model.train()
+            for batch in pbar(self.dl, desc='eval_batch'):
+                if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
+                    logging.imp(
+                        f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
+                    break
+                ret = self.model(batch)
+                batch_metrics = self.analyzer.analyze(ret, batch)
+                if baseline is not None:
+                    batch_metrics = batch_metrics.with_prefix_(f'eval_b{baseline}')
+                analyzed_metrics += batch_metrics
+                total_num_samples += batch.batch_size
+                if baseline is None:
+                    annotations.extend(self._get_annotations_for_batch(ret, batch))
+        self.model.eval()
+        self.global_baseline = orig_baseline
         self._last_eval_stage = stage
         self._last_annotations_results = (analyzed_metrics, annotations)
         return analyzed_metrics, annotations
@@ -519,7 +542,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
         final_nodes = model_ret.ctc_return.final_nodes
         prev_tag = last_tag = final_nodes.max(dim=1)[1]
         prev_pos = last_pos = batch.lengths
-        offset = torch.LongTensor([1]+ list(range(g.min_word_length, g.max_word_length + 1)))
+        offset = torch.LongTensor([1] + list(range(g.min_word_length, g.max_word_length + 1)))
         offset = get_tensor(offset)
         offset.rename_('tag')
         bs = final_nodes.size('batch')

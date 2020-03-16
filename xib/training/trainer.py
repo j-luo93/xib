@@ -338,14 +338,14 @@ class ExtractTrainer(BaseTrainer):
         # self.bij_reg += g.bij_reg_hyper / 1000.
         # self.ent_reg += g.ent_reg_hyper / 1000.
         if g.anneal_baseline:
-            self.global_baseline += (g.max_baseline - g.init_baseline) / 1000.0
+            self.global_baseline += (g.max_baseline - g.init_baseline) / g.num_steps
             self.metric_writer.add_scalar('baseline', self.global_baseline, global_step=self.global_step)
         if g.anneal_temperature:
             # self.temperature += (g.end_temperature - g.init_temperature) / 1000.0
-            self.temperature *= math.exp((math.log(g.end_temperature) - math.log(g.init_temperature)) / 1000.0)
+            self.temperature *= math.exp((math.log(g.end_temperature) - math.log(g.init_temperature)) / g.num_steps)
             self.metric_writer.add_scalar('temperature', self.temperature, global_step=self.global_step)
         if g.anneal_pr_hyper:
-            self.pr_hyper += (g.end_pr_hyper - g.init_pr_hyper) / 1000.0
+            self.pr_hyper += (g.end_pr_hyper - g.init_pr_hyper) / g.num_steps
             self.metric_writer.add_scalar('pr_hyper', self.pr_hyper, global_step=self.global_step)
 
         self.model.train()

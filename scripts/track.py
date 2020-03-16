@@ -195,7 +195,7 @@ def show_all(prefixes, titles, char_sets, vocab, model, num_rounds=5, step_size=
 def get_service_function():
     """Turn this script into a service function."""
 
-    init_path = '/scratch2/j_luo/xib/log/grid/matched_cmdl/sanity-fixed-vc/0/saved.init'
+    init_path = '/scratch2/j_luo/xib/log/grid/matched_cmdl/sanity-old_downsample-longer-longer-batch1/saved.init'
     vocab_path = '/scratch2/j_luo/xib/data/wulfila/processed/germ.small.matched.stems'
     data_path = '/scratch2/j_luo/xib/data/wulfila/processed/corpus.small.got-germ.tsv'
     char_sets, vocab, model = init_setup(init_path, vocab_path, data_path)

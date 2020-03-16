@@ -130,7 +130,7 @@ class ExtractModel(nn.Module):
     add_argument('unit_aligner_init_mode', dtype=str, default='uniform', choices=['uniform', 'zero'])
     add_argument('use_feature_aligner', dtype=bool, default=False)
     add_argument('reward_mode', dtype=str, default='div', choices=[
-                 'div', 'ln_div', 'minus', 'div_pos', 'poly', 'cutoff', 'minus_pos'])
+                 'div', 'ln_div', 'minus', 'div_pos', 'poly', 'cutoff', 'thresh', 'minus_pos'])
 
     def __init__(self, lost_size: int, known_size: int, vocab: Vocabulary):
         super().__init__()
@@ -309,7 +309,8 @@ class ExtractModel(nn.Module):
 
         # Get contextualized log probs.
         sub_ctx_logits = emb_repr.known_ctx_repr @ emb_repr.lost_unit_emb.t()
-        sub_ctx_log_probs = (sub_ctx_logits / self.temperature).log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+        sub_ctx_log_probs = (sub_ctx_logits / self.temperature).log_softmax(dim=-
+                                                                            1).rename('vocab', 'length', 'lost_unit')
 
         def interpolate(ctx, plain):
             if g.context_agg_mode == 'log_interpolation':
@@ -329,7 +330,8 @@ class ExtractModel(nn.Module):
 
         # Get secondary costs for insertions.
         ins_ctx_logits = emb_repr.known_ins_ctx_repr @ emb_repr.lost_unit_emb.t()
-        ins_ctx_log_probs = (ins_ctx_logits / self.temperature).log_softmax(dim=-1).rename('vocab', 'length', 'lost_unit')
+        ins_ctx_log_probs = (ins_ctx_logits / self.temperature).log_softmax(dim=-
+                                                                            1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
         ins = -ins_weighted_log_probs + self.ins_del_cost
 
@@ -470,7 +472,7 @@ class ExtractModel(nn.Module):
             return self.lp_per_unmatched
         else:
             if g.anneal_baseline:
-                return math.log(self.global_baseline)
+                return math.log(self.global_baseline + 1e-16)
             else:
                 return math.log(g.baseline + 1e-16)
 
@@ -537,13 +539,16 @@ class ExtractModel(nn.Module):
             reward = raw - b
             # HACK(j_luo)
             reward = LogTensor.from_torch(reward.storage, log_scale=True) * 20.0
-        elif g.reward_mode == 'minus_pos':
+        elif g.reward_mode in ['thresh', 'minus_pos']:
             diff = raw - self.baseline
             pos = diff > 0.0
 
             b = LogTensor.from_torch(torch.full_like(raw, self.baseline), log_scale=True)
             raw = LogTensor.from_torch(raw, log_scale=True)
-            reward = raw - b
+            if g.reward_mode == 'minus_pos':
+                reward = raw - b
+            else:
+                reward = raw
 
             reward = torch.where(pos, reward.storage, torch.full_like(diff, -9999.9))
             reward = LogTensor.from_torch(reward, log_scale=True) * 20.0

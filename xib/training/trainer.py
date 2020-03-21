@@ -180,6 +180,7 @@ class ExtractTrainer(BaseTrainer):
     add_argument('max_grad_norm', default=5.0, dtype=float)
     add_argument('save_alignment', default=False, dtype=bool, msg='Flag to save alignment every step.')
     add_argument('anneal_pr_hyper', default=False, dtype=bool)
+    add_argument('anneal_er', default=False, dtype=bool)
     add_argument('init_pr_hyper', default=10.0, dtype=float)
     add_argument('end_pr_hyper', default=0.0, dtype=float)
     add_argument('pr_mode', default='barrier', dtype=str, choices=['barrier', 'penalty'])
@@ -347,6 +348,9 @@ class ExtractTrainer(BaseTrainer):
         if g.anneal_pr_hyper:
             self.pr_hyper += (g.end_pr_hyper - g.init_pr_hyper) / g.num_steps
             self.metric_writer.add_scalar('pr_hyper', self.pr_hyper, global_step=self.global_step)
+        if g.anneal_er:
+            self.er += (g.expected_ratio - g.init_expected_ratio) / g.num_steps
+            self.metric_writer.add_scalar('expected_ratio', self.er, global_step=self.global_step)
 
         self.model.train()
         self.optimizer.zero_grad()

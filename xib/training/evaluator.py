@@ -352,6 +352,7 @@ class _AnnotationTuple:
 class AlignedExtractEvaluator(BaseEvaluator):
 
     add_argument('evaluate_baselines', nargs='+', dtype=float, default=[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3])
+    add_argument('use_evaluate_baselines',  default=False, dtype=bool)
 
     def __init__(self, model: ExtractModel, dl: AlignedDataLoader, vocab: Vocabulary):
         self.model = model
@@ -393,7 +394,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
 
     @global_baseline.setter
     def global_baseline(self, value):
-        pass
+        logging.imp(f'Setting global_baseline to {value} in eval.')
 
     def _evaluate_core(self, stage: str) -> Tuple[Metrics, List[_AnnotationTuple]]:
         if self._last_eval_stage is not None and self._last_eval_stage == stage:
@@ -403,7 +404,7 @@ class AlignedExtractEvaluator(BaseEvaluator):
         analyzed_metrics = Metrics()
         annotations = list()
         orig_baseline = self.global_baseline
-        baselines = [None] + list(g.evaluate_baselines) if g.anneal_baseline else [None]
+        baselines = [None] + list(g.evaluate_baselines) if g.anneal_baseline and g.use_evaluate_baselines else [None]
         for baseline in baselines:
             if baseline is not None:
                 self.global_baseline = baseline

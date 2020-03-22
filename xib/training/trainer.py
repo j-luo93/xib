@@ -268,7 +268,7 @@ class ExtractTrainer(BaseTrainer):
 
     @global_baseline.setter
     def global_baseline(self, value):
-        pass
+        logging.imp(f'Setting global_baseline to {value}.')
 
     @global_property
     def ent_reg(self):

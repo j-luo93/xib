@@ -538,7 +538,7 @@ class ExtractModel(nn.Module):
             raw = LogTensor.from_torch(raw, log_scale=True)
             reward = raw - b
             # HACK(j_luo)
-            reward = LogTensor.from_torch(reward.storage, log_scale=True) * 20.0
+            reward *= 20.0
         elif g.reward_mode in ['thresh', 'minus_pos']:
             diff = raw - self.baseline
             pos = diff > 0.0
@@ -551,7 +551,12 @@ class ExtractModel(nn.Module):
                 reward = raw
 
             reward = torch.where(pos, reward.storage, torch.full_like(diff, -9999.9))
-            reward = LogTensor.from_torch(reward, log_scale=True) * 20.0
+            if self.training:
+                reward = LogTensor.from_torch(reward, log_scale=True) * 20.0
+            else:
+                storage = reward
+                sign = torch.where(pos, torch.ones_like(reward), torch.zeros_like(reward))
+                reward = LogTensor(storage, sign=sign)
         elif g.reward_mode == 'poly':
             # mul = 1.0 if g.use_softmax else 20.0
             reward = LogTensor.from_torch(raw * math.exp(self.baseline), log_scale=True)
@@ -600,7 +605,10 @@ class ExtractModel(nn.Module):
         if self.training:
             psi[0] = get_init(-9999.9)
             phi[0] = get_init(-9999.9)
-        padding = get_init(-9999.9)
+        if g.reward_mode in ['thresh', 'minus']:
+            padding = get_init(-1.0, log_scale=False)
+        else:
+            padding = get_init(-9999.9)
 
         def expand_vs(t):
             return t.align_to(..., 'vocab').expand(batch_size, self.num_tags, len(self.vocab))
@@ -712,6 +720,12 @@ class ExtractModel(nn.Module):
                         best_prev_vocab = best_index % len(self.vocab)
                     else:
                         best_value, best_prev_tag = phi_stacked.max(dim='tag')
+                        # if not self.training:
+                        #     print(l)
+                        #     print(best_value[1])
+                        #     print(best_value[1].storage)
+                        #     print(best_value[1].sign)
+                        #     breakpoint()  # BREAKPOINT(j_luo)
                     all_phi_scores[l] = best_value.rename(new_tag='tag')
                     bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
                 # Old way here.
@@ -722,10 +736,13 @@ class ExtractModel(nn.Module):
 
         # ------------- Get the actual phi and psi values. ------------- #
 
-        marginal = LogTensor.stack([marginal[l] for l in range(max_length + 1)], new_name='length')
         expected_num_spans = expected_avg_log_probs = None
-        with NoName(marginal, lengths):
-            final_nodes = marginal[range(batch_size), :, lengths]
+        if g.inference_mode == 'old' or self.training:
+            relevant_scores = LogTensor.stack([marginal[l] for l in range(max_length + 1)], new_name='length')
+        else:
+            relevant_scores  = LogTensor.stack([all_phi_scores[l] for l in range(max_length + 1)], new_name='length')
+        with NoName(relevant_scores, lengths):
+            final_nodes = relevant_scores[range(batch_size), :, lengths]
             final_nodes.rename_('batch', 'tag')
 
         if not self.training:

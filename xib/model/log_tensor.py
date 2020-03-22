@@ -252,18 +252,28 @@ class LogTensor:
             max_v, max_i = self.storage.max(dim=dim)
             return LogTensor(max_v), max_i
 
-        is_pos = self.sign == 1.0
-        has_pos = is_pos.any(dim=dim, keepdims=True)
-        value = self.storage
-        pos_part = value - torch.where(is_pos, torch.zeros_like(value), torch.full_like(value, np.inf))
-        neg_part = -value
-        max_v, max_i = torch.where(has_pos, pos_part, neg_part).max(dim=dim)
-        has_pos = has_pos.squeeze(dim=dim)
-        max_v = torch.where(has_pos, max_v, -max_v)
+        # The result should has max sign, and within all values with max sign, has the biggest/smallest storage depending on the sign value.
+        max_sign, _ = self.sign.max(dim=dim, keepdims=True)
+        v = self.storage
+        masked_v = v - torch.where(self.sign == max_sign, torch.zeros_like(v), torch.full_like(v, np.inf))
+        neg_only = max_sign == -1.0
+        max_v, max_i = torch.where(neg_only, -masked_v, masked_v).max(dim=dim)
+        max_v = torch.where(neg_only.squeeze(dim=dim), -max_v, max_v)
+        return LogTensor(max_v, max_sign.squeeze(dim=dim)), max_i
 
-        ones = torch.ones_like(max_v)
-        sign = torch.where(has_pos, ones, -ones)
-        return LogTensor(max_v, sign), max_i
+        # # Old code here.
+        # is_pos = self.sign == 1.0
+        # has_pos = is_pos.any(dim=dim, keepdims=True)
+        # value = self.storage
+        # pos_part = value - torch.where(is_pos, torch.zeros_like(value), torch.full_like(value, np.inf))
+        # neg_part = -value
+        # max_v, max_i = torch.where(has_pos, pos_part, neg_part).max(dim=dim)
+        # has_pos = has_pos.squeeze(dim=dim)
+        # max_v = torch.where(has_pos, max_v, -max_v)
+
+        # ones = torch.ones_like(max_v)
+        # sign = torch.where(has_pos, ones, -ones)
+        # return LogTensor(max_v, sign), max_i
 
     @classmethod
     def max_all(self, lst: Iterable[LogTensor]) -> LogTensor:

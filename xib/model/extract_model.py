@@ -494,19 +494,19 @@ class ExtractModel(nn.Module):
         span_raw_square = raw_reward = None
         if g.inference_mode == 'new':
             span_lengths = span_lengths.align_as(matches.raw_ll)
-            raw_reward = self._get_thresholded_reward(matches.raw_ll / span_lengths)
+            raw_reward, psi_pos = self._get_thresholded_reward(matches.raw_ll / span_lengths)
             span_raw_square = (raw_reward + matches.raw_ll).logsumexp(dim='vocab') - math.log(len(self.vocab))
         else:
             # HACK(j_luo)
             # if g.reward_mode == 'poly':
             #     raw_reward = self._get_thresholded_reward(span_log_probs + span_lengths.float().log())
             # else:
-            raw_reward = self._get_thresholded_reward(span_log_probs / span_lengths)
+            raw_reward, psi_pos = self._get_thresholded_reward(span_log_probs / span_lengths)
         p_x_z = LogTensor.from_torch(span_log_probs, log_scale=True)
         p_xy_z = LogTensor.from_torch(matches.ll, log_scale=True)
         p_x_yz = LogTensor.from_torch(matches.raw_ll, log_scale=True)
         ctc_return = self._run_ctc_v2(batch.lengths, p_x_z, p_xy_z,
-                                      p_x_yz, span_raw_square, raw_reward)
+                                      p_x_yz, span_raw_square, raw_reward, psi_pos)
         model_ret = ExtractModelReturn(emb_repr,
                                        extracted,
                                        costs,
@@ -525,7 +525,8 @@ class ExtractModel(nn.Module):
     def num_tags(self) -> int:
         return self.num_e_tags + 1
 
-    def _get_thresholded_reward(self, raw: FT) -> Union[FT, LogTensor]:
+    def _get_thresholded_reward(self, raw: FT) -> Tuple[Union[FT, LogTensor], Union[None, BT]]:
+        pos = None
         if g.reward_mode in ['div', 'ln_div', 'div_pos']:
             reward = raw - self.baseline
             if g.reward_mode == 'div_pos':
@@ -565,9 +566,9 @@ class ExtractModel(nn.Module):
             reward = 2.0 * LogTensor.from_torch(reward, log_scale=True)
         else:
             raise ValueError(f'Unrecognized reward_mode `reward_mode`.')
-        return reward
+        return reward, pos
 
-    def _run_ctc_v2(self, lengths: LT, p_x_z: FT, p_xy_z: FT, p_x_yz: FT, span_raw_square: FT, raw_reward: LogTensor) -> CtcReturn:
+    def _run_ctc_v2(self, lengths: LT, p_x_z: FT, p_xy_z: FT, p_x_yz: FT, span_raw_square: FT, raw_reward: LogTensor, psi_pos: BT) -> CtcReturn:
         # ------------------ Prepare everything first. ----------------- #
 
         marginal = dict()
@@ -605,8 +606,8 @@ class ExtractModel(nn.Module):
         if self.training:
             psi[0] = get_init(-9999.9)
             phi[0] = get_init(-9999.9)
-        if g.reward_mode in ['thresh', 'minus']:
-            padding = get_init(-1.0, log_scale=False)
+        if g.reward_mode in ['thresh', 'minus'] and not self.training:
+            padding = get_init(-0.01, log_scale=False)
         else:
             padding = get_init(-9999.9)
 
@@ -665,6 +666,9 @@ class ExtractModel(nn.Module):
                         else:
                             phi_psi_common.append(span_bias * this_p_x_z)
                             phi_lse.extend([prev_marginal * reward, phi[prev_l]])
+                            # NOTE(j_luo) word_len is only effective when it's positive.
+                            word_len = (psi_pos[:, start_idx, end_idx].float() * word_len).align_as(prev_marginal.storage)
+                            word_len = LogTensor.from_torch(word_len, nonneg=True)
                             psi_lse.extend([prev_marginal * word_len, psi[prev_l]])
                     else:
                         if g.inference_mode == 'new':
@@ -740,7 +744,7 @@ class ExtractModel(nn.Module):
         if g.inference_mode == 'old' or self.training:
             relevant_scores = LogTensor.stack([marginal[l] for l in range(max_length + 1)], new_name='length')
         else:
-            relevant_scores  = LogTensor.stack([all_phi_scores[l] for l in range(max_length + 1)], new_name='length')
+            relevant_scores = LogTensor.stack([all_phi_scores[l] for l in range(max_length + 1)], new_name='length')
         with NoName(relevant_scores, lengths):
             final_nodes = relevant_scores[range(batch_size), :, lengths]
             final_nodes.rename_('batch', 'tag')

@@ -310,14 +310,33 @@ class ExtractManager(BaseManager):
                 ('n', 'n'),
                 ('o', 'o'),
                 ('p', 'p'),
-                ('r', 'r'),
-                ('s', 's'),
-                ('t', 't'),
-                ('g', 'g')
+                # ('r', 'r'),
+                # ('s', 's'),
+                # ('t', 't'),
+                # ('g', 'g')
 
                 # ('þ', 'h'),
                 # ('i', 'r'),
             ]
+            # oracle = [
+            #     ('a', 'a'),
+            #     ('b', 'b'),
+            #     ('d', 'd'),
+            #     ('i', 'i'),
+            #     ('k', 'k'),
+            #     ('l', 'l'),
+            #     ('m', 'm'),
+            #     ('n', 'n'),
+            #     ('o', 'o'),
+            #     ('p', 'p'),
+            #     ('r', 'r'),
+            #     ('s', 's'),
+            #     ('t', 't'),
+            #     ('g', 'g')
+
+            #     # ('þ', 'h'),
+            #     # ('i', 'r'),
+            # ]
             for l, k in oracle:
                 align(l, k)
         # align('m', 'm')
@@ -362,7 +381,7 @@ class ExtractManager(BaseManager):
         # HACK(j_luo)
         self.trainer.bij_reg = 0.0
         self.trainer.ent_reg = 0.0
-        self.trainer.global_baseline = g.init_baseline
+        self.trainer.global_baseline = g.init_baseline + 1e-8
         optim_cls = self._name2cls[g.optim_cls]
         if g.anneal_temperature:
             self.trainer.temperature = g.init_temperature

@@ -207,7 +207,7 @@ def get_service_function():
         output = (project_root / 'plot' / uuid.uuid4().hex).with_suffix('.html')
         output.parent.mkdir(exist_ok=True)
         output = str(output)
-        show_all(prefixes, prefixes, char_sets, vocab, model, output=output)
+        show_all(prefixes, prefixes, char_sets, vocab, model, output=output, step_size=step_size, max_step=max_step, num_rounds=num_rounds)
 
         return output
 

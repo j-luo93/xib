@@ -255,7 +255,7 @@ class ExtractManager(BaseManager):
                     'length', 'feat_group').align_to('length', 'batch', 'feat_group'))
                 for cat in Category:
                     if should_include(g.feat_groups, cat):
-                        self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0])
+                        self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0] * 5.0)
             else:
                 known_id = kcs.unit2id[IpaSequence(known_char)]
                 self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
@@ -300,15 +300,15 @@ class ExtractManager(BaseManager):
             #     # ('i', 'r'),
             # ]
             oracle = [
-                ('a', 'a'),
-                ('b', 'b'),
-                ('d', 'd'),
-                ('i', 'i'),
+                # ('a', 'a'),
+                # ('b', 'b'),
+                # ('d', 'd'),
+                # ('i', 'i'),
                 ('k', 'k'),
                 ('l', 'l'),
                 ('m', 'm'),
                 ('n', 'n'),
-                ('o', 'o'),
+                # ('o', 'o'),
                 ('p', 'p'),
                 # ('r', 'r'),
                 # ('s', 's'),

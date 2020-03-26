@@ -5,7 +5,7 @@ import pandas as pd
 
 RE_HV = 'ƕ'
 RE_CHAR = fr'[\wïþÞ{RE_HV}]'
-RE_C = fr'[bdfghjklmnpqrstwxzþÞ{RE_HV}]'
+RE_C = fr'[bdfghjklmnpqrstwxzþðÞ{RE_HV}]'
 RE_Di = fr'[a]'
 
 # ------------------- Proto-Germainic helper ------------------- #
@@ -92,40 +92,54 @@ def get_ang_stem(s):
 
 
 on_to_remove = {
-    'a', 'ja', 'ir', 'i', 'ur', 'ar', 'ast'
+    'a', 'ja', 'ir', 'i', 'ur', 'ar', 'ast', 'r'
 }
 on_to_remove = sorted(on_to_remove, key=len, reverse=True)
 
 on_to_match = {
-    'an': fr'(?<={RE_C})an$',
-
+    'r': fr'(?<={RE_C})r$',
 }
 on_exceptions = {
     # 'oþþe': 'oþþe',
     # 'hēan': 'hēan'
+    'aptr': 'aptr'
 }
 
 
 def get_on_stem(s):
+    if '=' in s or 'ᛏ' in s:
+        return None
     ret = s
+    ret = re.sub('ey', "ai", ret)
+    ret = re.sub('ju', "eu", ret)
+    ret = re.sub('jo', "eu", ret)
+    ret = re.sub('ja', "e", ret)
+    ret = re.sub('jǫ', "e", ret)
+    ret = re.sub('ø', "e", ret)
+    ret = re.sub('æ', "e", ret)
+    ret = re.sub('o', "u", ret)
+    ret = re.sub('ǫ', "a", ret)
+    ret = re.sub('y', "u", ret)
+    ret = re.sub('y', "u", ret)
     if s in on_exceptions:
         ret = on_exceptions[s]
     elif not s.startswith('-'):
-        while True:
-            stripped = False
-            for ending in on_to_remove:
-                if ret.endswith(ending) and len(ending) <= 0.5 * len(ret) and len(ret) >= 2:
-                    if ending not in on_to_match or re.search(on_to_match[ending], ret):
-                        #ret = ret.rstrip(ending)
-                        ret = re.sub(ending + '$', "", ret)
-                        stripped = True
+        # Maybe just strip once.
+        # while True:
+        # stripped = False
+        for ending in on_to_remove:
+            if ret.endswith(ending) and len(ending) <= 0.5 * len(ret) and len(ret) >= 2:
+                if ending not in on_to_match or re.search(on_to_match[ending], ret):
+                    #ret = ret.rstrip(ending)
+                    ret = re.sub(ending + '$', "", ret)
+                    # stripped = True
 
-            # Double ending with 'bb' should be mapped to just 'b'.
-            if len(ret) >= 4 and ret[-1] == ret[-2] == 'b':
-                stripped = True
-                ret = ret[:-1]
-            if not stripped:
-                break
+        # Double ending with 'bb' should be mapped to just 'b'.
+        if len(ret) >= 4 and ret[-1] == ret[-2] == 'b':
+            # stripped = True
+            ret = ret[:-1]
+        # if not stripped:
+        #     break
     return f'0~{len(ret) - 1}@{ret}:{s}'
 
 
@@ -141,5 +155,7 @@ if __name__ == "__main__":
         'on': get_on_stem
     }
     df['Stems'] = df['Token'].apply(lang2func[lang])
+
+    df = df.dropna(subset=['Stems'])
 
     df.to_csv(out_path, index=None, sep='\t')

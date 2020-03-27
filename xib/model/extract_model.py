@@ -129,6 +129,7 @@ class ExtractModel(nn.Module):
     add_argument('inference_mode', dtype=str, default='mixed', choices=['new', 'old', 'mixed'])
     add_argument('unit_aligner_init_mode', dtype=str, default='uniform', choices=['uniform', 'zero'])
     add_argument('use_feature_aligner', dtype=bool, default=False)
+    add_argument('vowel_bias', dtype=float, default=1.0)
     add_argument('reward_mode', dtype=str, default='div', choices=[
                  'div', 'ln_div', 'minus', 'div_pos', 'poly', 'cutoff', 'thresh', 'minus_pos'])
 
@@ -289,10 +290,24 @@ class ExtractModel(nn.Module):
         known_unit_emb = self.get_known_unit_emb(self.vocab)
         lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
         unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=reverse)
+        # vowel_mask = self._get_vowel_mask(get_named_range(known_unit_emb.size('known_unit'), 'known_unit'))
+        # unit_log_probs = self._add_vowel_bias(unit_log_probs, vowel_mask)
         return unit_log_probs.exp()
+
+    def _get_vowel_mask(self, id_seqs: LT) -> BT:
+        ptype = get_tensor(self.vocab.unit_feat_matrix[:, :, 0].squeeze(dim='length'))
+        with NoName(ptype, id_seqs):
+            ret = ptype[id_seqs] == 1
+        return ret.rename(*id_seqs.names)
+
+    def _add_vowel_bias(self, log_probs: FT, vowel_mask: BT) -> FT:
+        vowel_mask = vowel_mask.align_as(log_probs)
+        weight = torch.where(vowel_mask, torch.full_like(log_probs, g.vowel_bias), torch.ones_like(log_probs))
+        return log_probs * weight
 
     # @profile
     def _get_costs(self, vocab_unit_id_seqs: LT, emb_repr: EmbAndRepr) -> Costs:
+        vowel_mask = self._get_vowel_mask(vocab_unit_id_seqs)
         # Get global (non-contextualized) log probs.
         unit_log_probs = self._get_alignment_log_probs(emb_repr.known_unit_emb, emb_repr.lost_unit_emb)
         with NoName(unit_log_probs, vocab_unit_id_seqs):
@@ -326,6 +341,7 @@ class ExtractModel(nn.Module):
 
         # Get interpolated log probs and costs.
         sub_weighted_log_probs = interpolate(sub_ctx_log_probs, global_log_probs)
+        sub_weighted_log_probs = self._add_vowel_bias(sub_weighted_log_probs, vowel_mask)
         sub = -sub_weighted_log_probs
 
         # Get secondary costs for insertions.
@@ -333,6 +349,7 @@ class ExtractModel(nn.Module):
         ins_ctx_log_probs = (ins_ctx_logits / self.temperature).log_softmax(dim=-
                                                                             1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
+        ins_weighted_log_probs = self._add_vowel_bias(ins_weighted_log_probs, vowel_mask)
         ins = -ins_weighted_log_probs + self.ins_del_cost
 
         costs = Costs(sub, ins, alignment)
@@ -667,7 +684,8 @@ class ExtractModel(nn.Module):
                             phi_psi_common.append(span_bias * this_p_x_z)
                             phi_lse.extend([prev_marginal * reward, phi[prev_l]])
                             # NOTE(j_luo) word_len is only effective when it's positive.
-                            word_len = (psi_pos[:, start_idx, end_idx].float() * word_len).align_as(prev_marginal.storage)
+                            word_len = (psi_pos[:, start_idx, end_idx].float() *
+                                        word_len).align_as(prev_marginal.storage)
                             word_len = LogTensor.from_torch(word_len, nonneg=True)
                             psi_lse.extend([prev_marginal * word_len, psi[prev_l]])
                     else:

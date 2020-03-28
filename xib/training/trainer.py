@@ -222,6 +222,7 @@ class ExtractTrainer(BaseTrainer):
                     'unit_aligner': self.model.g2p.unit_aligner.state_dict(),
                 }
             except:
+                self.model.eval()
                 to_save = {
                     'alignment': self.model.get_alignment().rename(None),
                 }
@@ -229,6 +230,7 @@ class ExtractTrainer(BaseTrainer):
                     to_save['unit_aligner'] = self.model.unit_aligner.state_dict()
                 else:
                     to_save['feat_aligner'] = self.model.feat_aligner.state_dict()
+                self.model.train()
         else:
             to_save = {
                 'adapter': self.model.adapter.state_dict()
@@ -353,6 +355,8 @@ class ExtractTrainer(BaseTrainer):
         if g.anneal_er:
             self.er += (g.expected_ratio - g.init_expected_ratio) / g.num_steps
             self.metric_writer.add_scalar('expected_ratio', self.er, global_step=self.global_step)
+        self.ins_del_cost += (g.min_ins_del_cost - g.init_ins_del_cost) / g.num_steps
+        self.metric_writer.add_scalar('ins_del_cost', self.ins_del_cost, global_step=self.global_step)
 
         self.model.train()
         self.optimizer.zero_grad()

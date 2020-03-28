@@ -195,11 +195,11 @@ def show_all(prefixes, titles, char_sets, vocab, model, num_rounds=5, step_size=
 def get_service_function():
     """Turn this script into a service function."""
 
-    init_path = '/scratch2/j_luo/xib/log/all-segs-p25-fixed-old-non/0/saved.init'
-    # vocab_path = '/scratch2/j_luo/xib/data/wulfila/processed/germ.small.matched.stems'
-    # data_path = '/scratch2/j_luo/xib/data/wulfila/processed/corpus.small.got-germ.tsv'
-    vocab_path = '/scratch2/j_luo/xib/data/wulfila/processed/non.small.matched.stems'
-    data_path = '/scratch2/j_luo/xib/data/wulfila/processed/corpus.small.got-non.tsv'
+    init_path = '/scratch/j_luo/decipher/xib/log/grid/matched_cmdl/test-pgm/0/saved.init'
+    # vocab_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/germ.small.matched.stems'
+    # data_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/corpus.small.got-germ.tsv'
+    vocab_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/non.small.matched.stems'
+    data_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/corpus.small.got-non.tsv'
     char_sets, vocab, model = init_setup(init_path, vocab_path, data_path)
 
     def run(project_root, prefixes, step_size, max_step, num_rounds) -> str:
@@ -207,7 +207,8 @@ def get_service_function():
         output = (project_root / 'plot' / uuid.uuid4().hex).with_suffix('.html')
         output.parent.mkdir(exist_ok=True)
         output = str(output)
-        show_all(prefixes, prefixes, char_sets, vocab, model, output=output, step_size=step_size, max_step=max_step, num_rounds=num_rounds)
+        show_all(prefixes, prefixes, char_sets, vocab, model, output=output,
+                 step_size=step_size, max_step=max_step, num_rounds=num_rounds)
 
         return output
 

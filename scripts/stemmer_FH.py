@@ -110,36 +110,39 @@ def get_on_stem(s):
     if '=' in s or 'ᛏ' in s:
         return None
     ret = s
-    ret = re.sub('ey', "ai", ret)
-    ret = re.sub('ju', "eu", ret)
-    ret = re.sub('jo', "eu", ret)
-    ret = re.sub('ja', "e", ret)
-    ret = re.sub('jǫ', "e", ret)
-    ret = re.sub('ø', "e", ret)
-    ret = re.sub('æ', "e", ret)
-    ret = re.sub('o', "u", ret)
-    ret = re.sub('ǫ', "a", ret)
-    ret = re.sub('y', "u", ret)
-    ret = re.sub('y', "u", ret)
     if s in on_exceptions:
         ret = on_exceptions[s]
     elif not s.startswith('-'):
         # Maybe just strip once.
         # while True:
-        # stripped = False
+        stripped = False
         for ending in on_to_remove:
             if ret.endswith(ending) and len(ending) <= 0.5 * len(ret) and len(ret) >= 2:
                 if ending not in on_to_match or re.search(on_to_match[ending], ret):
                     #ret = ret.rstrip(ending)
                     ret = re.sub(ending + '$', "", ret)
-                    # stripped = True
+                    stripped = True
+                    break
 
         # Double ending with 'bb' should be mapped to just 'b'.
         if len(ret) >= 4 and ret[-1] == ret[-2] == 'b':
-            # stripped = True
+            stripped = True
             ret = ret[:-1]
-        # if not stripped:
-        #     break
+        # If not stripped already, change double n's or l's to just single n or l.
+        if not stripped and (ret.endswith('nn') or ret.endswith('ll')):
+            ret = ret[:-1]
+
+        # ret = re.sub('ey', "ai", ret)
+        # ret = re.sub('ju', "eu", ret)
+        # ret = re.sub('jo', "eu", ret)
+        # ret = re.sub('ja', "e", ret)
+        # ret = re.sub('jǫ', "e", ret)
+        # ret = re.sub('ø', "e", ret)
+        # ret = re.sub('æ', "e", ret)
+        # ret = re.sub('o', "u", ret)
+        # ret = re.sub('ǫ', "a", ret)
+        # ret = re.sub('y', "u", ret)
+        # ret = re.sub('y', "u", ret)
     return f'0~{len(ret) - 1}@{ret}:{s}'
 
 

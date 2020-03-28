@@ -384,6 +384,44 @@ class NoContextSanityCheck(LTSanityCheck):
 
 
 @reg
+class VowelCheck(NoContextSanityCheck):
+    merge_vowels: bool = True
+    emb_norm: float = 1.0
+    temperature: float = 0.2
+    reward_mode: str = 'thresh'
+    pr_hyper: float = 10.0
+    baseline: float = 0.0
+    init_baseline: float = 0.0
+    max_baseline: float = 0.0
+    anneal_baseline: bool = True
+    unit_aligner_init_mode: str = 'zero'
+    init_interval: float = 0.05
+    normalize: float = 0.0
+    optim_cls: str = 'sgd'
+    learning_rate: float = 0.2
+    aligner_lr: float = 0.2
+    dim: int = 70
+    dropout: float = 0.5
+    num_steps: int = 2000
+    check_interval: int = 10
+    bij_reg_hyper: float = 100.0
+    ent_reg_hyper: float = 0.1
+    feat_aligner_init_mode: str = 'zero'
+    mean_mode: str = 'char'
+    l_pr_hyper: float = 10.0
+    min_segment_length: int = 3
+    max_segment_length: int = 100
+    max_grad_norm: float = 1.0
+    anneal_temperature: bool = True
+    init_temperature: float = 0.3
+    end_temperature: float = 0.1
+    anneal_er: bool = True
+    pr_mode: str = 'barrier'
+    inference_mode: str = 'old'
+    expected_ratio: float = 0.5
+
+
+@reg
 class FixSanityCheckInit(FixSanityCheck):
     baseline: float = 0.05
     bias_mode: str = 'fixed'

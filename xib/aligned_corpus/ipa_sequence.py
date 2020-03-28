@@ -4,6 +4,7 @@ import re
 from collections.abc import Sequence as SequenceABC
 from typing import ClassVar, Dict, List, Optional, TypeVar, Union
 
+import torch
 from ipapy.ipastring import IPAString
 
 from dev_misc import add_argument, g
@@ -16,6 +17,7 @@ from xib.ipa.process import Segment
 class IpaSequence(SequenceABC):
 
     add_argument('postprocess_mode', default='none', choices=['none', 'redup', 'gvs'], dtype=str)
+    add_argument('merge_vowels', default=False, dtype=bool)
 
     _cache: ClassVar[Dict[str, Segment]] = dict()
 

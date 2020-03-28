@@ -206,6 +206,8 @@ def convert_to_dense(feat_matrix: LT) -> DenseFeatureMatrix:
         dfm_idx = fm[..., cat.value]
         dfm = get_zeros(bs, ml, len(e), cpu=True)
         dfm = dfm.scatter(2, dfm_idx.rename(None).unsqueeze(dim=-1), 1.0)
+        if g.merge_vowels and cat.name.startswith('V_'):
+            dfm = torch.zeros_like(dfm)
         dfms[cat] = dfm.refine_names('batch', 'length', f'{cat.name}_feat')
     if has_gpus():
         dfms = {k: v.cuda() for k, v in dfms.items()}

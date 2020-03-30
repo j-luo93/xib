@@ -391,6 +391,10 @@ class ExtractManager(BaseManager):
             self.trainer.pr_hyper = g.init_pr_hyper
         else:
             self.trainer.pr_hyper = g.pr_hyper
+        if g.anneal_context_weight:
+            self.trainer.context_weight = g.start_context_weight
+        else:
+            self.trainer.context_weight = g.context_weight
 
         # , momentum=0.9, nesterov=True)
         if g.use_feature_aligner:

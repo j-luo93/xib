@@ -249,6 +249,14 @@ class ExtractTrainer(BaseTrainer):
         logging.imp(f'Setting ins_del_cost to {value}.')
 
     @global_property
+    def context_weight(self):
+        pass
+
+    @context_weight.setter
+    def context_weight(self, value):
+        logging.imp(f'Setting context_weight to {value}.')
+
+    @global_property
     def temperature(self):
         pass
 
@@ -355,6 +363,10 @@ class ExtractTrainer(BaseTrainer):
         if g.anneal_er:
             self.er += (g.expected_ratio - g.init_expected_ratio) / g.num_steps
             self.metric_writer.add_scalar('expected_ratio', self.er, global_step=self.global_step)
+        if g.anneal_context_weight:
+            self.context_weight += (g.end_context_weight - g.start_context_weight) / g.num_steps
+            self.metric_writer.add_scalar('context_weight', self.context_weight, global_step=self.global_step)
+
         self.ins_del_cost += (g.min_ins_del_cost - g.init_ins_del_cost) / g.num_steps
         self.metric_writer.add_scalar('ins_del_cost', self.ins_del_cost, global_step=self.global_step)
 

@@ -195,11 +195,16 @@ def show_all(prefixes, titles, char_sets, vocab, model, num_rounds=5, step_size=
 def get_service_function():
     """Turn this script into a service function."""
 
-    init_path = '/scratch/j_luo/decipher/xib/log/grid/matched_cmdl/test-pgm/0/saved.init'
+    init_path = '/scratch2/j_luo/xib/log/grid/matched_cmdl/test-non-no_ins-p75-ufa/0/saved.init'
     # vocab_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/germ.small.matched.stems'
     # data_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/corpus.small.got-germ.tsv'
-    vocab_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/non.small.matched.stems'
-    data_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/corpus.small.got-non.tsv'
+    vocab_path = '/scratch2/j_luo/xib/data/wulfila/processed/non.small.matched.stems'
+    data_path = '/scratch2/j_luo/xib/data/wulfila/processed/corpus.small.got-non.tsv'
+    # init_path = '/scratch/j_luo/decipher/xib/log/grid/matched_cmdl/test-pgm/0/saved.init'
+    # # vocab_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/germ.small.matched.stems'
+    # # data_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/corpus.small.got-germ.tsv'
+    # vocab_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/non.small.matched.stems'
+    # data_path = '/scratch/j_luo/decipher/xib/data/wulfila/processed/corpus.small.got-non.tsv'
     char_sets, vocab, model = init_setup(init_path, vocab_path, data_path)
 
     def run(project_root, prefixes, step_size, max_step, num_rounds) -> str:

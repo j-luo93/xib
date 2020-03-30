@@ -103,6 +103,9 @@ class ExtractModel(nn.Module):
     add_argument('init_ins_del_cost', default=100, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('min_ins_del_cost', default=3.5, dtype=float, msg='Initial unit cost for insertions and deletions.')
     add_argument('context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
+    add_argument('start_context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
+    add_argument('end_context_weight', default=0.0, dtype=float, msg='Weight for the context probabilities.')
+    add_argument('anneal_context_weight', default=False, dtype=bool)
     add_argument('temperature', default=1.0, dtype=float)
     add_argument('anneal_temperature', dtype=bool, default=False)
     add_argument('init_temperature', default=0.2, dtype=float)
@@ -290,8 +293,8 @@ class ExtractModel(nn.Module):
         known_unit_emb = self.get_known_unit_emb(self.vocab)
         lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
         unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=reverse)
-        # vowel_mask = self._get_vowel_mask(get_named_range(known_unit_emb.size('known_unit'), 'known_unit'))
-        # unit_log_probs = self._add_vowel_bias(unit_log_probs, vowel_mask)
+        vowel_mask = self._get_vowel_mask(get_named_range(known_unit_emb.size('known_unit'), 'known_unit'))
+        unit_log_probs = self._add_vowel_bias(unit_log_probs, vowel_mask)
         return unit_log_probs.exp()
 
     def _get_vowel_mask(self, id_seqs: LT) -> BT:
@@ -304,6 +307,10 @@ class ExtractModel(nn.Module):
         vowel_mask = vowel_mask.align_as(log_probs)
         weight = torch.where(vowel_mask, torch.full_like(log_probs, g.vowel_bias), torch.ones_like(log_probs))
         return log_probs * weight
+
+    @global_property
+    def context_weight(self):
+        pass
 
     # @profile
     def _get_costs(self, vocab_unit_id_seqs: LT, emb_repr: EmbAndRepr) -> Costs:
@@ -329,10 +336,10 @@ class ExtractModel(nn.Module):
 
         def interpolate(ctx, plain):
             if g.context_agg_mode == 'log_interpolation':
-                return g.context_weight * ctx + (1.0 - g.context_weight) * plain
+                return self.context_weight * ctx + (1.0 - self.context_weight) * plain
             elif g.context_agg_mode == 'linear_interpolation':
-                z_ctx = math.log(g.context_weight + 1e-8)
-                z_plain = math.log(1.0 - g.context_weight + 1e-8)
+                z_ctx = math.log(self.context_weight + 1e-8)
+                z_plain = math.log(1.0 - self.context_weight + 1e-8)
                 return torch.stack([z_ctx + ctx, z_plain + plain], new_name='stacked').logsumexp(dim='stacked')
             elif g.context_agg_mode == 'log_add':
                 return ctx + plain
@@ -343,6 +350,9 @@ class ExtractModel(nn.Module):
         sub_weighted_log_probs = interpolate(sub_ctx_log_probs, global_log_probs)
         sub_weighted_log_probs = self._add_vowel_bias(sub_weighted_log_probs, vowel_mask)
         sub = -sub_weighted_log_probs
+        # del_mask = torch.zeros_like(sub)
+        # del_mask[:, :, DELETE_ID] = 1.0
+        # sub = sub + self.ins_del_cost * del_mask
 
         # Get secondary costs for insertions.
         ins_ctx_logits = emb_repr.known_ins_ctx_repr @ emb_repr.lost_unit_emb.t()

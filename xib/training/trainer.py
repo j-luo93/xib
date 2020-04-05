@@ -170,6 +170,7 @@ class ExtractTrainer(BaseTrainer):
 
     add_argument('reg_hyper', default=1.0, dtype=float, msg='Hyperparameter for alignment regularization.')
     add_argument('pr_hyper', default=1.0, dtype=float)
+    add_argument('num_anneal_steps', default=2000, dtype=int)
     add_argument('main_loss_hyper', default=1.0, dtype=float)
     add_argument('l_pr_hyper', default=1.0, dtype=float)
     add_argument('coverage_hyper', default=1.0, dtype=float)
@@ -349,25 +350,32 @@ class ExtractTrainer(BaseTrainer):
         # self.bij_reg += g.bij_reg_hyper / 1000.
         # self.ent_reg += g.ent_reg_hyper / 1000.
         if g.anneal_baseline:
-            self.global_baseline += (g.max_baseline - g.init_baseline) / g.num_steps
+            if self.global_step < g.num_anneal_steps:
+                self.global_baseline += (g.max_baseline - g.init_baseline) / g.num_anneal_steps
             # self.global_baseline *= math.exp((math.log(g.max_baseline) -
-            #                                   math.log(g.init_baseline + 1e-8)) / g.num_steps)
+            #                                   math.log(g.init_baseline + 1e-8)) / g.num_anneal_steps)
             self.metric_writer.add_scalar('baseline', self.global_baseline, global_step=self.global_step)
         if g.anneal_temperature:
-            # self.temperature += (g.end_temperature - g.init_temperature) / 1000.0
-            self.temperature *= math.exp((math.log(g.end_temperature) - math.log(g.init_temperature)) / g.num_steps)
+            if self.global_step < g.num_anneal_steps:
+                # self.temperature += (g.end_temperature - g.init_temperature) / 1000.0
+                self.temperature *= math.exp((math.log(g.end_temperature) -
+                                              math.log(g.init_temperature)) / g.num_anneal_steps)
             self.metric_writer.add_scalar('temperature', self.temperature, global_step=self.global_step)
         if g.anneal_pr_hyper:
-            self.pr_hyper += (g.end_pr_hyper - g.init_pr_hyper) / g.num_steps
+            if self.global_step < g.num_anneal_steps:
+                self.pr_hyper += (g.end_pr_hyper - g.init_pr_hyper) / g.num_anneal_steps
             self.metric_writer.add_scalar('pr_hyper', self.pr_hyper, global_step=self.global_step)
         if g.anneal_er:
-            self.er += (g.expected_ratio - g.init_expected_ratio) / g.num_steps
+            if self.global_step < g.num_anneal_steps:
+                self.er += (g.expected_ratio - g.init_expected_ratio) / g.num_anneal_steps
             self.metric_writer.add_scalar('expected_ratio', self.er, global_step=self.global_step)
         if g.anneal_context_weight:
-            self.context_weight += (g.end_context_weight - g.start_context_weight) / g.num_steps
+            if self.global_step < g.num_anneal_steps:
+                self.context_weight += (g.end_context_weight - g.start_context_weight) / g.num_anneal_steps
             self.metric_writer.add_scalar('context_weight', self.context_weight, global_step=self.global_step)
 
-        self.ins_del_cost += (g.min_ins_del_cost - g.init_ins_del_cost) / g.num_steps
+        if self.global_step < g.num_anneal_steps:
+            self.ins_del_cost += (g.min_ins_del_cost - g.init_ins_del_cost) / g.num_anneal_steps
         # self.ins_del_cost *= math.exp((math.log(g.min_ins_del_cost) - math.log(g.init_ins_del_cost)) / g.num_steps)
         self.metric_writer.add_scalar('ins_del_cost', self.ins_del_cost, global_step=self.global_step)
 

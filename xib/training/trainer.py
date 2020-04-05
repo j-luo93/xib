@@ -368,6 +368,7 @@ class ExtractTrainer(BaseTrainer):
             self.metric_writer.add_scalar('context_weight', self.context_weight, global_step=self.global_step)
 
         self.ins_del_cost += (g.min_ins_del_cost - g.init_ins_del_cost) / g.num_steps
+        # self.ins_del_cost *= math.exp((math.log(g.min_ins_del_cost) - math.log(g.init_ins_del_cost)) / g.num_steps)
         self.metric_writer.add_scalar('ins_del_cost', self.ins_del_cost, global_step=self.global_step)
 
         self.model.train()

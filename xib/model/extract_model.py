@@ -294,7 +294,7 @@ class ExtractModel(nn.Module):
         lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
         unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=reverse)
         vowel_mask = self._get_vowel_mask(get_named_range(known_unit_emb.size('known_unit'), 'known_unit'))
-        unit_log_probs = self._add_vowel_bias(unit_log_probs, vowel_mask)
+        # unit_log_probs = self._add_vowel_bias(unit_log_probs, vowel_mask)
         return unit_log_probs.exp()
 
     def _get_vowel_mask(self, id_seqs: LT) -> BT:
@@ -304,6 +304,8 @@ class ExtractModel(nn.Module):
         return ret.rename(*id_seqs.names)
 
     def _add_vowel_bias(self, log_probs: FT, vowel_mask: BT) -> FT:
+        return log_probs
+
         vowel_mask = vowel_mask.align_as(log_probs)
         weight = torch.where(vowel_mask, torch.full_like(log_probs, g.vowel_bias), torch.ones_like(log_probs))
         return log_probs * weight
@@ -348,7 +350,7 @@ class ExtractModel(nn.Module):
 
         # Get interpolated log probs and costs.
         sub_weighted_log_probs = interpolate(sub_ctx_log_probs, global_log_probs)
-        sub_weighted_log_probs = self._add_vowel_bias(sub_weighted_log_probs, vowel_mask)
+        # sub_weighted_log_probs = self._add_vowel_bias(sub_weighted_log_probs, vowel_mask)
         sub = -sub_weighted_log_probs
         # del_mask = torch.zeros_like(sub)
         # del_mask[:, :, DELETE_ID] = 1.0
@@ -359,7 +361,7 @@ class ExtractModel(nn.Module):
         ins_ctx_log_probs = (ins_ctx_logits / self.temperature).log_softmax(dim=-
                                                                             1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
-        ins_weighted_log_probs = self._add_vowel_bias(ins_weighted_log_probs, vowel_mask)
+        # ins_weighted_log_probs = self._add_vowel_bias(ins_weighted_log_probs, vowel_mask)
         ins = -ins_weighted_log_probs + self.ins_del_cost
 
         costs = Costs(sub, ins, alignment)

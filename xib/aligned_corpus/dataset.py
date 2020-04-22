@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import ClassVar, List, Sequence, Tuple
 
 import torch
 from torch.utils.data import Dataset
@@ -61,7 +61,7 @@ class AlignedDatasetItem:
     feat_matrix: LT
 
 
-class AlignedDataset(Singleton):  # HACK(j_luo) Use singleton
+class AlignedDataset:
     """A subclass of Dataset that deals with AlignedCorpus."""
 
     add_argument('noiseless', dtype=bool, default=False)
@@ -69,7 +69,6 @@ class AlignedDataset(Singleton):  # HACK(j_luo) Use singleton
     add_argument('min_segment_length', dtype=int)
 
     def __init__(self, corpus: AlignedCorpus):
-        logging.warning('Singleton pattern is used here.')
         self.corpus = corpus
         self.data = list()
         # HACK(j_luo)
@@ -116,3 +115,17 @@ class AlignedDataset(Singleton):  # HACK(j_luo) Use singleton
             dim=0
         )
         return AlignedDatasetItem(sentence, length, feat_matrix)
+
+
+class AlignedDatasetFactory(Singleton):
+
+    _instances: ClassVar[str, AlignedDataset] = dict()
+
+    def get_dataset(self, lost_lang: str, known_lang: str, data_path):
+        cls = type(self)
+        data_path = str(data_path)
+        if data_path not in cls._instances:
+            corpus = AlignedCorpus.from_tsv(lost_lang, known_lang, data_path)
+            dataset = AlignedDataset(corpus)
+            cls._instances[data_path] = dataset
+        return cls._instances[data_path]

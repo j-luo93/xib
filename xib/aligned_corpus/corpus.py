@@ -274,8 +274,8 @@ class UnsegmentedSentence(SequenceABC):
             idx_set |= set(range(start, end + 1))
             single_segments.append(ss)
         segment = Segment(single_segments, aligned_contents, full_form_start, full_form_end)
-        if idx_set & self.annotated:
-            raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
+        # if idx_set & self.annotated:
+        #     raise OverlappingAnnotation(f'Overlapping locations for {segment}.')
         self.segments.append(segment)  # pylint: disable=no-member
         self.annotated |= idx_set
 

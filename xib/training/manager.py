@@ -258,7 +258,8 @@ class ExtractManager(BaseManager):
                         self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0] * 5.0)
             else:
                 known_id = kcs.unit2id[IpaSequence(known_char)]
-                self.model.unit_aligner.weight.data[lost_id, known_id] = 2.5
+                # self.model.unit_aligner.weight.data[lost_id, known_id] = 5.0
+                self.model.unit_aligner.weight.data[lost_id, known_id] = 10.0
 
         # # HACK(j_luo)
         # logging.imp("Using emsemble.")
@@ -300,19 +301,20 @@ class ExtractManager(BaseManager):
             #     # ('i', 'r'),
             # ]
             oracle = [
-                # ('a', 'a'),
-                # ('b', 'b'),
+                ('a', 'a'),
+                ('b', 'b'),
                 # ('d', 'd'),
                 # ('i', 'i'),
                 ('k', 'k'),
+                # ('k', 't͡ʃ'),
                 ('l', 'l'),
                 ('m', 'm'),
                 ('n', 'n'),
                 # ('o', 'o'),
-                ('p', 'p'),
-                # ('r', 'r'),
-                # ('s', 's'),
-                # ('t', 't'),
+                # ('p', 'p'),
+                ('r', 'r'),
+                ('s', 's'),
+                ('t', 't'),
                 # ('g', 'g')
 
                 # ('þ', 'h'),

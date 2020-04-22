@@ -5,7 +5,7 @@ import pandas as pd
 
 RE_HV = 'ƕ'
 RE_CHAR = fr'[\wïþÞ{RE_HV}]'
-RE_C = fr'[bdfghjklmnpqrstwxzþðÞ{RE_HV}]'
+RE_C = fr'[bcdfghjklmnpqrstwxzþðÞ{RE_HV}ċġ]'
 RE_Di = fr'[a]'
 
 # ------------------- Proto-Germainic helper ------------------- #

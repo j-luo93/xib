@@ -23,7 +23,7 @@ from dev_misc.trainlib.tracker.tracker import Task
 from dev_misc.utils import cached_property
 from xib.aligned_corpus.corpus import AlignedCorpus
 from xib.aligned_corpus.data_loader import AlignedDataLoader
-from xib.aligned_corpus.dataset import AlignedDataset
+from xib.aligned_corpus.dataset import AlignedDataset, AlignedDatasetFactory
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
 from xib.batch import (BatchSampler, CbowIpaBatch, DenseFeatureMatrix,
                        convert_to_dense)
@@ -486,8 +486,8 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
             dl = DenseIpaDataLoader(data_path, task)
         elif task.name in ['decipher', 'transfer', 'extract']:
             if g.use_new_data_loader:
-                corpus = AlignedCorpus.from_tsv(g.lost_lang, g.known_lang, g.data_path)
-                dataset = AlignedDataset(corpus)
+                adf = AlignedDatasetFactory()
+                dataset = adf.get_dataset(g.lost_lang, g.known_lang, g.data_path)
                 dl = AlignedDataLoader(dataset, task)
             else:
                 if g.input_format == 'text':

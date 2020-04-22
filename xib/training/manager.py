@@ -226,6 +226,7 @@ class ExtractManager(BaseManager):
     add_argument('anneal_baseline', default=False, dtype=bool)
     add_argument('init_baseline', default=0.05, dtype=float)
     add_argument('max_baseline', default=1.0, dtype=float)
+    add_argument('align_mode', default='init', choices=['init', 'reg'], dtype=str)
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -251,6 +252,7 @@ class ExtractManager(BaseManager):
         def align(lost_char, known_char):
             lost_id = lcs.unit2id[lost_char]
             if g.use_feature_aligner:
+                assert g.align_mode == 'init', 'reg mode for this not supported'
                 dfms = convert_to_dense(IpaSequence(known_char).feat_matrix.rename(
                     'length', 'feat_group').align_to('length', 'batch', 'feat_group'))
                 for cat in Category:
@@ -258,8 +260,11 @@ class ExtractManager(BaseManager):
                         self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0] * 5.0)
             else:
                 known_id = kcs.unit2id[IpaSequence(known_char)]
+                if g.align_mode == 'init':
+                    self.model.unit_aligner.weight.data[lost_id, known_id] = 10.0
+                else:
+                    self.model.align_units.append((lost_id, known_id))
                 # self.model.unit_aligner.weight.data[lost_id, known_id] = 5.0
-                self.model.unit_aligner.weight.data[lost_id, known_id] = 10.0
 
         # # HACK(j_luo)
         # logging.imp("Using emsemble.")

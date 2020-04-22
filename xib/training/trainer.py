@@ -429,6 +429,14 @@ class ExtractTrainer(BaseTrainer):
             except AttributeError:
                 pass
 
+            if g.use_oracle and g.align_mode == 'reg':
+                almt_loss = 0.0
+                for lid, kid in self.model.align_units:
+                    almt_loss += -(ret.costs.alignment.known2lost[kid, lid] + 1e-8).log()
+                oracle_almt_reg_loss = Metric('oracle_almt_reg', almt_loss * loss_weight, loss_weight)
+                metrics += oracle_almt_reg_loss
+                loss = loss + oracle_almt_reg_loss.mean * 1000.0
+
             # FIXME(j_luo) Why divide?
             loss_per_split = loss / g.accum_gradients
             loss_per_split.backward()

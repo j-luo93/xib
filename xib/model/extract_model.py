@@ -179,6 +179,8 @@ class ExtractModel(nn.Module):
         if g.use_softmin:
             logging.warning('Using softmin.')
 
+        self.align_units = list()
+
     @global_property
     def ins_del_cost(self):
         pass

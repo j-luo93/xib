@@ -422,6 +422,21 @@ class VowelCheck(NoContextSanityCheck):
 
 
 @reg
+class Final(VowelCheck):
+    merge_vowels: bool = False
+    context_weight: float = 0.2
+    num_steps: int = 2000
+    init_temperature: float = 0.2
+    end_temperature: float = 0.2
+    init_expected_ratio: float = 1.0
+    expected_ratio: float = 0.5
+    init_ins_del_cost: float = 0.0
+    min_ins_del_cost: float = 3.5
+    min_word_length: int = 4
+    min_segment_length: int = 4
+
+
+@reg
 class FixSanityCheckInit(FixSanityCheck):
     baseline: float = 0.05
     bias_mode: str = 'fixed'

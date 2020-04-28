@@ -226,7 +226,7 @@ class ExtractManager(BaseManager):
     add_argument('anneal_baseline', default=False, dtype=bool)
     add_argument('init_baseline', default=0.05, dtype=float)
     add_argument('max_baseline', default=1.0, dtype=float)
-    add_argument('align_mode', default='init', choices=['init', 'reg'], dtype=str)
+    add_argument('align_mode', default='reg', choices=['init', 'reg'], dtype=str)
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -305,26 +305,40 @@ class ExtractManager(BaseManager):
             #     # ('þ', 'h'),
             #     # ('i', 'r'),
             # ]
-            oracle = [
-                ('a', 'a'),
-                ('b', 'b'),
-                # ('d', 'd'),
-                # ('i', 'i'),
-                ('k', 'k'),
-                # ('k', 't͡ʃ'),
-                ('l', 'l'),
-                ('m', 'm'),
-                ('n', 'n'),
-                # ('o', 'o'),
-                # ('p', 'p'),
-                ('r', 'r'),
-                ('s', 's'),
-                ('t', 't'),
-                # ('g', 'g')
+            if g.known_lang == 'ang':
+                oracle = [
+                    ('k', 'k'),
+                    ('k', 't͡ʃ'),
+                    ('l', 'l'),
+                    ('m', 'm'),
+                    ('n', 'n'),
+                    ('p', 'p'),
+                    ('s', 's'),
+                    ('t', 't')
+                ]
+            elif g.known_lang == 'lat':
+                oracle = [
+                    ('a', 'a'),
+                    ('b', 'b'),
+                    # ('d', 'd'),
+                    # ('i', 'i'),
+                    ('k', 'k'),
+                    # ('k', 't͡ʃ'),
+                    ('l', 'l'),
+                    ('m', 'm'),
+                    ('n', 'n'),
+                    # ('o', 'o'),
+                    # ('p', 'p'),
+                    ('r', 'r'),
+                    ('s', 's'),
+                    ('t', 't'),
+                    # ('g', 'g')
 
-                # ('þ', 'h'),
-                # ('i', 'r'),
-            ]
+                    # ('þ', 'h'),
+                    # ('i', 'r'),
+                ]
+            else:
+                raise ValueError
             # oracle = [
             #     ('a', 'a'),
             #     ('b', 'b'),

@@ -305,7 +305,7 @@ class ExtractManager(BaseManager):
             #     # ('þ', 'h'),
             #     # ('i', 'r'),
             # ]
-            if g.known_lang == 'ang':
+            if g.known_lang in ['ang', 'pgm', 'non']:
                 oracle = [
                     ('k', 'k'),
                     ('k', 't͡ʃ'),

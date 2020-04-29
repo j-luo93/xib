@@ -223,6 +223,7 @@ class ExtractManager(BaseManager):
     add_argument('num_rounds', default=1000, dtype=int, msg='Number of rounds')
     add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
     add_argument('use_oracle', default=False, dtype=bool)
+    add_argument('use_full_oracle', default=False, dtype=bool)
     add_argument('anneal_baseline', default=False, dtype=bool)
     add_argument('init_baseline', default=0.05, dtype=float)
     add_argument('max_baseline', default=1.0, dtype=float)
@@ -266,45 +267,8 @@ class ExtractManager(BaseManager):
                     self.model.align_units.append((lost_id, known_id))
                 # self.model.unit_aligner.weight.data[lost_id, known_id] = 5.0
 
-        # # HACK(j_luo)
-        # logging.imp("Using emsemble.")
-        # import pickle
-        # saved = pickle.load(open('./notebooks/emsemble.pkl', 'rb'))
-        # self.model.unit_aligner.weight.data.copy_(torch.from_numpy(saved))
-        if g.use_oracle:
+        if g.use_oracle or g.use_full_oracle:
             logging.imp('Testing some oracle.')
-            # oracle = [
-            #     ('a', 'a'),
-            #     # ('w', 'b'),
-            #     ('b', 'b'),
-            #     ('d', 'd'),
-            #     # ('a', 'e'),
-            #     # ('þ', 'h'),
-            #     ('i', 'i'),
-            #     ('k', 'k'),
-            #     ('l', 'l'),
-            #     ('m', 'm'),
-            #     ('n', 'n'),
-            #     ('o', 'o'),
-            #     # ('b', 'p'),
-            #     # ('n', 'r'),
-            #     # ('r', 'r'),
-            #     ('s', 's'),
-            #     ('t', 't'),
-            #     ('u', 'u'),
-            #     # ('j', 'w'),
-            #     # ('h', 'z'),
-            #     # ('r', 'ð'),
-            #     # ('p', 'ɔ'),
-            #     # ('q', 'g'),
-            #     # ('g', 'ɣ'),
-            #     # ('f', 'ɸ'),
-            #     # ('m', 'β'),
-            #     # ('e', 'θ')
-
-            #     # ('þ', 'h'),
-            #     # ('i', 'r'),
-            # ]
             if g.known_lang in ['ang']:
                 oracle = [
                     ('k', 'k'),
@@ -349,32 +313,146 @@ class ExtractManager(BaseManager):
                 ]
             else:
                 raise ValueError
-            # oracle = [
-            #     ('a', 'a'),
-            #     ('b', 'b'),
-            #     ('d', 'd'),
-            #     ('i', 'i'),
-            #     ('k', 'k'),
-            #     ('l', 'l'),
-            #     ('m', 'm'),
-            #     ('n', 'n'),
-            #     ('o', 'o'),
-            #     ('p', 'p'),
-            #     ('r', 'r'),
-            #     ('s', 's'),
-            #     ('t', 't'),
-            #     ('g', 'g')
 
-            #     # ('þ', 'h'),
-            #     # ('i', 'r'),
-            # ]
+            if g.use_full_oracle:
+                if g.known_lang == 'pgm':
+                    oracle = [
+                        ('b', 'b'),
+                        ('b', 'β'),
+                        ('d', 'd'),
+                        ('d', 'ð'),
+                        ('e', 'a'),
+                        ('f', 'ɸ'),
+                        ('h', 'x'),
+                        ('h', 'h'),
+                        ('i', 'i'),
+                        ('i', 'e'),
+                        ('j', 'j'),
+                        ('k', 'k'),
+                        ('l', 'l'),
+                        ('m', 'm'),
+                        ('n', 'n'),
+                        ('o', 'o'),
+                        ('o', 'u'),
+                        ('p', 'p'),
+                        ('r', 'r'),
+                        ('s', 's'),
+                        ('s', 'z'),
+                        ('t', 't'),
+                        ('u', 'u'),
+                        ('w', 'w'),
+                        ('z', 'z'),
+                        ('g', 'ŋ'),
+                        ('a', 'a'),
+                        ('g', 'ɣ'),
+                        ('g', 'g'),
+                        ('g', 'ɡ'),
+                        ('þ', 'ð'),
+                        ('þ', 'θ')
+                    ]
+                elif g.known_lang == 'ang':
+                    oracle = [
+                        ('b', 'b'),
+                        ('d', 'd'),
+                        ('e', 'e'),
+                        ('f', 'f'),
+                        ('h', 'h'),
+                        ('h', 'x'),
+                        ('i', 'i'),
+                        ('i', 'e'),
+                        ('j', 'j'),
+                        ('k', 'k'),
+                        ('k', 't͡ʃ'),
+                        ('k', 'ʃ'),
+                        ('l', 'l'),
+                        ('m', 'm'),
+                        ('n', 'n'),
+                        ('o', 'o'),
+                        ('o', 'u'),
+                        ('p', 'p'),
+                        ('r', 'r'),
+                        ('s', 's'),
+                        ('s', 'z'),
+                        ('t', 't'),
+                        ('u', 'o'),
+                        ('u', 'u'),
+                        ('u', 'y'),
+                        ('w', 'w'),
+                        ('x', 'g'),
+                        ('z', 'r'),
+                        ('z', 's'),
+                        ('z', 'z'),
+                        ('g', 'ŋ'),
+                        ('a', 'e'),
+                        ('a', 'æ'),
+                        ('a', 'ɑ'),
+                        ('g', 'ɡ'),
+                        ('g', 'j'),
+                        ('g', 'ɡ'),
+                        ('g', 'j'),
+                        ('g', 'ɣ'),
+                        ('þ', 'ð'),
+                        ('þ', 'θ'),
+                        ('ƕ', 'h')
+                    ]
+                elif g.known_lang == 'non':
+                    oracle = [
+                        ('b', 'b'),
+                        ('d', 'd'),
+                        ('d', 'ð'),
+                        ('e', 'a'),
+                        ('e', 'e'),
+                        ('e', 'o'),
+                        ('e', 'ø'),
+                        ('e', 'ɛ'),
+                        ('f', 'f'),
+                        ('h', 'h'),
+                        ('i', 'i'),
+                        ('i', 'e'),
+                        ('i', 'ø'),
+                        ('i', 'y'),
+                        ('j', 'j'),
+                        ('k', 'k'),
+                        ('l', 'l'),
+                        ('m', 'm'),
+                        ('n', 'n'),
+                        ('o', 'o'),
+                        ('o', 'y'),
+                        ('o', 'ø'),
+                        ('o', 'œ'),
+                        ('p', 'p'),
+                        ('r', 'r'),
+                        ('s', 's'),
+                        ('s', 'r'),
+                        ('t', 't'),
+                        ('u', 'o'),
+                        ('u', 'u'),
+                        ('u', 'y'),
+                        ('w', 'v'),
+                        ('x', 'g'),
+                        ('z', 'r'),
+                        ('z', 's'),
+                        ('g', 'n'),
+                        ('g', 'g'),
+                        ('a', 'a'),
+                        ('a', 'e'),
+                        ('a', 'o'),
+                        ('a', 'ø'),
+                        ('a', 'œ'),
+                        ('a', 'ɒ'),
+                        ('g', 'ɣ'),
+                        ('g', 'g'),
+                        ('g', 'ɡ'),
+                        ('þ', 'ð'),
+                        ('þ', 'θ')
+                    ]
             for l, k in oracle:
                 align(l, k)
         # align('m', 'm')
-        #align('k', 't͡ʃ')
-        #align('k', 'k')
-        #align('d', 'd')
-        #align('l', 'l')
+        # align('k', 't͡ʃ')
+        # align('k', 'k')
+        # align('d', 'd')
+        # align('l', 'l')
 
         # align('n', 'n')
         # align('p', 'p')

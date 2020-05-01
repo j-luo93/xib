@@ -17,17 +17,20 @@ if __name__ == '__main__':
         event_file = str(event_file[0])
 
         last_value = (0, None)
-        for record in tf.compat.v1.train.summary_iterator(event_file):
-            try:
-                step = record.step
-                summary = record.summary
-                summary = summary.value[0]
-                tag = summary.tag
-                value = summary.simple_value
-                if tag == args.name and step > last_value[0]:
-                    last_value = (step, value)
-            except (IndexError, AttributeError):
-                pass
+        try:
+            for record in tf.compat.v1.train.summary_iterator(event_file):
+                try:
+                    step = record.step
+                    summary = record.summary
+                    summary = summary.value[0]
+                    tag = summary.tag
+                    value = summary.simple_value
+                    if tag == args.name and step > last_value[0]:
+                        last_value = (step, value)
+                except (IndexError, AttributeError):
+                    pass
+        except tf.errors.DataLossError:
+            pass
 
         if args.match_step != -1 and args.match_step != last_value[0]:
             print('Mismatched step. Aborting.')

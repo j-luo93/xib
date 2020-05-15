@@ -342,6 +342,7 @@ class ExtractTrainer(BaseTrainer):
     def evaluate(self):
         eval_metrics = super().evaluate()
         self.metric_writer.add_metrics(eval_metrics, self.global_step)
+        return eval_metrics
 
     def should_terminate(self):
         return self.tracker.is_finished('total_step')

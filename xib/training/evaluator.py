@@ -352,7 +352,8 @@ class _AnnotationTuple:
 class AlignedExtractEvaluator(BaseEvaluator):
 
     add_argument('evaluate_baselines', nargs='+', dtype=float, default=[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3])
-    add_argument('use_evaluate_baselines',  default=False, dtype=bool)
+    add_argument('use_evaluate_baselines', default=False, dtype=bool)
+    add_argument('save_model_ret', default=False, dtype=bool)
 
     def __init__(self, model: ExtractModel, dl: AlignedDataLoader, vocab: Vocabulary):
         self.model = model
@@ -405,16 +406,22 @@ class AlignedExtractEvaluator(BaseEvaluator):
         annotations = list()
         orig_baseline = self.global_baseline
         baselines = [None] + list(g.evaluate_baselines) if g.anneal_baseline and g.use_evaluate_baselines else [None]
+        if g.save_model_ret:
+            torch.save(self.model.vocab.vocab, g.log_dir / 'vocab')
         for baseline in baselines:
             if baseline is not None:
                 self.global_baseline = baseline
                 self.model.train()
-            for batch in pbar(self.dl, desc='eval_batch'):
+            for i, batch in enumerate(pbar(self.dl, desc='eval_batch')):
                 if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
                     logging.imp(
                         f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
                     break
-                ret = self.model(batch)
+                with torch.no_grad():
+                    ret = self.model(batch)
+                    if g.save_model_ret:
+                        torch.save([batch.sentences, ret.extracted.matches.raw_ll.rename(None)],
+                                   g.log_dir / f'model_ret.{i}')
                 batch_metrics = self.analyzer.analyze(ret, batch)
                 if baseline is not None:
                     batch_metrics = batch_metrics.with_prefix_(f'eval_b{baseline}')

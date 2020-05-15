@@ -13,7 +13,7 @@ from torch.optim import SGD, Adagrad, Adam
 from torch.optim.lr_scheduler import CyclicLR
 
 from dev_misc import g
-from dev_misc.arglib import add_argument, init_g_attr
+from dev_misc.arglib import add_argument, init_g_attr, set_argument
 from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metrics, has_gpus, set_random_seeds
 from dev_misc.trainlib.trainer import freeze
@@ -228,10 +228,15 @@ class ExtractManager(BaseManager):
     add_argument('init_baseline', default=0.05, dtype=float)
     add_argument('max_baseline', default=1.0, dtype=float)
     add_argument('align_mode', default='reg', choices=['init', 'reg'], dtype=str)
+    add_argument('evaluate_only', default=False, dtype=bool)
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
     def __init__(self):
+        if g.evaluate_only:
+            saved = torch.load(g.saved_model_path)
+            g.load_state_dict(saved['g'], keep_new=True)
+
         train_task = ExtractTask(training=True)
         eval_task = ExtractTask(training=False)
         self.dl_reg = DataLoaderRegistry()
@@ -516,25 +521,31 @@ class ExtractManager(BaseManager):
                 {'params': self.model.unit_aligner.parameters(), 'lr': g.aligner_lr},
                 {'params': [param for name, param in self.model.named_parameters() if 'unit_aligner' not in name]}
             ], lr=g.learning_rate)
+        self.trainer.er = g.init_expected_ratio
+
         # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate,
         #                            weight_decay=g.weight_hyper)  # , momentum=0.9, nesterov=False)
         # Save init parameters.
 
-        out_path = g.log_dir / f'saved.init'
-        self.trainer.save_to(out_path)
-        # # HACK(j_luo)
-        # self.trainer.reset(reset_params=True)
-        self.trainer.er = g.init_expected_ratio
-        for _ in range(g.num_rounds):
-            self.trainer.reset()
-            # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
+        if g.evaluate_only:
+            self.trainer.model.eval()
+            self.trainer.evaluate()
 
-            self.trainer.train(self.dl_reg)
-            self.trainer.tracker.update('round')
-
+        else:
+            out_path = g.log_dir / f'saved.init'
+            self.trainer.save_to(out_path)
             # # HACK(j_luo)
-            self.trainer.er *= 0.9
-            self.trainer.er = max(self.trainer.er, g.expected_ratio)
+            # self.trainer.reset(reset_params=True)
+            for _ in range(g.num_rounds):
+                self.trainer.reset()
+                # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
+
+                self.trainer.train(self.dl_reg)
+                self.trainer.tracker.update('round')
+
+                # # HACK(j_luo)
+                self.trainer.er *= 0.9
+                self.trainer.er = max(self.trainer.er, g.expected_ratio)
 
 
 class PrepareManager(BaseManager):

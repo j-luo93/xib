@@ -56,6 +56,7 @@ class Vocabulary:
                 self.vocab_counts = np.asarray([v2c[v] for v in self.vocab], dtype='float32')
 
             self.vocab_length = torch.LongTensor(list(map(len, self.vocab)))
+            print(f'Vocab size: {len(self.vocab)}')
             max_len = self.vocab_length.max().item()
             self.vocab_source_padding = ~get_length_mask(self.vocab_length, max_len)
             self.vocab_length.rename_('vocab')

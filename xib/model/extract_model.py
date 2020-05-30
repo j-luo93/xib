@@ -160,7 +160,7 @@ class ExtractModel(nn.Module):
         self.ins_conv = nn.Conv1d(self.dim, self.dim, g.g2p_window_size, padding=g.g2p_window_size // 2)
         self.dropout = nn.Dropout(g.dropout)
         opt2sp_cls = {'all': AllSpanProposer,
-                      'oracle_word': OracleWordSpanProposer,
+                      'oracle_word': AllSpanProposer,  # OracleWordSpanProposer,
                       'oracle_stem': OracleStemSpanProposer}
         sp_cls = opt2sp_cls[g.span_candidates]
         self.span_proposer = sp_cls()
@@ -168,7 +168,7 @@ class ExtractModel(nn.Module):
             if g.dense_embedding:
                 self.base_embeddings = DenseFeatEmbedding('feat_emb', 'feat_group', 'char_emb', dim=g.dim)
             else:
-                self.base_embeddings = nn.Embedding(60, g.base_embedding_dim)
+                self.base_embeddings = nn.Embedding(known_size, g.base_embedding_dim)
                 logging.imp('Base embeddings initialized uniformly.')
                 nn.init.uniform_(self.base_embeddings.weight, -0.05, 0.05)
 
@@ -235,13 +235,15 @@ class ExtractModel(nn.Module):
                                                                                   keepdim=True)) * math.sqrt(g.emb_norm)
         else:
             with NoName(*vocab.unit_dense_feat_matrix.values()):
-                known_unit_emb = torch.cat([vocab.unit_dense_feat_matrix[cat]
-                                            for cat in self.effective_categories], dim=-1)
-                if g.use_base_embedding:
+                if g.dense_embedding:
+                    known_unit_emb = torch.cat([vocab.unit_dense_feat_matrix[cat]
+                                                for cat in self.effective_categories], dim=-1)
                     known_unit_emb = known_unit_emb @ self.base_embeddings.weight
-                    known_unit_emb = self.dropout(known_unit_emb)
-                    known_unit_emb = known_unit_emb / \
-                        (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(5)
+                else:
+                    known_unit_emb = self.base_embeddings.weight.unsqueeze(dim=1)  # HACK(j_luo)
+                known_unit_emb = self.dropout(known_unit_emb)
+                known_unit_emb = known_unit_emb / \
+                    (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(g.emb_norm)
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
         return known_unit_emb
 
@@ -515,6 +517,9 @@ class ExtractModel(nn.Module):
 
     def _prepare_return(self, batch: AlignedBatch, extracted: Extracted, costs: Costs, emb_repr: EmbAndRepr) -> ExtractModelReturn:
         matches = extracted.matches
+        # if g.span_candidates == 'oracle_word':
+        #     span_lengths = batch.lengths.rename(None).rename('batch')
+        # else:
         span_lengths = get_named_range(self.num_e_tags, 'len_e') + g.min_word_length
         # Get marginal.
         if g.use_softmax:
@@ -522,6 +527,14 @@ class ExtractModel(nn.Module):
                                ).softmax(dim='vocab') * matches.raw_ll).sum(dim='vocab')
         else:
             span_log_probs = matches.ll.logsumexp(dim='vocab')
+
+        if g.span_candidates == 'oracle_word':
+            bs = span_log_probs.size('batch')
+            mask = get_zeros(*span_log_probs.shape)
+            mask[range(bs), 0, batch.lengths.rename(None) - 1 - g.min_word_length] = 1.0
+            span_log_probs = (1.0 - mask) * (-9999.9) + span_log_probs
+            # matches.ll = (1.0 - mask.unsqueeze(dim=-1)) * (-9999.9) + matches.ll
+            matches.raw_ll = (1.0 - mask.unsqueeze(dim=-1)) * (-9999.9) + matches.raw_ll
         span_raw_square = raw_reward = None
         if g.inference_mode == 'new':
             span_lengths = span_lengths.align_as(matches.raw_ll)
@@ -532,7 +545,7 @@ class ExtractModel(nn.Module):
             # if g.reward_mode == 'poly':
             #     raw_reward = self._get_thresholded_reward(span_log_probs + span_lengths.float().log())
             # else:
-            raw_reward, psi_pos = self._get_thresholded_reward(span_log_probs / span_lengths)
+            raw_reward, psi_pos = self._get_thresholded_reward(span_log_probs / span_lengths.align_as(span_log_probs))
         p_x_z = LogTensor.from_torch(span_log_probs, log_scale=True)
         p_xy_z = LogTensor.from_torch(matches.ll, log_scale=True)
         p_x_yz = LogTensor.from_torch(matches.raw_ll, log_scale=True)
@@ -612,7 +625,10 @@ class ExtractModel(nn.Module):
         if self.training:
             log_probs = p_x_z
         else:
-            log_probs, best_vocab = p_xy_z.max(dim='vocab')
+            if g.save_model_ret:
+                log_probs, best_vocab = (p_xy_z / LogTensor(self.vocab.vocab_length.cuda())).max(dim='vocab')
+            else:
+                log_probs, best_vocab = p_xy_z.max(dim='vocab')
             bookkeeper = CtcBookkeeper(best_vocab)
 
             # NOTE(j_luo) Only consider words above a certain threshold.

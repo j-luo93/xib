@@ -121,15 +121,23 @@ def standardize(s):
     return ''.join(to_standardize.get(c, c) for c in s)
 
 
+add_argument('use_atomic_ipa', default=False, dtype=bool)
+
 def get_string(s: str) -> IPAString:
     s = clean(sub(standardize(s)))
-    segs = s.split('nm')
-    segs = [seg + 'n' for seg in segs[:-1]] + [segs[-1]]
-    segs = [segs[0]] + ['m' + seg for seg in segs[1:]]
-    ipas = [IPAString(unicode_string=seg) for seg in segs]
+    if g.use_atomic_ipa:
+        ipas = list()
+        for c in s:
+            ipas.append(IPAString(unicode_string=c))
+    else:
+        segs = s.split('nm')
+        segs = [seg + 'n' for seg in segs[:-1]] + [segs[-1]]
+        segs = [segs[0]] + ['m' + seg for seg in segs[1:]]
+        ipas = [IPAString(unicode_string=seg) for seg in segs]
     ret = ipas[0]
     for ipa in ipas[1:]:
         ret = ret + ipa
+
     return ret
 
 

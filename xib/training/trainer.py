@@ -325,12 +325,12 @@ class ExtractTrainer(BaseTrainer):
 
     def save(self, eval_metrics: Metrics):
         self.save_to(g.log_dir / f'saved.{self.stage}.latest')
-        if eval_metrics is not None:
-            if self.tracker.update('best_f1', value=eval_metrics.prf_exact_span_f1.value):
-                out_path = g.log_dir / f'saved.{self.stage}.best'
-                logging.warning('Do NOT use this number since this f1 is compared against ground truths.')
-                logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
-                self.save_to(out_path)
+        # if eval_metrics is not None:
+        #     if self.tracker.update('best_f1', value=eval_metrics.prf_exact_span_f1.value):
+        #         out_path = g.log_dir / f'saved.{self.stage}.best'
+        #         logging.warning('Do NOT use this number since this f1 is compared against ground truths.')
+        #         logging.imp(f'Best model updated: new best is {self.tracker.best_f1:.3f}')
+        #         self.save_to(out_path)
 
     @property
     def global_step(self) -> int:

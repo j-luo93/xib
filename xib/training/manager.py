@@ -3,6 +3,7 @@ import os
 import random
 import re
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import pandas as pd
 import torch
@@ -234,8 +235,17 @@ class ExtractManager(BaseManager):
 
     def __init__(self):
         if g.evaluate_only:
-            saved = torch.load(g.saved_model_path)
+            ckpts = list()
+            for path in Path(g.saved_model_path).glob('*latest'):
+                name = path.name
+                ckpts.append(int(re.match(r'saved\.0_(\d+)', name).group(1)))
+            latest_ckpt = max(ckpts)
+
+            saved_path = f'{g.saved_model_path}/saved.0_{latest_ckpt}.latest'
+            saved = torch.load(saved_path)
+
             g.load_state_dict(saved['g'], keep_new=True)
+            set_argument('saved_model_path', saved_path, _force=True)
 
         train_task = ExtractTask(training=True)
         eval_task = ExtractTask(training=False)
@@ -256,21 +266,24 @@ class ExtractManager(BaseManager):
         from xib.aligned_corpus.ipa_sequence import IpaSequence
 
         def align(lost_char, known_char):
-            lost_id = lcs.unit2id[lost_char]
-            if g.use_feature_aligner:
-                assert g.align_mode == 'init', 'reg mode for this not supported'
-                dfms = convert_to_dense(IpaSequence(known_char).feat_matrix.rename(
-                    'length', 'feat_group').align_to('length', 'batch', 'feat_group'))
-                for cat in Category:
-                    if should_include(g.feat_groups, cat):
-                        self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0] * 5.0)
-            else:
-                known_id = kcs.unit2id[IpaSequence(known_char)]
-                if g.align_mode == 'init':
-                    self.model.unit_aligner.weight.data[lost_id, known_id] = 10.0
+            try:
+                lost_id = lcs.unit2id[lost_char]
+                if g.use_feature_aligner:
+                    assert g.align_mode == 'init', 'reg mode for this not supported'
+                    dfms = convert_to_dense(IpaSequence(known_char).feat_matrix.rename(
+                        'length', 'feat_group').align_to('length', 'batch', 'feat_group'))
+                    for cat in Category:
+                        if should_include(g.feat_groups, cat):
+                            self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0] * 5.0)
                 else:
-                    self.model.align_units.append((lost_id, known_id))
-                # self.model.unit_aligner.weight.data[lost_id, known_id] = 5.0
+                    known_id = kcs.unit2id[IpaSequence(known_char)]
+                    if g.align_mode == 'init':
+                        self.model.unit_aligner.weight.data[lost_id, known_id] = 10.0
+                    else:
+                        self.model.align_units.append((lost_id, known_id))
+                    # self.model.unit_aligner.weight.data[lost_id, known_id] = 5.0
+            except KeyError:
+                pass
 
         if g.use_oracle or g.use_full_oracle:
             logging.imp('Testing some oracle.')
@@ -316,6 +329,8 @@ class ExtractManager(BaseManager):
                     # ('þ', 'h'),
                     # ('i', 'r'),
                 ]
+            elif g.known_lang == 'eu':
+                pass
             else:
                 raise ValueError
 
@@ -451,6 +466,55 @@ class ExtractManager(BaseManager):
                         ('þ', 'ð'),
                         ('þ', 'θ')
                     ]
+                elif g.known_lang == 'eu':
+                    oracle = [
+                        ('a', 'ɑ'),
+                        ('e', 'ɛ'),
+                        ('i', 'i'),
+                        ('o', 'o'),
+                        ('u', 'u'),
+
+                        ('d', 'd'),
+
+                        ('f', 'f'),
+                        ('f', 'b'),
+
+                        ('g', 'ɡ'),
+                        ('c', 'ɡ'),
+
+                        ('h', 'h'),
+                        ('h', 'k'),
+
+                        ('l', 'l'),
+                        ('l', 'r'),
+                        ('l', 'n'),
+                        ('r', 'l'),
+                        ('r', 'r'),
+                        ('r', 'n'),
+                        ('n', 'l'),
+                        ('n', 'n'),
+                        ('n', 'r'),
+
+                        ('b', 'b'),
+                        ('b', 'm'),
+                        ('v', 'b'),
+                        ('v', 'm'),
+                        ('m', 'b'),
+                        ('m', 'm'),
+
+                        ('m', 'n'),
+
+                        ('p', 'p'),
+
+                        ('s', 's'),
+                        ('z', 's'),
+
+                        ('t', 't'),
+
+                        ('c', 's'),
+                        ('c', 'k'),
+                        ('c', 'g'),
+                    ]
             for l, k in oracle:
                 align(l, k)
         # align('m', 'm')
@@ -528,6 +592,7 @@ class ExtractManager(BaseManager):
         # Save init parameters.
 
         if g.evaluate_only:
+            self.trainer.ins_del_cost = g.min_ins_del_cost
             self.trainer.model.eval()
             self.trainer.evaluate()
 

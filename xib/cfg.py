@@ -437,6 +437,28 @@ class Final(VowelCheck):
 
 
 @reg
+class FinalUga(Final):
+    min_word_length: int = 3
+    min_segment_length: int = 3
+    span_candidates: str = 'oracle_word'
+    use_base_embedding: bool = True
+    dense_embedding: bool = False
+    base_embedding_dim: int = 490
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/uga.small.tsv'
+        self.vocab_path: str = './data/heb.stems'
+
+
+@reg
+class FinalXib(Final):
+    expected_ratio: float = 0.1
+    min_word_length: int = 3
+    min_segment_length: int = 3
+
+
+@reg
 class FixSanityCheckInit(FixSanityCheck):
     baseline: float = 0.05
     bias_mode: str = 'fixed'

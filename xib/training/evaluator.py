@@ -420,7 +420,10 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 with torch.no_grad():
                     ret = self.model(batch)
                     if g.save_model_ret:
-                        torch.save([batch.sentences, ret.extracted.matches.raw_ll.rename(None)],
+                        # if any('sella' in str(sent) for sent in batch.sentences):
+                        #     # breakpoint()
+                            # batch.sentences[-1].to_unsegmented(is_lost_ipa=False, is_known_ipa=True, annotated=True)
+                        torch.save([batch.sentences, ret.extracted.matches.raw_ll.rename(None) / self.model.vocab.vocab_length.cuda().rename(None)],
                                    g.log_dir / f'model_ret.{i}')
                 batch_metrics = self.analyzer.analyze(ret, batch)
                 if baseline is not None:

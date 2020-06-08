@@ -2,20 +2,23 @@ from __future__ import annotations
 
 from dataclasses import field
 from pathlib import Path
-from typing import ClassVar, Dict, List, Union
+from typing import ClassVar, Dict, List, Optional, Union
 
 import numpy as np
 import torch
 from torch.utils.data.dataloader import default_collate
 
 from dev_misc import BT, FT, LT, g
+from dev_misc.arglib import add_argument, add_condition
 from dev_misc.devlib import BaseBatch, batch_class, get_array, get_length_mask
 from dev_misc.trainlib import Task
-from dev_misc.trainlib.base_data_loader import BaseDataLoader
+from dev_misc.trainlib.base_data_loader import (BaseDataLoader,
+                                                BaseDataLoaderRegistry)
 from dev_misc.utils import deprecated
 from xib.aligned_corpus.char_set import CharSet
 from xib.aligned_corpus.corpus import AlignedCorpus
-from xib.aligned_corpus.dataset import AlignedDataset, AlignedDatasetItem
+from xib.aligned_corpus.dataset import (AlignedDataset, AlignedDatasetFactory,
+                                        AlignedDatasetItem)
 from xib.aligned_corpus.transcriber import MultilingualTranscriber
 from xib.aligned_corpus.vocabulary import Vocabulary
 from xib.batch import BatchSampler, DenseFeatureMatrix, convert_to_dense
@@ -90,6 +93,10 @@ def collate_aligned_dataset_items(items: List[AlignedDatasetItem]) -> AlignedBat
         return AlignedTextBatch(sentences, lengths)
 
 
+add_argument('input_format', default='ipa', dtype=str, choices=['ipa', 'text'], msg='Input format to use.')
+add_condition('input_format', 'text', 'dense_input', True)
+
+
 class AlignedDataLoader(BaseDataLoader):
 
     collate_fn = collate_aligned_dataset_items
@@ -121,3 +128,12 @@ class AlignedDataLoader(BaseDataLoader):
     def __iter__(self) -> AlignedBatch:
         for batch in super().__iter__():
             yield batch.cuda()
+
+
+class DataLoaderRegistry(BaseDataLoaderRegistry):
+
+    def get_data_loader(self, task: Task, data_path: Path, transcriber: Optional[MultilingualTranscriber] = None):
+        adf = AlignedDatasetFactory()
+        dataset = adf.get_dataset(g.lost_lang, g.known_lang, g.data_path)
+        dl = AlignedDataLoader(dataset, task)
+        return dl

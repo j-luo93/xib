@@ -13,7 +13,7 @@ from dev_misc.arglib import add_argument, set_argument
 from dev_misc.trainlib import has_gpus
 from dev_misc.utils import deprecated
 from xib.aligned_corpus.corpus import AlignedCorpus
-from xib.aligned_corpus.data_loader import BaseAlignedBatch
+from xib.aligned_corpus.data_loader import BaseAlignedBatch, DataLoaderRegistry
 from xib.aligned_corpus.transcriber import (BaseTranscriber,
                                             DictionaryTranscriber,
                                             MultilingualTranscriber,
@@ -21,9 +21,7 @@ from xib.aligned_corpus.transcriber import (BaseTranscriber,
                                             RuleBasedTranscriber,
                                             SimpleTranscriberFactory,
                                             TranscriberWithBackoff)
-from xib.data_loader import (ContinuousTextDataLoader, DataLoaderRegistry,
-                             DenseIpaDataLoader, IpaDataLoader,
-                             convert_to_dense)
+from xib.batch import convert_to_dense
 from xib.ipa import Category, should_include
 from xib.model.extract_model import ExtractModel
 from xib.training.evaluator import AlignedExtractEvaluator

@@ -28,8 +28,7 @@ from xib.ipa import Category, should_include
 from xib.model.extract_model import ExtractModel
 from xib.training.evaluator import AlignedExtractEvaluator
 from xib.training.task import ExtractTask
-from xib.training.trainer import (AdaptLMTrainer, DecipherTrainer,
-                                  ExtractTrainer, LMTrainer)
+from xib.training.trainer import ExtractTrainer
 
 
 class BaseManager(ABC):
@@ -47,7 +46,6 @@ class ExtractManager(BaseManager):
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
     add_argument('aligner_lr', default=0.1, dtype=float)
     add_argument('num_rounds', default=1000, dtype=int, msg='Number of rounds')
-    add_argument('use_new_data_loader', default=True, dtype=bool, msg='Flag to use the new data loader.')
     add_argument('use_oracle', default=False, dtype=bool)
     add_argument('use_full_oracle', default=False, dtype=bool)
     add_argument('anneal_baseline', default=False, dtype=bool)
@@ -111,6 +109,7 @@ class ExtractManager(BaseManager):
             except KeyError:
                 pass
 
+        # FIXME(j_luo) Move this part to another file.
         if g.use_oracle or g.use_full_oracle:
             logging.imp('Testing some oracle.')
             if g.known_lang in ['ang']:
@@ -343,30 +342,12 @@ class ExtractManager(BaseManager):
                     ]
             for l, k in oracle:
                 align(l, k)
-        # align('m', 'm')
-        # align('k', 't͡ʃ')
-        # align('k', 'k')
-        # align('d', 'd')
-        # align('l', 'l')
-
-        # align('n', 'n')
-        # align('p', 'p')
-        # align('g', 'g')
-        # align('t', 't')
-        # align('w', 'w')
-        # align('h', 'h')
-        # align('b', 'b')
-        # align('b', 'f')
-        # align('b', 'v')
-        # align('j', 'j')
-        # align('þ', 'θ')
 
         if has_gpus():
             self.model.cuda()
         logging.info(str(self.model))
 
-        eval_cls = AlignedExtractEvaluator if g.use_new_data_loader else ExtractEvaluator
-        self.evaluator = eval_cls(self.model, self.dl_reg[eval_task], BaseAlignedBatch.known_vocab)
+        self.evaluator = AlignedExtractEvaluator(self.model, self.dl_reg[eval_task], BaseAlignedBatch.known_vocab)
 
         self.trainer = ExtractTrainer(self.model, [train_task], [1.0], 'total_step',
                                       stage_tnames=['round', 'total_step'],
@@ -376,10 +357,6 @@ class ExtractManager(BaseManager):
                                       save_interval=g.save_interval)
         if g.saved_model_path:
             self.trainer.load(g.saved_model_path)
-        # # HACK(j_luo) Dilute!
-        # logging.imp('Diluting weights.')
-        # self.model.unit_aligner.weight.data.copy_(self.model.unit_aligner.weight.data * 0.1)
-        # self.trainer.set_optimizer(Adam, lr=g.learning_rate)
 
     def run(self):
         # HACK(j_luo)
@@ -416,70 +393,17 @@ class ExtractManager(BaseManager):
 
         self.trainer.er = g.init_expected_ratio
 
-        # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate,
-        #                            weight_decay=g.weight_hyper)  # , momentum=0.9, nesterov=False)
-        # Save init parameters.
-
         if g.evaluate_only:
             self.trainer.ins_del_cost = g.min_ins_del_cost
             self.trainer.model.eval()
             self.trainer.evaluate()
 
         else:
+            # Save init parameters.
             out_path = g.log_dir / f'saved.init'
             self.trainer.save_to(out_path)
-            # # HACK(j_luo)
-            # self.trainer.reset(reset_params=True)
             for _ in range(g.num_rounds):
                 self.trainer.reset()
-                # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate, weight_decay=g.weight_hyper)
 
                 self.trainer.train(self.dl_reg)
                 self.trainer.tracker.update('round')
-
-                # # HACK(j_luo)
-                self.trainer.er *= 0.9
-                self.trainer.er = max(self.trainer.er, g.expected_ratio)
-
-
-class PrepareManager(BaseManager):
-
-    add_argument('lost_lang', dtype=str)
-    add_argument('known_lang', dtype=str)
-    add_argument('dictionary_path', dtype='path', default='data/de.csv')
-
-    def _get_transcriber(self, lang: str) -> BaseTranscriber:
-
-        def converter(s: str) -> str:
-            s = re.sub(r'\s+', '', s)
-            s = s.replace('ʔ', '')
-            s = s.replace('l̩', 'əl')
-            s = s.replace('n̩', 'ən')
-            s = s.replace('m̩', 'əm')
-            s = s.replace('ç', 'ç')
-            s = s.replace('ˈ', '')
-            s = s.replace('ˌ', '')
-            return s
-
-        stf = SimpleTranscriberFactory()
-
-        if lang == 'nhd':
-            simple = stf.get_transcriber('phonemizer')
-            dt = stf.get_transcriber('dictionary', csv_path=g.dictionary_path, converter=converter)
-            tr = TranscriberWithBackoff(dt, simple)
-        elif lang in ['got', 'germ']:
-            tr = stf.get_transcriber('rule', lang='got')
-        elif lang == 'ae':
-            tr = stf.get_transcriber('third_party', func=oe)
-        else:
-            raise ValueError(f'Unsupported language {lang}.')
-
-        return tr
-
-    def run(self):
-        transcriber = MultilingualTranscriber()
-        transcriber.register_lang(g.lost_lang, self._get_transcriber(g.lost_lang))
-        transcriber.register_lang(g.known_lang, self._get_transcriber(g.known_lang))
-        corpus = AlignedCorpus.from_data_path(g.lost_lang, g.known_lang, g.data_path, transcriber)
-        out_path = f'data/{g.lost_lang}-{g.known_lang}.corpus.tsv'
-        corpus.to_tsv(out_path)

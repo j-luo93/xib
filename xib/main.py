@@ -28,7 +28,6 @@ if __name__ == "__main__":
     patch_named_tensors()
     register_tensor_cls(LogTensor)
 
-    # IDEA(j_luo) Set random seed here?
     parse_args()
     show_args()
     set_random_seeds(g.random_seed)

@@ -476,32 +476,7 @@ ContinuousTextDataLoader = Union[BrokenIpaDataLoader, UnbrokenIpaDataLoader]
 class DataLoaderRegistry(BaseDataLoaderRegistry):
 
     def get_data_loader(self, task: Task, data_path: Path, transcriber: Optional[MultilingualTranscriber] = None):
-        if task.name in ['lm', 'mlm']:
-            dl = IpaDataLoader(data_path, task)
-        elif task.name == 'cbow':
-            dl = CbowIpaDataLoader(data_path, task)
-        elif task.name == 'adapt_cbow':
-            dl = DenseCbowIpaDataLoader(data_path, task)
-        elif task.name == 'adapt_lm':
-            dl = DenseIpaDataLoader(data_path, task)
-        elif task.name in ['decipher', 'transfer', 'extract']:
-            if g.use_new_data_loader:
-                adf = AlignedDatasetFactory()
-                dataset = adf.get_dataset(g.lost_lang, g.known_lang, g.data_path)
-                dl = AlignedDataLoader(dataset, task)
-            else:
-                if g.input_format == 'text':
-                    if g.aligned:
-                        dl_cls = AlignedTextDataLoader
-                    else:
-                        dl_cls = UnbrokenTextDataLoader
-                elif g.aligned:
-                    dl_cls = AlignedIpaDataLoader
-                elif g.broken_words:
-                    dl_cls = BrokenIpaDataLoader
-                else:
-                    dl_cls = UnbrokenIpaDataLoader
-                dl = dl_cls(data_path, task)
-        else:
-            raise ValueError(f'Unsupported task {task.name}.')
+        adf = AlignedDatasetFactory()
+        dataset = adf.get_dataset(g.lost_lang, g.known_lang, g.data_path)
+        dl = AlignedDataLoader(dataset, task)
         return dl

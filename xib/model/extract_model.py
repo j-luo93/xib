@@ -22,8 +22,6 @@ from xib.aligned_corpus.vocabulary import Vocabulary
 from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
                              convert_to_dense)
 from xib.ipa import Category, Index, get_enum_by_cat, should_include
-from xib.ipa.process import (Segment, Segmentation, SegmentWindow, SegmentX,
-                             Span)
 from xib.model.log_tensor import LogTensor
 from xib.model.modules import AdaptLayer, FeatEmbedding, FeatureAligner
 from xib.model.span_proposer import (AllSpanProposer, OracleStemSpanProposer,

@@ -46,49 +46,7 @@ _all_other_langs = {
     'xib', 'yue', 'eu', 'xaq'
 }
 
-
-def add_langs(cls_prefix, base_cls):
-    for lang in _all_other_langs:
-        cap_lang = lang[0].upper() + lang[1:]
-        new_cls = type(f'{cls_prefix}{cap_lang}', (base_cls,), {'lang': lang})
-        reg(new_cls)
-
-
-add_langs('LM', LMEn)
-
-
-@reg
-class CbowEn(LMEn):
-    task: str = 'cbow'
-
-
-add_langs('Cbow', CbowEn)
-
-
-@reg
-class AdaptLMEn(LMEn):
-    task: str = 'adapt_lm'
-    dense_input: bool = True
-    learning_rate: float = 0.02
-    num_steps: int = 1000
-
-
-add_langs('AdaptLM', AdaptLMEn)
-
-
-@reg
-class AdaptCbowEn(AdaptLMEn):
-    task: str = 'adapt_cbow'
-
-
-add_langs('AdaptCbow', AdaptCbowEn)
-
-
-@reg
-class DecipherEn(LMEn):
-    task: str = 'decipher'
-    learning_rate: float = 5e-4
-
+# FIXME(j_luo) remove task arg
 
 @reg
 class DecipherEnTest(DecipherEn):
@@ -97,54 +55,6 @@ class DecipherEnTest(DecipherEn):
         super().__post_init__()
         self.data_path = 'data/decipher_en_test.pth'
 
-
-@reg
-class DecipherEsTest(DecipherEn):
-    lang = 'es'
-
-    supervised: bool = True
-    dev_data_path: str = 'data/Spanish.ipa.dev'
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.data_path = 'data/Spanish.ipa.5000'
-
-
-@reg
-class DecipherEsNoisyP3Test(DecipherEsTest):
-    dev_data_path: str = 'data/Spanish.ipa.noise_7500.dev'
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.data_path = 'data/Spanish.ipa.noise_7500.5000'
-
-
-@reg
-class DecipherEsNoisyP5Test(DecipherEsTest):
-    dev_data_path: str = 'data/Spanish.ipa.noise_12500.dev'
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.data_path = 'data/Spanish.ipa.noise_12500.5000'
-
-
-@buggy
-@reg
-class DecipherEsNoisyItalianP5Test(DecipherEsTest):
-    dev_data_path: str = 'data/Spanish.Italian_p5.ipa.dev'
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.data_path = 'data/Spanish.Italian_p5.ipa.5000'
-
-
-@reg
-class DecipherEsNoisyGermanP5Test(DecipherEsTest):
-    dev_data_path: str = 'data/Spanish.German_p5.ipa.dev'
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.data_path = 'data/Spanish.ipa.noise_12500.5000'
 
 
 @reg

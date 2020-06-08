@@ -10,32 +10,11 @@ from dev_misc.devlib.named_tensor import (patch_named_tensors,
 from dev_misc.trainlib import set_random_seeds
 from xib.cfg import reg
 from xib.model.log_tensor import LogTensor
-from xib.training.manager import (AdaptCbowManager, AdaptLMManager,
-                                  BaseManager, CbowManager, DecipherManager,
-                                  ExtractManager, LMManager, PrepareManager,
-                                  SearchSolverManager)
+from xib.training.manager import ExtractManager
 
 
 def train():
-    manager: BaseManager
-    if g.task == 'lm':
-        manager = LMManager()
-    elif g.task == 'cbow':
-        manager = CbowManager()
-    elif g.task == 'adapt_cbow':
-        manager = AdaptCbowManager()
-    elif g.task == 'adapt':
-        manager = AdaptLMManager()
-    # elif g.task == 'transfer':
-    #     manager = TransferManager()
-    elif g.task == 'search':
-        manager = SearchSolverManager()
-    elif g.task == 'extract':
-        manager = ExtractManager()
-    elif g.task == 'prepare':
-        manager = PrepareManager()
-    else:
-        manager = DecipherManager()
+    manager = ExtractManager()
     manager.run()
 
 

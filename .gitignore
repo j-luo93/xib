@@ -115,3 +115,6 @@ cmdl/*
 .testmondata
 overleaf/*
 grid/*
+figs/*
+model_ret/*
+plot/*

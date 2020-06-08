@@ -1,0 +1,14 @@
+pyquery
+pandas
+seaborn
+bokeh
+numpy
+mypy_extensions
+prettytable
+colorlog
+deprecated
+pytrie
+inflection
+unidecode
+ipapy
+enlighten

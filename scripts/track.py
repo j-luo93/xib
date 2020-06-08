@@ -204,9 +204,10 @@ def get_service_function(lang: str, project_root: str):
         vocab_path = f'{project_root}/data/Iberian/lat.matched.stems'
         data_path = f'{project_root}/data/Iberian/corpus.xib-lat.tsv'
     else:
-        init_path = f'{project_root}/log/grid/matched_cmdl/test-{lang}-old-p5/0/saved.init'
-        vocab_path = f'{project_root}/data/Iberian/{lang}.small.matched.stems'
-        data_path = f'{project_root}/data/Iberian/corpus.small.got-{lang}.tsv'
+        # init_path = f'{project_root}/log//test-{lang}-ins_1000-p5/0/saved.init'
+        init_path = '/scratch2/j_luo/xib/log/2020-05-31/FinalGothicNon100-ml40//21-44-01/saved.init'
+        vocab_path = f'{project_root}/data/wulfila/processed/{lang}.matched.stems'
+        data_path = f'{project_root}/data/wulfila/processed/corpus.got-{lang}.tsv'
     # vocab_path = '/scratch2/j_luo/xib/data/wulfila/processed/non.small.matched.stems'
     # data_path = '/scratch2/j_luo/xib/data/wulfila/processed/corpus.small.got-non.tsv'
     # init_path = '/scratch/j_luo/decipher/xib/log/grid/matched_cmdl/test-pgm/0/saved.init'

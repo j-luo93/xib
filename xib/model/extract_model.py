@@ -269,6 +269,7 @@ class ExtractModel(nn.Module):
         known_ins_ctx_repr = known_ins_ctx_repr.align_to('vocab', 'length', 'char_emb')
 
         lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
+        # lost_unit_emb = self.dropout(lost_unit_emb)
 
         emb_repr = EmbAndRepr(known_unit_emb, known_ctx_repr, known_ins_ctx_repr, lost_unit_emb)
         return emb_repr
@@ -356,9 +357,11 @@ class ExtractModel(nn.Module):
         sub_weighted_log_probs = interpolate(sub_ctx_log_probs, global_log_probs)
         # sub_weighted_log_probs = self._add_vowel_bias(sub_weighted_log_probs, vowel_mask)
         sub = -sub_weighted_log_probs
+
+        # OLD CODE
         # del_mask = torch.zeros_like(sub)
         # del_mask[:, :, DELETE_ID] = 1.0
-        # sub = sub + self.ins_del_cost * del_mask
+        # sub = sub + 0.5 * del_mask
 
         # Get secondary costs for insertions.
         ins_ctx_logits = emb_repr.known_ins_ctx_repr @ emb_repr.lost_unit_emb.t()
@@ -366,7 +369,10 @@ class ExtractModel(nn.Module):
                                                                             1).rename('vocab', 'length', 'lost_unit')
         ins_weighted_log_probs = interpolate(ins_ctx_log_probs, global_log_probs)
         # ins_weighted_log_probs = self._add_vowel_bias(ins_weighted_log_probs, vowel_mask)
+
         ins = -ins_weighted_log_probs + self.ins_del_cost
+        # OLD CODE
+        # ins = -ins_ctx_log_probs + self.ins_del_cost
 
         costs = Costs(sub, ins, alignment)
 
@@ -531,7 +537,16 @@ class ExtractModel(nn.Module):
         if g.span_candidates == 'oracle_word':
             bs = span_log_probs.size('batch')
             mask = get_zeros(*span_log_probs.shape)
-            mask[range(bs), 0, batch.lengths.rename(None) - 1 - g.min_word_length] = 1.0
+
+            # OLD code
+            should_be = batch.lengths.rename(None) - g.min_word_length
+            should_mask = batch.lengths.rename(None) <= g.max_word_length
+            mask_values = torch.where(should_mask, torch.ones_like(should_be), torch.zeros_like(should_be))
+            safe_should_be = torch.where(should_mask, should_be, torch.zeros_like(should_be))
+            mask[range(bs), 0, safe_should_be] += mask_values
+
+            # mask[:, 0] = 1.0
+
             span_log_probs = (1.0 - mask) * (-9999.9) + span_log_probs
             # matches.ll = (1.0 - mask.unsqueeze(dim=-1)) * (-9999.9) + matches.ll
             matches.raw_ll = (1.0 - mask.unsqueeze(dim=-1)) * (-9999.9) + matches.raw_ll

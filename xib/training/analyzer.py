@@ -187,10 +187,15 @@ class ExtractAnalyzer:
 
     add_argument('mean_mode', default='segment', choices=['segment', 'char'])
     add_argument('bij_mode', default='square', choices=['square', 'abs'])
+    add_argument('top_only', default=False, dtype=bool)
 
     def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
         metrics = Metrics()
-        loss_value = model_ret.ctc_return.final_score.sum(dim='batch')
+        if g.top_only:
+            span_log_probs = model_ret.extracted.matches.ll.logsumexp(dim='vocab')
+            loss_value = span_log_probs.max(dim='len_s')[0].max(dim='len_e')[0].sum(dim='batch')
+        else:
+            loss_value = model_ret.ctc_return.final_score.sum(dim='batch')
         not_zero = True
         loss_weight = batch.batch_size if g.mean_mode == 'segment' else batch.lengths.sum()
         loss_metric = Metric('marginal', loss_value, loss_weight)
@@ -200,7 +205,9 @@ class ExtractAnalyzer:
         if almt is not None:
             if g.bij_mode == 'square':
                 bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
+                # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0) ** 2).sum() * float(not_zero)
             else:
+                # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0).abs()).sum() * float(not_zero)
                 bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0).abs()).sum() * float(not_zero)
             metrics += Metric('bij_reg', bijective_reg, loss_weight)
             if g.use_entropy_reg:

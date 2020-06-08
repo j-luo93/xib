@@ -247,7 +247,7 @@ class ExtractTrainer(BaseTrainer):
 
     @ins_del_cost.setter
     def ins_del_cost(self, value):
-        logging.imp(f'Setting ins_del_cost to {value}.')
+        logging.debug(f'Setting ins_del_cost to {value}.')
 
     @global_property
     def context_weight(self):
@@ -255,7 +255,7 @@ class ExtractTrainer(BaseTrainer):
 
     @context_weight.setter
     def context_weight(self, value):
-        logging.imp(f'Setting context_weight to {value}.')
+        logging.debug(f'Setting context_weight to {value}.')
 
     @global_property
     def temperature(self):
@@ -263,7 +263,7 @@ class ExtractTrainer(BaseTrainer):
 
     @temperature.setter
     def temperature(self, value):
-        logging.imp(f'Setting temperature to {value}.')
+        logging.debug(f'Setting temperature to {value}.')
 
     @global_property
     def bij_reg(self):
@@ -271,7 +271,7 @@ class ExtractTrainer(BaseTrainer):
 
     @bij_reg.setter
     def bij_reg(self, value):
-        logging.imp(f'Setting bij_reg to {value}.')
+        logging.debug(f'Setting bij_reg to {value}.')
 
     @global_property
     def global_baseline(self) -> float:
@@ -279,7 +279,7 @@ class ExtractTrainer(BaseTrainer):
 
     @global_baseline.setter
     def global_baseline(self, value):
-        logging.imp(f'Setting global_baseline to {value}.')
+        logging.debug(f'Setting global_baseline to {value}.')
 
     @global_property
     def ent_reg(self):
@@ -287,7 +287,7 @@ class ExtractTrainer(BaseTrainer):
 
     @ent_reg.setter
     def ent_reg(self, value):
-        logging.imp(f'Setting ent_reg to {value}.')
+        logging.debug(f'Setting ent_reg to {value}.')
 
     @global_property
     def pr_hyper(self):
@@ -295,7 +295,7 @@ class ExtractTrainer(BaseTrainer):
 
     @pr_hyper.setter
     def pr_hyper(self, value):
-        logging.imp(f'Setting pr_hyper to {value}.')
+        logging.debug(f'Setting pr_hyper to {value}.')
 
     @global_property
     def er(self):
@@ -303,7 +303,7 @@ class ExtractTrainer(BaseTrainer):
 
     @er.setter
     def er(self, value):
-        logging.imp(f'Setting er to {value}.')
+        logging.debug(f'Setting er to {value}.')
 
     def add_trackables(self):
         self.tracker.add_trackable('round', endless=True)

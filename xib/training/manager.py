@@ -230,6 +230,7 @@ class ExtractManager(BaseManager):
     add_argument('max_baseline', default=1.0, dtype=float)
     add_argument('align_mode', default='reg', choices=['init', 'reg'], dtype=str)
     add_argument('evaluate_only', default=False, dtype=bool)
+    add_argument('embedding_only', default=False, dtype=bool)
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -580,11 +581,14 @@ class ExtractManager(BaseManager):
                 {'params': self.model.feat_aligner.parameters(), 'lr': g.aligner_lr},
                 {'params': [param for name, param in self.model.named_parameters() if 'feat_aligner' not in name]}
             ], lr=g.learning_rate)
+        elif g.embedding_only:
+            self.trainer.optimizer = optim_cls(self.model.base_embeddings.parameters(), lr=g.learning_rate)
         else:
             self.trainer.optimizer = optim_cls([
                 {'params': self.model.unit_aligner.parameters(), 'lr': g.aligner_lr},
                 {'params': [param for name, param in self.model.named_parameters() if 'unit_aligner' not in name]}
             ], lr=g.learning_rate)
+
         self.trainer.er = g.init_expected_ratio
 
         # self.trainer.set_optimizer(optim_cls, lr=g.learning_rate,

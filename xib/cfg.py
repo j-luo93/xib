@@ -437,18 +437,109 @@ class Final(VowelCheck):
 
 
 @reg
-class FinalUga(Final):
+class FinalGothicPgm100(Final):
+
+    segmented: bool = True
+    downsample: bool = False
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.got-germ.trunc.tsv'
+        self.vocab_path: str = './data/wulfila/processed/germ.matched.trunc.stems'
+
+
+@reg
+class FinalGothicNon100(FinalGothicPgm100):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.got-non.trunc.tsv'
+        self.vocab_path: str = './data/wulfila/processed/non.matched.trunc.stems'
+
+
+@reg
+class FinalGothicAng100(FinalGothicPgm100):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.got-ang.trunc.tsv'
+        self.vocab_path: str = './data/wulfila/processed/ang.matched.trunc.stems'
+
+
+@reg
+class FinalContrastLatin(Final):
+
+    known_lang: str = 'ang'
+    use_oracle: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.got-germ.trunc.seg.p5.tsv'
+        self.vocab_path: str = './data/wulfila/processed/contrast.lat.stems'
+
+
+@reg
+class FinalContrastSpanish(FinalContrastLatin):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.vocab_path: str = './data/wulfila/processed/contrast.es.stems'
+
+
+@reg
+class FinalContrastTurkish(FinalContrastLatin):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.vocab_path: str = './data/wulfila/processed/contrast.tur.stems'
+
+
+@reg
+class FinalContrastIndo(FinalContrastLatin):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.vocab_path: str = './data/wulfila/processed/contrast.ind.stems'
+
+
+@reg
+class FinalContrastHungarian(FinalContrastLatin):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.vocab_path: str = './data/wulfila/processed/contrast.hun.stems'
+
+
+@reg
+class FinalContrastBasque(FinalContrastLatin):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.vocab_path: str = './data/Iberian/Basque/eu.all.stems'
+
+
+@reg
+class FinalUgaReal(Final):
     min_word_length: int = 3
     min_segment_length: int = 3
     span_candidates: str = 'oracle_word'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/uga.real.small.tsv'
+        self.vocab_path: str = './data/heb.real.stems'
+
+
+@reg
+class FinalUga(FinalUgaReal):
     use_base_embedding: bool = True
     dense_embedding: bool = False
     base_embedding_dim: int = 490
 
     def __post_init__(self):
         super().__post_init__()
-        self.data_path: str = './data/uga.small.tsv'
-        self.vocab_path: str = './data/heb.stems'
+        self.data_path: str = './data/uga.real.small.tsv'
+        self.vocab_path: str = './data/heb.real.stems'
 
 
 @reg
@@ -456,6 +547,140 @@ class FinalXib(Final):
     expected_ratio: float = 0.1
     min_word_length: int = 3
     min_segment_length: int = 3
+
+
+@reg
+class FinalXibBasquePos(FinalXib):
+    use_oracle: bool = True
+    known_lang: str = 'lat'
+    min_word_length: int = 4
+    min_segment_length: int = 4
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/Iberian/Basque/eu.lat.stems'
+
+
+@reg
+class FinalXibBasqueNeg(FinalXibBasquePos):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/Iberian/Basque/eu.unk.stems'
+
+
+@reg
+class FinalXibContrastLatin(FinalXibBasquePos):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/wulfila/processed/contrast.lat.stems'
+
+
+@reg
+class FinalXibContrastTurkish(FinalXibBasquePos):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/wulfila/processed/contrast.tur.stems'
+
+
+@reg
+class FinalXibContrastHungarian(FinalXibBasquePos):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/wulfila/processed/contrast.hun.stems'
+
+
+@reg
+class FinalXibContrastProtoGermanic(FinalXibBasquePos):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/wulfila/processed/germ.matched.trunc.stems'
+
+
+@reg
+class FinalXibContrastSpanish(FinalXibBasquePos):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/wulfila/processed/contrast.es.stems'
+
+
+@reg
+class FinalXibContrastOldNorse(FinalXibBasquePos):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/wulfila/processed/non.matched.trunc.stems'
+
+
+@reg
+class FinalXibContrastOldEnglish(FinalXibBasquePos):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/wulfila/processed/ang.matched.trunc.stems'
+
+
+@reg
+class FinalUgaContrastArabic(FinalUgaReal):
+
+    min_word_length: int = 3
+    min_segment_length: int = 3
+    span_candidates: str = 'oracle_word'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/uga.real.small.tsv'
+        self.vocab_path: str = './data/uga/contrast.ara.stems'
+
+
+@reg
+class FinalUgaContrastLatin(FinalUgaContrastArabic):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/uga.real.small.tsv'
+        self.vocab_path: str = './data/wulfila/processed/contrast.lat.stems'
+
+
+@reg
+class FinalUgaContrastHungarian(FinalUgaContrastArabic):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/uga.real.small.tsv'
+        self.vocab_path: str = './data/wulfila/processed/contrast.hun.stems'
+
+
+@reg
+class FinalUgaContrastSpanish(FinalUgaContrastArabic):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/uga.real.small.tsv'
+        self.vocab_path: str = './data/wulfila/processed/contrast.es.stems'
+
+
+# @reg
+# class FinalXibContrastOldEnglish(FinalXibBasquePos):
+
+#     def __post_init__(self):
+#         super().__post_init__()
+#         self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+#         self.vocab_path: str = './data/wulfila/processed/ang.matched.trunc.stems'
 
 
 @reg

@@ -46,6 +46,7 @@ class Word:
     def from_saved_string(cls, saved_string: str) -> Word:
         lang, form, ipa_str = saved_string.split(';')
         ipa = frozenset({IpaSequence(s) for s in ipa_str[1:-1].split(',')})
+        form = form.replace('_', '').replace('·', '')
         return cls(lang, form, ipa)
 
     @property
@@ -337,6 +338,7 @@ class AlignedSentence:
 
         def iter_annotation() -> Iterator[Tuple[int, int, Set[Content], Optional[int], Optional[int]]]:
             offset = 0
+            ret = list()
             for word in self.words:
                 words_or_stems = word.known_stems if g.use_stem else (word.known_tokens | word.known_lemmas)
                 full_length = word.lost_token.ipa_length if is_lost_ipa else word.lost_token.form_length
@@ -351,10 +353,12 @@ class AlignedSentence:
                             for ss in stem.single_stems:
                                 starts.append(offset + ss.start)
                                 ends.append(offset + ss.end)
-                        yield starts, ends, aligned_contents, offset, offset + full_length - 1
+                        ret.append((starts, ends, aligned_contents, offset, offset + full_length - 1))
                     else:
-                        yield [offset], [offset + full_length - 1], aligned_contents, None, None
+                        ret.append(([offset], [offset + full_length - 1], aligned_contents, None, None))
                 offset += full_length
+
+            return ret
 
         if annotated:
             for starts, ends, aligned_contents, full_form_start, full_form_end in iter_annotation():
@@ -377,6 +381,8 @@ class NullValue(Exception):
 
 class AlignedCorpus(SequenceABC):
     """Represent a corpus with potentially aligned sentences."""
+
+    add_argument('segmented', default=False, dtype=bool)
 
     def __init__(self, lost_lang: str, known_lang: str, sentences: Sequence[AlignedSentence]):
         self.lost_lang = lost_lang
@@ -456,9 +462,23 @@ class AlignedCorpus(SequenceABC):
         df['aligned_word'] = df[word_info_cols].apply(lambda item: AlignedWord(*item), axis=1)
 
         sentences = list()
-        for sentence_idx, group in df.groupby('sentence_idx', sort=True)['word_idx', 'aligned_word']:
-            words = list(group.sort_values('word_idx')['aligned_word'])
-            sentences.append(AlignedSentence(words))
+
+        if g.segmented:
+            word2aligned = dict()
+            for word in df['aligned_word']:
+                token = word.lost_token
+                if token in word2aligned:
+                    aligned = word2aligned[token]
+                    aligned.known_stems.update(word.known_stems)
+                else:
+                    word2aligned[token] = word
+
+            for word in word2aligned.values():
+                sentences.append(AlignedSentence([word]))
+        else:
+            for sentence_idx, group in df.groupby('sentence_idx', sort=True)['word_idx', 'aligned_word']:
+                words = list(group.sort_values('word_idx')['aligned_word'])
+                sentences.append(AlignedSentence(words))
 
         return cls(lost_lang, known_lang, sentences)
 

@@ -25,6 +25,7 @@ from dev_misc.devlib import BT, LT
 from dev_misc.utils import cached_property, deprecated
 from xib.ipa import Category
 
+add_argument('min_word_length', default=4, dtype=int, msg='Min length of words.')
 
 to_remove_rules = {
     'n͡m': ['n', 'm'],
@@ -196,9 +197,6 @@ class BaseSegmentWithGoldTagSeq(BaseSegment):
     def gold_tag_seq(self) -> LT: ...
 
 
-add_argument('min_word_length', default=4, dtype=int, msg='Min length of words.')
-
-
 class Segment(BaseSegmentWithGoldTagSeq):
 
     def __init__(self, raw_token: str):
@@ -289,19 +287,6 @@ class Segment(BaseSegmentWithGoldTagSeq):
         if not self.is_noise and len(self) >= g.min_word_length and len(self) <= g.max_word_length:
             span = Span(str(self), 0, len(self) - 1)
             return span
-
-    def break_segment(self, start: int, end: int) -> Union[BrokenSegment, Segment]:
-        if start == 0 and end == len(self) - 1:
-            return self
-
-        new_feat_matrix = self.feat_matrix[start: end + 1]
-        new_list_of_units = self.segment_list[start: end + 1]
-        new_list_of_ipas = self.merged_ipa[start: end + 1]
-        new_gold_tag_seq = torch.LongTensor([O] * (end + 1 - start))
-        return BrokenSegment(new_list_of_units, new_list_of_ipas, new_feat_matrix, new_gold_tag_seq, self)
-
-
-S = TypeVar('S', Segment, BrokenSegment, SegmentX)
 
 
 def _apply(series: pd.Series, func: Callable[..., None], progress: bool = False):
@@ -438,34 +423,3 @@ def get_feat_matrix(s: Union[pd.Series, Segment]) -> torch.LongTensor:
 
 
 idx_col_names = [f'{feat.name.lower()}_idx' for feat in Category]
-
-
-def get_pth_content(df, progress=False):
-    filtered = df[['ipa_segment', 'merged_ipa'] + idx_col_names]
-
-    segments = filtered['ipa_segment'].values
-    matrices = list()
-    iterator = filtered.iterrows()
-    if progress:
-        iterator = tqdm(iterator, total=len(filtered))
-    for r, s in iterator:
-        tensor = get_feat_matrix(s)
-        matrices.append(tensor)
-    out = {
-        'segments': segments,
-        'matrices': matrices
-    }
-    return out
-
-
-def pipeline(source: Source, progress=False):
-    cnt, _, df = get_ipa_data(source, progress=progress)
-    if cnt > 0:
-        raise RuntimeError(f'Some tokens are invalid.')
-
-    apply_all(df, progress=progress)
-    cleaned_df = clean_data(df, progress=progress)
-    merged_df = merge(cleaned_df, progress=progress)
-    indexify(merged_df, progress=progress)
-    out = get_pth_content(merged_df, progress=progress)
-    return out

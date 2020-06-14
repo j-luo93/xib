@@ -10,7 +10,7 @@ from dev_misc import FT, add_argument, g, get_tensor
 from dev_misc.devlib import get_length_mask
 from dev_misc.devlib.named_tensor import NoName
 from dev_misc.trainlib import Metric, Metrics
-from xib.data_loader import ContinuousIpaBatch
+from xib.aligned_corpus.data_loader import AlignedIpaBatch
 from xib.ipa import should_include
 from xib.model.extract_model import ExtractModelReturn
 
@@ -21,7 +21,7 @@ class ExtractAnalyzer:
     add_argument('bij_mode', default='square', choices=['square', 'abs'])
     add_argument('top_only', default=False, dtype=bool)
 
-    def analyze(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Metrics:
+    def analyze(self, model_ret: ExtractModelReturn, batch: AlignedIpaBatch) -> Metrics:
         metrics = Metrics()
         if g.top_only:
             span_log_probs = model_ret.extracted.matches.ll.logsumexp(dim='vocab')

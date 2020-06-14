@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import field
 from pathlib import Path
 from typing import ClassVar, Dict, List, Optional, Union
@@ -50,15 +51,15 @@ class BaseAlignedBatch(BaseBatch):
 
 @batch_class
 class AlignedIpaBatch(BaseAlignedBatch):
-    feat_matrix: LT
+    feature_matrix: LT
     dense_feat_matrix: DenseFeatureMatrix = field(init=False)
 
     all_lost_dense_feat_matrix: ClassVar[DenseFeatureMatrix] = None
 
     def __post_init__(self):
         super().__post_init__()
-        self.feat_matrix.rename_('batch', 'length', 'feat_group')
-        self.dense_feat_matrix = convert_to_dense(self.feat_matrix)
+        self.feature_matrix.rename_('batch', 'length', 'feat_group')
+        self.dense_feat_matrix = convert_to_dense(self.feature_matrix)
 
 
 @batch_class
@@ -87,8 +88,8 @@ def collate_aligned_dataset_items(items: List[AlignedDatasetItem]) -> AlignedBat
     sentences = get_array([item.sentence for item in items])
     lengths = default_collate([item.length for item in items])
     if g.input_format == 'ipa':
-        feat_matrix = torch.nn.utils.rnn.pad_sequence([item.feat_matrix for item in items], batch_first=True)
-        return AlignedIpaBatch(sentences, lengths, feat_matrix)
+        feature_matrix = torch.nn.utils.rnn.pad_sequence([item.feature_matrix for item in items], batch_first=True)
+        return AlignedIpaBatch(sentences, lengths, feature_matrix)
     else:
         return AlignedTextBatch(sentences, lengths)
 
@@ -98,6 +99,9 @@ add_condition('input_format', 'text', 'dense_input', True)
 
 
 class AlignedDataLoader(BaseDataLoader):
+
+    add_argument('data_path', dtype='path', msg='path to the feat data in tsv format.')
+    add_argument('char_per_batch', default=500, dtype=int, msg='batch_size')
 
     collate_fn = collate_aligned_dataset_items
     dataset: AlignedDataset
@@ -115,7 +119,7 @@ class AlignedDataLoader(BaseDataLoader):
         # Assign class variables for AlignedBatch.
         if g.input_format == 'ipa':
             lost_ipa_units = self.dataset.corpus.char_sets[g.lost_lang].id2unit
-            fm = torch.cat([ipa_unit.feat_matrix for ipa_unit in lost_ipa_units], dim=0)
+            fm = torch.cat([ipa_unit.feature_matrix for ipa_unit in lost_ipa_units], dim=0)
             fm = fm.unsqueeze(dim=1).rename('batch', 'length', 'feat')
             dfm = convert_to_dense(fm)
             AlignedIpaBatch.all_lost_dense_feat_matrix = dfm
@@ -134,6 +138,8 @@ class DataLoaderRegistry(BaseDataLoaderRegistry):
 
     def get_data_loader(self, task: Task, data_path: Path, transcriber: Optional[MultilingualTranscriber] = None):
         adf = AlignedDatasetFactory()
+        logging.info('Preparing dataset first.')
         dataset = adf.get_dataset(g.lost_lang, g.known_lang, g.data_path)
+        logging.info('Preparing the loader now.')
         dl = AlignedDataLoader(dataset, task)
         return dl

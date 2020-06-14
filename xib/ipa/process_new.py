@@ -138,7 +138,7 @@ class BaseSegment(ABC):
 
     @property
     @abstractmethod
-    def feat_matrix(self) -> LT: ...
+    def feature_matrix(self) -> LT: ...
 
     @abstractmethod
     def __len__(self): ...
@@ -277,7 +277,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
         }
 
     @cached_property
-    def feat_matrix(self) -> LT:
+    def feature_matrix(self) -> LT:
         ret = get_feat_matrix(self)
         if len(ret) != len(self):
             raise RuntimeError(f'Feature matrix has a different length from merged_ipa.')

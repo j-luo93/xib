@@ -16,7 +16,7 @@ from dev_misc.trainlib import (Metric, Metrics, freeze, get_grad_norm,
 from dev_misc.trainlib.base_trainer import BaseTrainer
 from dev_misc.trainlib.tb_writer import MetricWriter
 from dev_misc.utils import deprecated, global_property, pbar
-from xib.data_loader import ContinuousTextDataLoader, IpaDataLoader
+from xib.aligned_corpus.data_loader import AlignedDataLoader
 from xib.model.extract_model import ExtractModel, ExtractModelReturn
 from xib.training.analyzer import ExtractAnalyzer
 
@@ -27,6 +27,7 @@ class ExtractTrainer(BaseTrainer):
 
     add_argument('num_steps', default=10, dtype=int, msg='number of steps to train')
     add_argument('learning_rate', default=2e-3, dtype=float, msg='learning rate')
+    add_argument('dropout', default=0.0, dtype=float)
     add_argument('check_interval', default=2, dtype=int, msg='check metrics after this many steps')
     add_argument('eval_interval', default=500, dtype=int, msg='save models after this many steps')
     add_argument('save_interval', default=0, dtype=int, msg='save models after this many steps')
@@ -215,7 +216,7 @@ class ExtractTrainer(BaseTrainer):
     def should_terminate(self):
         return self.tracker.is_finished('total_step')
 
-    def train_one_step(self, dl: ContinuousTextDataLoader) -> Metrics:
+    def train_one_step(self, dl: AlignedDataLoader) -> Metrics:
         # self.bij_reg += g.bij_reg_hyper / 1000.
         # self.ent_reg += g.ent_reg_hyper / 1000.
         if g.anneal_baseline:

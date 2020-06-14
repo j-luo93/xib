@@ -23,13 +23,9 @@ from xib.aligned_corpus.corpus import (AlignedSentence, Segment,
                                        UnsegmentedSentence)
 from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
 from xib.aligned_corpus.vocabulary import Vocabulary
-from xib.data_loader import (ContinuousIpaBatch, ContinuousTextDataLoader,
-                             DataLoaderRegistry)
 from xib.ipa.process import Segmentation, Span
 from xib.model.extract_model import ExtractModel, ExtractModelReturn
-from xib.search.search_solver import SearchSolver
 from xib.training.analyzer import ExtractAnalyzer
-from xib.training.task import DecipherTask
 
 
 class BaseEvaluator(ABC):
@@ -106,74 +102,6 @@ def _get_df(*seqs: Sequence, columns=('segment', 'ground_truth', 'prediction')):
     data = map(lambda x: map(str, x), zip(*seqs))
     df = pd.DataFrame(data, columns=columns)
     return df
-
-
-class ExtractEvaluator(BaseEvaluator):
-
-    def __init__(self, model: ExtractModel, dl: ContinuousTextDataLoader):
-        self.model = model
-        self.dl = dl
-        self.analyzer = ExtractAnalyzer()
-
-    def evaluate(self, stage: str) -> Metrics:
-        segments = list()
-        predictions = list()
-        ground_truths = list()
-        matched_segments = list()
-        total_num_samples = 0
-        analyzed_metrics = Metrics()
-        for batch in pbar(self.dl, desc='eval_batch'):
-
-            if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
-                logging.imp(
-                    f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
-                break
-
-            ret = self.model(batch)
-            analyzed_metrics += self.analyzer.analyze(ret, batch)
-
-            segments.extend(list(batch.segments))
-            segmentations, _matched_segments = self._get_segmentations(ret, batch)
-            predictions.extend(segmentations)
-            matched_segments.extend(_matched_segments)
-            ground_truths.extend([segment.to_segmentation() for segment in batch.segments])
-            total_num_samples += batch.batch_size
-
-        df = _get_df(segments, ground_truths, predictions, matched_segments,
-                     columns=('segment', 'ground_truth', 'prediction', 'matched_segment'))
-        out_path = g.log_dir / 'predictions' / f'extract.{stage}.tsv'
-        out_path.parent.mkdir(exist_ok=True, parents=True)
-        df.to_csv(out_path, index=None, sep='\t')
-        matching_stats = get_matching_stats(predictions, ground_truths)
-        prf_scores = get_prf_scores(matching_stats)
-        return analyzed_metrics + matching_stats + prf_scores
-
-    def _get_segmentations(self, model_ret: ExtractModelReturn, batch: ContinuousIpaBatch) -> Tuple[List[Segmentation], np.ndarray]:
-        # Get the best matched nll.
-        start = model_ret.start
-        end = model_ret.end
-        bmv = model_ret.top_matched_vocab[:, 0]
-        bmnll, _ = -model_ret.top_matched_ll[:, 0]
-        matched = bmnll < self.model.threshold
-
-        start = start.cpu().numpy()
-        end = end.cpu().numpy()
-        bmv = bmv.cpu().numpy()
-        bmw = self.model.vocab[bmv]  # Best matched word
-
-        segmentations = list()
-        matched_segments = list()
-        for segment, s, e, m, w in zip(batch.segments, start, end, matched, bmw):
-            spans = list()
-            if len(segment) >= g.min_word_length and m:
-                span = [segment[i] for i in range(s, e + 1)]
-                span = Span('-'.join(span), s, e)
-                spans.append(span)
-                matched_segments.append(w)
-            else:
-                matched_segments.append('')
-            segmentations.append(Segmentation(spans))
-        return segmentations, matched_segments
 
 
 def _get_prf_metrics(num_pred: int, num_gold: int, num_match: int, name: str) -> Metrics:
@@ -273,10 +201,10 @@ class AlignedExtractEvaluator(BaseEvaluator):
                 self.global_baseline = baseline
                 self.model.train()
             for i, batch in enumerate(pbar(self.dl, desc='eval_batch')):
-                if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
-                    logging.imp(
-                        f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
-                    break
+                # if g.eval_max_num_samples and total_num_samples + batch.batch_size > g.eval_max_num_samples:
+                #     logging.imp(
+                #         f'Stopping at {total_num_samples} < {g.eval_max_num_samples} evaluated examples.')
+                #     break
                 with torch.no_grad():
                     ret = self.model(batch)
                     if g.save_model_ret:

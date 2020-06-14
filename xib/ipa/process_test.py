@@ -21,7 +21,7 @@ class TestSegment(TestCase):
              [0, 3, 6, 23, 43, 51, 57, 60, 87, 89, 93, 96, 102, 110],
              [1, 2, 5, 22, 44, 54, 59, 60, 87, 92, 93, 96, 102, 110]]
         )
-        self.assertListEqual(self.seg.feat_matrix.cpu().numpy().tolist(), ans.cpu().numpy().tolist())
+        self.assertListEqual(self.seg.feature_matrix.cpu().numpy().tolist(), ans.cpu().numpy().tolist())
 
     def test_gold_tag_seq(self):
         self.assertListEqual(self.seg.gold_tag_seq.cpu().numpy().tolist(), [B, I, I])
@@ -88,7 +88,7 @@ class TestSegmentWindow(TestCase):
              [0, 3, 6, 23, 43, 51, 57, 60, 87, 89, 93, 96, 102, 110],
              [1, 2, 5, 22, 44, 54, 59, 60, 87, 92, 93, 96, 102, 110]]
         )
-        self.assertListEqual(self.sw.feat_matrix.cpu().numpy().tolist(), ans.cpu().numpy().tolist())
+        self.assertListEqual(self.sw.feature_matrix.cpu().numpy().tolist(), ans.cpu().numpy().tolist())
 
     def test_gold_tag_seq(self):
         self.assertListEqual(self.sw.gold_tag_seq.cpu().numpy().tolist(), [B, I, I, B, I, I])
@@ -133,34 +133,34 @@ class TestSegmentWindow(TestCase):
             mock_rand_func.return_value = 3
             seg = self.sw.perturb_swap()
             self.assertListEqual(seg.segment_list, ['θ', 'ɹ', 'iː', 'ɹ', 'θ', 'iː'])
-            self.assertArrayEqual(seg.feat_matrix[3], seg.feat_matrix[1])
+            self.assertArrayEqual(seg.feature_matrix[3], seg.feature_matrix[1])
 
             mock_rand_func.return_value = 0
             seg = self.sw.perturb_swap()
             self.assertListEqual(seg.segment_list, ['ɹ', 'θ', 'iː', 'θ', 'ɹ', 'iː'])
-            self.assertArrayEqual(seg.feat_matrix[4], seg.feat_matrix[0])
+            self.assertArrayEqual(seg.feature_matrix[4], seg.feature_matrix[0])
 
             mock_rand_func.return_value = 4
             seg = self.sw.perturb_swap()
             self.assertListEqual(seg.segment_list, ['θ', 'ɹ', 'iː', 'θ', 'iː', 'ɹ'])
-            self.assertArrayEqual(seg.feat_matrix[5], seg.feat_matrix[1])
+            self.assertArrayEqual(seg.feature_matrix[5], seg.feature_matrix[1])
 
     def test_perturb_shift(self):
         with patch('xib.ipa.process.random.randint') as mock_rand_func:
             mock_rand_func.return_value = 3
             seg = self.sw.perturb_shift()
             self.assertListEqual(seg.segment_list, ['θ', 'ɹ', 'iː', 'θ', 'ɹ', 'iː'])
-            self.assertArrayEqual(seg.feat_matrix[3], seg.feat_matrix[0])
+            self.assertArrayEqual(seg.feature_matrix[3], seg.feature_matrix[0])
 
             mock_rand_func.return_value = 1
             seg = self.sw.perturb_shift()
             self.assertListEqual(seg.segment_list, ['iː', 'θ', 'ɹ', 'iː', 'θ', 'ɹ'])
-            self.assertArrayEqual(seg.feat_matrix[1], seg.feat_matrix[4])
+            self.assertArrayEqual(seg.feature_matrix[1], seg.feature_matrix[4])
 
             mock_rand_func.return_value = 5
             seg = self.sw.perturb_shift()
             self.assertListEqual(seg.segment_list, ['ɹ', 'iː', 'θ', 'ɹ', 'iː', 'θ'])
-            self.assertArrayEqual(seg.feat_matrix[5], seg.feat_matrix[2])
+            self.assertArrayEqual(seg.feature_matrix[5], seg.feature_matrix[2])
 
     def test_perturb_n_times(self):
         with patch('xib.ipa.process.random.randint') as mock_rand_func:

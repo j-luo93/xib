@@ -15,7 +15,8 @@ from .ipax import CategoryX, DistEnum
 
 
 def should_predict_none(cat_name, *, new_style: bool = None) -> bool:
-    check_explicit_arg(new_style)
+    # check_explicit_arg(new_style)
+    new_style = False
     if new_style:
         cat_name = cat_name.strip('_X')
     return cat_name not in no_none_predictions
@@ -23,7 +24,8 @@ def should_predict_none(cat_name, *, new_style: bool = None) -> bool:
 
 def get_none_index(cat_name: str, *, new_style: bool = None) -> int:
     """Return the feature index for the NONE value of a certain category. Note that for new style ipa, complex feature groups like CPlaceX and CMannerX do not have the feature index."""
-    check_explicit_arg(new_style)
+    # check_explicit_arg(new_style)
+    new_style = False
     if new_style:
         if cat_name in ['CMannerX', 'CPlaceX']:
             raise ValueError(f'Cannot return feature index for NONE value of {cat_name}')
@@ -65,8 +67,10 @@ def get_needed_categories(groups, *, new_style: bool = None, breakdown: bool = N
     Get all categories (actually their enum classes) that are specified by the groups argument.
     if `breakdown` is True, then a complex feature group will be broken down into its parts.
     """
-    check_explicit_arg(new_style)
-    check_explicit_arg(breakdown)
+    # check_explicit_arg(new_style)
+    # check_explicit_arg(breakdown)
+    new_style = False
+    breakdown = False
     if breakdown and not new_style:
         raise ValueError(f'Conflicting argument values for breakdown "{breakdown}" and "{new_style}".')
 
@@ -140,7 +144,8 @@ class Name:
 
 def get_index(name: Name, *, new_style: bool = None) -> int:
     """Given a Name instance, return the category index in the old style."""
-    check_explicit_arg(new_style)
+    # check_explicit_arg(new_style)
+    new_style = False
     if new_style:
         name = name.snake.capital.value.strip('_X')
     else:

@@ -1,3 +1,4 @@
+import logging
 from typing import IO, Iterable
 
 import numpy as np
@@ -7,7 +8,7 @@ from dev_misc import add_argument, g
 from dev_misc.devlib import get_array, get_length_mask
 from dev_misc.devlib.named_tensor import Rename
 from xib.aligned_corpus.char_set import DELETE_SYM, EMPTY_SYM, CharSetFactory
-from xib.aligned_corpus.corpus import Content, Stem, Word, IpaSequence
+from xib.aligned_corpus.corpus import Content, IpaSequence, Stem, Word
 from xib.batch import convert_to_dense
 
 
@@ -26,7 +27,7 @@ class Vocabulary:
         word_cls = Stem if g.use_stem else Word
         def gen_word(io: IO):
 
-            for line in io:
+            for i, line in enumerate(io):
                 try:
                     word = word_cls.from_saved_string(line.strip())
                     yield from word.ipa
@@ -44,8 +45,12 @@ class Vocabulary:
                 yield from vocab
 
         with open(g.vocab_path, 'r', encoding='utf8') as fin:
-            self.vocab = get_array(sorted(set(expand(filter(has_proper_length, gen_word(fin)))),
-                                          key=str))
+
+            logging.info('Preparing the vocab.')
+            # self.vocab = get_array(sorted(set(expand(filter(has_proper_length, gen_word(fin)))),
+            #                               key=str))
+            self.vocab = sorted(set(expand(filter(has_proper_length, gen_word(fin)))),
+                                key=str)
             if g.use_vc_oracle:
                 v2c = dict()
                 with open(str(g.vocab_path) + '.oracle_count', 'r', encoding='utf8') as fvc:
@@ -56,14 +61,14 @@ class Vocabulary:
                 self.vocab_counts = np.asarray([v2c[v] for v in self.vocab], dtype='float32')
 
             self.vocab_length = torch.LongTensor(list(map(len, self.vocab)))
-            print(f'Vocab size: {len(self.vocab)}')
+            logging.imp(f'Vocab size: {len(self.vocab)}')
             max_len = self.vocab_length.max().item()
             self.vocab_source_padding = ~get_length_mask(self.vocab_length, max_len)
             self.vocab_length.rename_('vocab')
             self.vocab_source_padding.rename_('vocab', 'length')
 
-            feat_matrix = [word.feat_matrix for word in self.vocab]
-            self.vocab_feat_matrix = torch.nn.utils.rnn.pad_sequence(feat_matrix, batch_first=True)
+            feature_matrix = [word.feature_matrix for word in self.vocab]
+            self.vocab_feat_matrix = torch.nn.utils.rnn.pad_sequence(feature_matrix, batch_first=True)
             self.vocab_feat_matrix.rename_('vocab', 'length', 'feat_group')
 
             with Rename(self.vocab_feat_matrix, vocab='batch'):
@@ -82,10 +87,10 @@ class Vocabulary:
             else:
                 unit_feat_matrix = dict()
             for i, segment in enumerate(self.vocab):
-                indexed_segments[i, range(len(segment))] = [self.char_set.to_id(u) for u in segment.cv_list]
-                for j, u in enumerate(segment.cv_list):
+                indexed_segments[i, range(len(segment))] = [self.char_set.to_id(u) for u in segment.units]
+                for j, u in enumerate(segment.units):
                     if u not in unit_feat_matrix:
-                        unit_feat_matrix[u] = segment.feat_matrix[j]
+                        unit_feat_matrix[u] = segment.feature_matrix[j]
             unit_feat_matrix = [unit_feat_matrix[u] for u in self.char_set]
             unit_feat_matrix = torch.nn.utils.rnn.pad_sequence(unit_feat_matrix, batch_first=True)
             self.unit_feat_matrix = unit_feat_matrix.unsqueeze(dim=1)

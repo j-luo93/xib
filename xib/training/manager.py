@@ -41,6 +41,8 @@ class ExtractManager(BaseManager):
 
     # IDEA(j_luo) when to put this in manager/trainer? what about scheduler? annealing? restarting? Probably all in trainer -- you need to track them with pbars.
     add_argument('optim_cls', default='adam', dtype=str, choices=['adam', 'adagrad', 'sgd'], msg='Optimizer class.')
+    add_argument('lost_lang', dtype=str)
+    add_argument('known_lang', dtype=str)
     add_argument('anneal_factor', default=0.5, dtype=float, msg='Mulplication value for annealing.')
     add_argument('aligner_lr', default=0.1, dtype=float)
     add_argument('num_rounds', default=1000, dtype=int, msg='Number of rounds')
@@ -52,6 +54,8 @@ class ExtractManager(BaseManager):
     add_argument('align_mode', default='reg', choices=['init', 'reg'], dtype=str)
     add_argument('evaluate_only', default=False, dtype=bool)
     add_argument('embedding_only', default=False, dtype=bool)
+    add_argument('vocab_path', dtype='path',
+                 msg='Path to a vocabulary file.')
 
     _name2cls = {'adam': Adam, 'adagrad': Adagrad, 'sgd': SGD}
 
@@ -72,7 +76,9 @@ class ExtractManager(BaseManager):
         train_task = ExtractTask(training=True)
         eval_task = ExtractTask(training=False)
         self.dl_reg = DataLoaderRegistry()
+        logging.info('Preparing training data loader.')
         self.dl_reg.register_data_loader(train_task, g.data_path)
+        logging.info('Preparing dev data loader.')
         self.dl_reg.register_data_loader(eval_task, g.data_path)
 
         lu_size = ku_size = None
@@ -83,6 +89,7 @@ class ExtractManager(BaseManager):
         if g.input_format == 'text':
             lu_size = len(lcs)
             ku_size = len(kcs)
+        logging.info('Initializing model.')
         self.model = ExtractModel(lu_size, ku_size, vocab)
         # HACK(j_luo)
         from xib.aligned_corpus.ipa_sequence import IpaSequence
@@ -92,7 +99,7 @@ class ExtractManager(BaseManager):
                 lost_id = lcs.unit2id[lost_char]
                 if g.use_feature_aligner:
                     assert g.align_mode == 'init', 'reg mode for this not supported'
-                    dfms = convert_to_dense(IpaSequence(known_char).feat_matrix.rename(
+                    dfms = convert_to_dense(IpaSequence(known_char).feature_matrix.rename(
                         'length', 'feat_group').align_to('length', 'batch', 'feat_group'))
                     for cat in Category:
                         if should_include(g.feat_groups, cat):

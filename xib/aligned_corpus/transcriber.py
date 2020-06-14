@@ -2,13 +2,33 @@ import logging
 import re
 import subprocess
 from abc import ABC, ABCMeta, abstractmethod
-from typing import Callable, ClassVar, Dict, Optional, Sequence, Set
+from typing import Callable, ClassVar, Dict, List, Optional, Sequence, Set
 
 import pandas as pd
 from ipapy.ipastring import IPAString
 
 from dev_misc.utils import Singleton
-from xib.gothic.core import _get_sub_func
+
+
+def _sort_keys(map_table: Dict) -> List[str]:
+    return sorted(map_table.keys(), key=lambda s: len(s), reverse=True)
+
+
+def _get_sub_func(map_table: Dict[str, str], full_word: bool = False):
+    """See
+    https://stackoverflow.com/questions/2400504/easiest-way-to-replace-a-string-using-a-dictionary-of-replacements,
+    https://stackoverflow.com/questions/20089922/python-regex-engine-look-behind-requires-fixed-width-pattern-error.
+    """
+    pattern_str = '|'.join(_sort_keys(map_table))
+    pattern_str = '|'.join(re.escape(key) for key in _sort_keys(map_table))
+    if full_word:
+        pattern_str = r'(?<!\w)(' + pattern_str + r')(?=\W|$)'
+    pattern = re.compile(pattern_str)
+
+    def sub(s):
+        return pattern.sub(lambda x, map_table=map_table: map_table[x.group()], s)
+
+    return sub
 
 
 class _CacheMetaclass(type):

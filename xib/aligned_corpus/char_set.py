@@ -30,7 +30,7 @@ class CharSet:
         if g.one2two:
             self.id2unit = [DELETE_SYM] + self.id2unit
         self.unit2id = {u: i for i, u in enumerate(self.id2unit)}
-        assert False, 'show character set here -- including the entire set , and also the set of digraphs (or longer).'
+        logging.imp(f'Char set for {lang} is {self.id2unit}.')
 
     def to_id(self, unit: Content):
         return self.unit2id[unit]
@@ -60,7 +60,7 @@ class CharSetFactory(Singleton):
         all_units = set()
         for content in contents:
             if is_ipa:
-                all_units.update(content.cv_list)
+                all_units.update(content.units)
             else:
                 all_units.update(content)
         if not all_units:

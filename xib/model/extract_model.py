@@ -19,8 +19,6 @@ from xib.aligned_corpus.char_set import DELETE_ID
 from xib.aligned_corpus.corpus import AlignedSentence
 from xib.aligned_corpus.data_loader import AlignedBatch, AlignedDataLoader
 from xib.aligned_corpus.vocabulary import Vocabulary
-from xib.data_loader import (ContinuousIpaBatch, UnbrokenTextBatch,
-                             convert_to_dense)
 from xib.ipa import Category, Index, get_enum_by_cat, should_include
 from xib.model.log_tensor import LogTensor
 from xib.model.modules import AdaptLayer, FeatEmbedding, FeatureAligner
@@ -29,8 +27,6 @@ from xib.model.span_proposer import (AllSpanProposer, OracleStemSpanProposer,
                                      ViableSpans)
 
 from .modules import DenseFeatEmbedding
-
-ExtractBatch = Union[ContinuousIpaBatch, UnbrokenTextBatch]
 
 # profile = lambda x: x
 

@@ -224,7 +224,7 @@ class BaseSegment(ABC):
 
     @property
     @abstractmethod
-    def feat_matrix(self) -> LT: ...
+    def feature_matrix(self) -> LT: ...
 
     @abstractmethod
     def __len__(self): ...
@@ -366,7 +366,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
         }
 
     @cached_property
-    def feat_matrix(self) -> LT:
+    def feature_matrix(self) -> LT:
         ret = get_feat_matrix(self)
         if len(ret) != len(self):
             raise RuntimeError(f'Feature matrix has a different length from merged_ipa.')
@@ -381,7 +381,7 @@ class Segment(BaseSegmentWithGoldTagSeq):
         if start == 0 and end == len(self) - 1:
             return self
 
-        new_feat_matrix = self.feat_matrix[start: end + 1]
+        new_feat_matrix = self.feature_matrix[start: end + 1]
         new_list_of_units = self.segment_list[start: end + 1]
         new_list_of_ipas = self.merged_ipa[start: end + 1]
         new_gold_tag_seq = torch.LongTensor([O] * (end + 1 - start))
@@ -404,8 +404,8 @@ class SegmentX(BaseSegment):
         self.aligned_segments = [Segment(raw) for raw in aligned_raw_tokens]
 
     @property
-    def feat_matrix(self) -> LT:
-        return self.orig_segment.feat_matrix
+    def feature_matrix(self) -> LT:
+        return self.orig_segment.feature_matrix
 
     @property
     def gold_tag_seq(self) -> LT:
@@ -493,10 +493,10 @@ class AlignedIpaSegment(SegmentX):
 
 class BaseSpecialSegment(BaseSegment):
 
-    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feat_matrix: LT):
+    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feature_matrix: LT):
         self._list_of_units = list_of_units
         self._list_of_ipas = list_of_ipas
-        self._feat_matrix = feat_matrix
+        self._feat_matrix = feature_matrix
         if len(self._list_of_units) != len(self._feat_matrix):
             raise ValueError(f'Length mismatch.')
 
@@ -505,7 +505,7 @@ class BaseSpecialSegment(BaseSegment):
         return self._list_of_ipas
 
     @property
-    def feat_matrix(self):
+    def feature_matrix(self):
         return self._feat_matrix
 
     def __len__(self):
@@ -529,8 +529,8 @@ class PerturbedSegment(BaseSpecialSegment):
 
 class BrokenSegment(BaseSpecialSegment, BaseSegmentWithGoldTagSeq):
 
-    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feat_matrix: LT, gold_tag_seq: LT, original: Segment):
-        super().__init__(list_of_units, list_of_ipas, feat_matrix)
+    def __init__(self, list_of_units: List[str], list_of_ipas: List[IPAString], feature_matrix: LT, gold_tag_seq: LT, original: Segment):
+        super().__init__(list_of_units, list_of_ipas, feature_matrix)
         self._gold_tag_seq = gold_tag_seq
         if len(self._gold_tag_seq) != len(list_of_units):
             raise ValueError('Length mismatch.')
@@ -571,8 +571,8 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
         return torch.cat([segment.gold_tag_seq for segment in self._segments], dim=0)
 
     @cached_property
-    def feat_matrix(self) -> LT:
-        matrices = [segment.feat_matrix for segment in self._segments]
+    def feature_matrix(self) -> LT:
+        matrices = [segment.feature_matrix for segment in self._segments]
         return torch.cat(matrices, dim=0)
 
     def __str__(self):
@@ -656,9 +656,9 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
         right_ipa = self.merged_ipa[pos + 2:]
         new_list_of_ipas = left_ipa + mid_ipa + right_ipa
 
-        left_m = self.feat_matrix[:pos]
-        mid_m = [self.feat_matrix[pos + 1: pos + 2], self.feat_matrix[pos: pos + 1]]
-        right_m = self.feat_matrix[pos + 2:]
+        left_m = self.feature_matrix[:pos]
+        mid_m = [self.feature_matrix[pos + 1: pos + 2], self.feature_matrix[pos: pos + 1]]
+        right_m = self.feature_matrix[pos + 2:]
         new_feat_matrix = torch.cat([left_m] + mid_m + [right_m], dim=0)
         return PerturbedSegment(new_list_of_units, new_list_of_ipas, new_feat_matrix)
 
@@ -675,8 +675,8 @@ class SegmentWindow(BaseSegmentWithGoldTagSeq):
         right_ipa = self.merged_ipa[:mid_pt]
         new_list_of_ipas = left_ipa + right_ipa
 
-        left_m = self.feat_matrix[mid_pt:]
-        right_m = self.feat_matrix[:mid_pt]
+        left_m = self.feature_matrix[mid_pt:]
+        right_m = self.feature_matrix[:mid_pt]
         new_feat_matrix = torch.cat([left_m, right_m], dim=0)
         return PerturbedSegment(new_list_of_units, new_list_of_ipas, new_feat_matrix)
 

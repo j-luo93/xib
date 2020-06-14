@@ -12,45 +12,20 @@ from dev_misc.utils import Singleton
 from xib.aligned_corpus.corpus import AlignedCorpus, AlignedSentence
 
 
-def split_by_length(lengths: Sequence[int], max_length: int, min_length: int) -> List[Tuple[int, int]]:
-    ret = list()
-    cum_lengths = [0]
-    for length in lengths:
-        cum_lengths.append(cum_lengths[-1] + length)
-
-    start = 0
-    while start < len(lengths):
-        end = start + 1
-        while end < len(cum_lengths) - 1 and cum_lengths[end + 1] <= max_length:
-            end += 1
-        if min_length <= cum_lengths[end] - cum_lengths[start] <= max_length:
-            ret.append((start, end))
-        start = end
-    return ret
-
 # def split_by_length(lengths: Sequence[int], max_length: int, min_length: int) -> List[Tuple[int, int]]:
 #     ret = list()
 #     cum_lengths = [0]
 #     for length in lengths:
 #         cum_lengths.append(cum_lengths[-1] + length)
+
 #     start = 0
-#     end = 1
-#     while end < len(cum_lengths):
-#         seg_length = cum_lengths[end] - cum_lengths[start]
-#         if seg_length <= max_length:
-#             end += 1
-#             continue
-
-#         if end > start + 1 and seg_length >= min_length:
-#             ret.append((start, end - 1))
-#             start = end - 1
-#         else:
-#             start = end
+#     while start < len(lengths):
 #         end = start + 1
-
-#     if end > start + 1 and seg_length >= min_length:
-#         ret.append((start, end - 1))
-
+#         while end < len(cum_lengths) - 1 and cum_lengths[end + 1] <= max_length:
+#             end += 1
+#         if min_length <= cum_lengths[end] - cum_lengths[start] <= max_length:
+#             ret.append((start, end))
+#         start = end
 #     return ret
 
 
@@ -58,7 +33,7 @@ def split_by_length(lengths: Sequence[int], max_length: int, min_length: int) ->
 class AlignedDatasetItem:
     sentence: AlignedSentence
     length: int
-    feat_matrix: LT
+    feature_matrix: LT
 
 
 class AlignedDataset:
@@ -78,30 +53,30 @@ class AlignedDataset:
         min_length = g.min_word_length if g.min_segment_length is None else g.min_segment_length
         for sentence in self.corpus.sentences:
             word_lengths = [word.lost_token.form_length for word in sentence.words]
-            splits = split_by_length(word_lengths, g.max_segment_length, min_length)
-            assert False, 'split by length should go'
-            for start, end in splits:
-                truncated_sentence = AlignedSentence(sentence.words[start: end])
+            to_add = g.min_word_length <= sum(word_lengths)  # <= g.max_word_length
+            # splits = split_by_length(word_lengths, 100, min_length)
+            # splits = [(0, sum(word_lengths) + 1)]
+            # for start, end in splits:
+            #     truncated_sentence = AlignedSentence(sentence.words[start: end])
 
-                to_add = False
-                if g.noiseless:
-                    uss = truncated_sentence.to_unsegmented(is_known_ipa=True,
-                                                            is_lost_ipa=g.input_format == 'ipa',
-                                                            annotated=True)
-                    if uss.segments:
-                        for segment in uss.segments:
-                            if any(g.min_word_length <= ss.end - ss.start + 1 <= g.max_word_length for ss in segment.single_segments):
-                                to_add = True
-                                break
-                else:
-                    to_add = True
-
-                if to_add:
-                    if g.freq_hack and str(truncated_sentence) in _data_str:
-                        continue
-                    self.data.append(truncated_sentence)
-                    if g.freq_hack:
-                        _data_str.add(str(truncated_sentence))
+            #     to_add = False
+            #     if g.noiseless:
+            #         uss = truncated_sentence.to_unsegmented(is_known_ipa=True,
+            #                                                 is_lost_ipa=g.input_format == 'ipa',
+            #                                                 annotated=True)
+            #         if uss.segments:
+            #             for segment in uss.segments:
+            #                 if any(g.min_word_length <= ss.end - ss.start + 1 <= g.max_word_length for ss in segment.single_segments):
+            #                     to_add = True
+            #                     break
+            #     else:
+            #         to_add = True
+            if to_add:
+                if g.freq_hack and str(sentence) in _data_str:
+                    continue
+                self.data.append(sentence)
+                if g.freq_hack:
+                    _data_str.add(str(sentence))
         total_char = sum([sentence.length for sentence in self.data])
         logging.info(f'There are {total_char} characters in total.')
 
@@ -111,11 +86,11 @@ class AlignedDataset:
     def __getitem__(self, idx: int) -> AlignedDatasetItem:
         sentence = self.data[idx]
         length = sentence.length
-        feat_matrix = torch.cat(
-            [word.lost_token.main_ipa.feat_matrix for word in sentence.words],
+        feature_matrix = torch.cat(
+            [word.lost_token.main_ipa.feature_matrix for word in sentence.words],
             dim=0
         )
-        return AlignedDatasetItem(sentence, length, feat_matrix)
+        return AlignedDatasetItem(sentence, length, feature_matrix)
 
 
 class AlignedDatasetFactory(Singleton):

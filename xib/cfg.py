@@ -246,6 +246,8 @@ class VowelCheck(NoContextSanityCheck):
 @reg
 class Final(VowelCheck):
     context_weight: float = 0.2
+    known_lang: str = 'pgm'
+    lost_lang: str = 'got'
     num_steps: int = 2000
     init_temperature: float = 0.2
     end_temperature: float = 0.2

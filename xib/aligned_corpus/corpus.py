@@ -45,7 +45,7 @@ class Word:
     @classmethod
     def from_saved_string(cls, saved_string: str) -> Word:
         lang, form, ipa_str = saved_string.split(';')
-        ipa = frozenset({IpaSequence(s) for s in ipa_str[1:-1].split(',')})
+        ipa = frozenset({IpaSequence(lang, s) for s in ipa_str[1:-1].split(',')})
         form = form.replace('_', '').replace('·', '')
         return cls(lang, form, ipa)
 
@@ -71,7 +71,7 @@ class SingleStem(Word):
         stem, ipa_str = stem_info.split(':')
         digits, form = stem.split('@')
         start, end = map(int, digits.split('~'))
-        ipa = frozenset({IpaSequence(s) for s in ipa_str[1:-1].split(',')})
+        ipa = frozenset({IpaSequence(lang, s) for s in ipa_str[1:-1].split(',')})
         return cls(lang, form, ipa, start, end)
 
 
@@ -116,7 +116,7 @@ class WordFactory(Singleton):
         ipa = set()
         for x in ipa_strings:
             try:
-                ipa.add(IpaSequence(x))
+                ipa.add(IpaSequence(lang, x))
             except ValueError:
                 pass
         ipa = frozenset(ipa)
@@ -329,7 +329,7 @@ class AlignedSentence:
         if is_lost_ipa:
             warnings.warn('Only one of the ipa sequences is used.')
             content_lst = [str(word.lost_token.main_ipa) for word in self.words]
-            content = IpaSequence(''.join(content_lst))
+            content = IpaSequence(self.words[0].lost_token.lang, ''.join(content_lst))
         else:
             content_lst = [word.lost_token.form for word in self.words]
             content = ''.join(content_lst)

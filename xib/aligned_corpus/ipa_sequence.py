@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence as SequenceABC
+from copy import deepcopy
 from functools import wraps
-from typing import ClassVar, Dict, List, Optional, TypeVar, Union
+from typing import ClassVar, Dict, List, NewType, Optional, TypeVar, Union
 
 import torch
 from ipapy import UNICODE_TO_IPA
@@ -20,15 +21,38 @@ from dev_misc import LT
 from dev_misc.utils import cached_property
 from xib.ipa import Category
 
+Lang = NewType('Lang', str)
+
 # Remove some IPA symbols that are co-articulated.
-to_remove_rules = {
+to_remove_rules_common = {
     'n͡m': ['n', 'm'],
     'd͡b': ['d', 'b']
 }
-ipa_chars_to_remove = {
-    UNICODE_TO_IPA[k]: [UNICODE_TO_IPA[v] for v in vs]
-    for k, vs in to_remove_rules.items()
+to_remove_rules_pgm = {
+    't͡s': ['t', 's'],
+    'd͡z': ['d', 'z']
 }
+to_remove_rules_lang = {
+    'pgm': to_remove_rules_pgm
+}
+ipa_chars_to_remove = dict()
+
+
+class DigraphProcessor:
+
+    def __init__(self, lang: Lang):
+        if lang == 'germ':
+            lang = 'pgm'
+        self.lang = lang
+
+    @cached_property(in_class=True, key=lambda self: self.lang)
+    def ipa_chars_to_remove(self) -> Dict[str, List[str]]:
+        rules = deepcopy(to_remove_rules_common)
+        if self.lang not in to_remove_rules_lang:
+            logging.imp(f'Language {self.lang} does not have a language-specific set of digraphs to remove.')
+        else:
+            rules.update(to_remove_rules_lang[self.lang])
+        return rules
 
 
 class RemovedIpaSymbol(Exception):
@@ -78,8 +102,9 @@ class IpaSingleChar:
     """
 
     @typechecked
-    def __init__(self, char: IPAChar):
-        if char in ipa_chars_to_remove:
+    def __init__(self, lang: Lang, char: IPAChar):
+        digraph_proc = DigraphProcessor(lang)
+        if str(char) in digraph_proc.ipa_chars_to_remove:  # pylint: disable=unsupported-membership-test
             raise RemovedIpaSymbol(f'IPA symbol "{char}" should be removed.')
         self._char = char
 
@@ -98,10 +123,10 @@ class IpaSingleChar:
 
     @classmethod
     @typechecked
-    def from_str(cls, s: str) -> IpaSingleChar:
+    def from_str(cls, lang: Lang, s: str) -> IpaSingleChar:
         """Turn a unicode string into an IpaSingleChar object."""
         try:
-            return cls(UNICODE_TO_IPA[s])
+            return cls(lang, UNICODE_TO_IPA[s])
         except KeyError:
             raise InvalidIpaSymbol(f'Invalid IPA symbol "{s}" for creating an IpaSingleChar instance.')
 
@@ -152,8 +177,8 @@ class IpaUnit:
 
     @classmethod
     @typechecked
-    def from_str(cls, s: str) -> IpaUnit:
-        return IpaUnit([IpaSingleChar.from_str(ss) for ss in s])
+    def from_str(cls, lang: Lang, s: str) -> IpaUnit:
+        return IpaUnit([IpaSingleChar.from_str(lang, ss) for ss in s])
 
     def __str__(self):
         return ''.join(str(sc) for sc in self.single_chars)
@@ -188,6 +213,7 @@ class IpaUnitSegmenter:
     """Used for segmenting a raw string into a list of IpaUnit."""
 
     def segment(self,
+                lang: Lang,
                 raw_string: str,
                 use_length: bool = False) -> List[IpaUnit]:
 
@@ -196,13 +222,14 @@ class IpaUnitSegmenter:
 
         # Second pass to convert them into IpaSingleChar instances. Pay special attention to removed characters.
         sc_lst = list()
+        digraph_proc = DigraphProcessor(lang)
         for char in ipa_chars:
             try:
-                sc = IpaSingleChar(char)
+                sc = IpaSingleChar(lang, char)
                 sc_lst.append(sc)
             except RemovedIpaSymbol:
-                for v in ipa_chars_to_remove[char]:
-                    sc_lst.append(IpaSingleChar(v))
+                for v in digraph_proc.ipa_chars_to_remove[str(char)]:  # pylint: disable=unsubscriptable-object
+                    sc_lst.append(IpaSingleChar(lang, UNICODE_TO_IPA[v]))
 
         # Merge relevant single characters to form units.
         ret = list()
@@ -232,16 +259,18 @@ class IpaSequence(SequenceABC):
     """A sequence of units."""
 
     def __init__(self,
+                 lang: Lang,
                  raw_string: Optional[str] = None,
                  *,
                  units: Optional[List[IpaUnit]] = None,
                  segmenter_kwargs=None):
+        self.lang = lang
         if units is not None:
             self.units = units
         else:
             segmenter = IpaUnitSegmenter()
             segmenter_kwargs = segmenter_kwargs or dict()
-            units = segmenter.segment(raw_string, **segmenter_kwargs)
+            units = segmenter.segment(lang, raw_string, **segmenter_kwargs)
             self.units = units
 
     @cached_property
@@ -261,7 +290,7 @@ class IpaSequence(SequenceABC):
             units = [self.units[idx]]
         else:
             units = self.units[idx]
-        return IpaSequence(units=units)
+        return IpaSequence(lang, units=units)
 
     def __str__(self):
         return ''.join(map(str, self.units))

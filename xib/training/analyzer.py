@@ -34,9 +34,18 @@ class ExtractAnalyzer:
         metrics += loss_metric
 
         almt = model_ret.costs.alignment
+
+        def compute_bij(almt):
+            almt = almt.sum(dim=0)
+            almt = ((1.0 - almt).clamp_min(0.0) + (almt - 1.0).clamp_min(0.0)) ** 2
+            reg = almt.sum() * float(not_zero)
+            return reg
+
         if almt is not None:
             if g.bij_mode == 'square':
-                bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
+                bijective_reg = compute_bij(almt.known2lost)
+                # bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
+                # bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0).clamp_max(0.0) ** 2).sum() * float(not_zero)
                 # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0) ** 2).sum() * float(not_zero)
             else:
                 # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0).abs()).sum() * float(not_zero)

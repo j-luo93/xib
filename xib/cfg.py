@@ -244,7 +244,7 @@ class VowelCheck(NoContextSanityCheck):
 
 
 @reg
-class Final(VowelCheck):
+class FinalPgm(VowelCheck):
     context_weight: float = 0.2
     known_lang: str = 'pgm'
     lost_lang: str = 'got'
@@ -265,7 +265,19 @@ class Final(VowelCheck):
 
 
 @reg
-class FinalGothicPgm100(Final):
+class FinalNon(FinalPgm):
+
+    init_ins_del_cost: float = 10.0
+    known_lang: str = 'non'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.got-non.trunc.seg.p25.tsv'
+        self.vocab_path: str = './data/wulfila/processed/non.matched.trunc.stems'
+
+
+@reg
+class FinalGothicPgm100(FinalPgm):
 
     segmented: bool = True
     downsample: bool = False
@@ -295,7 +307,7 @@ class FinalGothicAng100(FinalGothicPgm100):
 
 
 @reg
-class FinalContrastLatin(Final):
+class FinalContrastLatin(FinalPgm):
 
     known_lang: str = 'ang'
     use_oracle: bool = True
@@ -347,7 +359,7 @@ class FinalContrastBasque(FinalContrastLatin):
 
 
 @reg
-class FinalUgaReal(Final):
+class FinalUgaReal(FinalPgm):
     min_word_length: int = 3
     min_segment_length: int = 3
     span_candidates: str = 'oracle_word'
@@ -371,7 +383,7 @@ class FinalUga(FinalUgaReal):
 
 
 @reg
-class FinalXib(Final):
+class FinalXib(FinalPgm):
     expected_ratio: float = 0.1
     min_word_length: int = 3
     min_segment_length: int = 3

@@ -127,6 +127,7 @@ class ExtractModel(nn.Module):
     add_argument('unit_aligner_init_mode', dtype=str, default='uniform', choices=['uniform', 'zero'])
     add_argument('use_feature_aligner', dtype=bool, default=False)
     add_argument('vowel_bias', dtype=float, default=1.0)
+    add_argument('vowel_weight', dtype=float, default=1.0)
     add_argument('reward_mode', dtype=str, default='div', choices=[
                  'div', 'ln_div', 'minus', 'div_pos', 'poly', 'cutoff', 'thresh', 'minus_pos'])
 
@@ -293,8 +294,13 @@ class ExtractModel(nn.Module):
         lost_unit_emb = self.get_lost_unit_emb(known_unit_emb)
         unit_log_probs = self._get_alignment_log_probs(known_unit_emb, lost_unit_emb, reverse=reverse)
         vowel_mask = self._get_vowel_mask(get_named_range(known_unit_emb.size('known_unit'), 'known_unit'))
+        vowel_mask = vowel_mask.align_as(unit_log_probs)
+        weight = torch.where(vowel_mask, torch.full_like(
+            unit_log_probs, g.vowel_weight), torch.ones_like(unit_log_probs))
+        unit_log_probs = (unit_log_probs.exp() * weight + 1e-8)
+        return unit_log_probs
         # unit_log_probs = self._add_vowel_bias(unit_log_probs, vowel_mask)
-        return unit_log_probs.exp()
+        # return unit_log_probs.exp()
 
     def _get_vowel_mask(self, id_seqs: LT) -> BT:
         ptype = get_tensor(self.vocab.unit_feat_matrix[:, :, 0].squeeze(dim='length'))
@@ -328,6 +334,8 @@ class ExtractModel(nn.Module):
                                                                emb_repr.lost_unit_emb,
                                                                reverse=True)
             lost2known = rev_unit_log_probs.exp()
+        # HACK(j_luo) Use special vowel rules.
+        known2lost = self.get_alignment()
         alignment = Alignment(known2lost, lost2known)
 
         # Get contextualized log probs.

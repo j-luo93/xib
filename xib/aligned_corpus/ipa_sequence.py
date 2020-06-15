@@ -32,8 +32,12 @@ to_remove_rules_pgm = {
     't͡s': ['t', 's'],
     'd͡z': ['d', 'z']
 }
+to_remove_rules_non = {
+    't͡s': ['t', 's'],
+}
 to_remove_rules_lang = {
-    'pgm': to_remove_rules_pgm
+    'pgm': to_remove_rules_pgm,
+    'non': to_remove_rules_non
 }
 ipa_chars_to_remove = dict()
 
@@ -134,7 +138,8 @@ class IpaSingleChar:
         try:
             return super().__getattribute__(attr)
         except AttributeError:
-            return getattr(self._char, attr)
+            char = super().__getattribute__('_char')
+            return getattr(char, attr)
 
     @property
     def is_cv(self) -> bool:

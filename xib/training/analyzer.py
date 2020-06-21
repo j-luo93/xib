@@ -18,7 +18,7 @@ from xib.model.extract_model import ExtractModelReturn
 class ExtractAnalyzer:
 
     add_argument('mean_mode', default='segment', choices=['segment', 'char'])
-    add_argument('bij_mode', default='square', choices=['square', 'abs', 'sinkhorn'])
+    add_argument('bij_mode', default='square', choices=['square', 'abs', 'sinkhorn', 'square_no_del'])
     add_argument('top_only', default=False, dtype=bool)
 
     def analyze(self, model_ret: ExtractModelReturn, batch: AlignedIpaBatch) -> Metrics:
@@ -50,6 +50,8 @@ class ExtractAnalyzer:
                     # bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0).clamp_max(0.0) ** 2).sum() * float(not_zero)
                     # bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
                     # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0) ** 2).sum() * float(not_zero)
+                elif g.bij_mode == 'square_no_del':
+                    bijective_reg = compute_bij(distr[:, 1:])
                 elif g.bij_mode == 'sinkhorn':
                     bijective_reg = distr
                 else:

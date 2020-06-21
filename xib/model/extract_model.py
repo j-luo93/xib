@@ -259,8 +259,8 @@ class ExtractModel(nn.Module):
         # Get known contextualized embeddings.
         inp_conv = known_vocab_emb.align_to('vocab', 'char_emb', 'length')
         with NoName(inp_conv):
-            known_ctx_repr = self.conv(inp_conv).rename('vocab', 'char_emb', 'length')
-            known_ins_ctx_repr = self.ins_conv(inp_conv).rename('vocab', 'char_emb', 'length')
+            known_ctx_repr = self.dropout(self.conv(inp_conv).rename('vocab', 'char_emb', 'length'))
+            known_ins_ctx_repr = self.dropout(self.ins_conv(inp_conv).rename('vocab', 'char_emb', 'length'))
         known_ctx_repr = known_ctx_repr.align_to('vocab', 'length', 'char_emb')
         known_ins_ctx_repr = known_ins_ctx_repr.align_to('vocab', 'length', 'char_emb')
 
@@ -279,12 +279,11 @@ class ExtractModel(nn.Module):
         else:
             lost_unit_weight = self.unit_aligner.weight
             lost_unit_emb = lost_unit_weight @ known_unit_emb
-        # HACK(j_luo)
-        if g.use_feature_aligner:
-            names = lost_unit_emb.names
-            with NoName(lost_unit_emb):
-                lost_unit_emb = nn.functional.normalize(lost_unit_emb, dim=-1) * 5.0
-                lost_unit_emb.rename_(*names)
+        # # # HACK(j_luo)
+        # names = lost_unit_emb.names
+        # with NoName(lost_unit_emb):
+        #     lost_unit_emb = nn.functional.normalize(lost_unit_emb, dim=-1) * math.sqrt(g.emb_norm)
+        #     lost_unit_emb.rename_(*names)
         return lost_unit_emb
 
     # @profile
@@ -857,7 +856,7 @@ class ExtractModelV2(ExtractModel):
             inp = unit_inp[vocab_unit_id_seqs].rename('vocab', 'length', 'char_emb')
 
         def residual(before, after):
-            return before + nn.functional.normalize(after.rename(None), dim=-1) * g.emb_norm * 0.0
+            return before + after * g.context_weight
 
         def get_cost_helper(before, after, proj_w):
             out = residual(before, after)

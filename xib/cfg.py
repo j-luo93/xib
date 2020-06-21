@@ -245,10 +245,15 @@ class VowelCheck(NoContextSanityCheck):
 
 @reg
 class FinalPgm(VowelCheck):
-    context_weight: float = 0.2
+    # context_weight: float = 0.2
+    context_weight: float = 0.0
     known_lang: str = 'pgm'
     lost_lang: str = 'got'
-    num_steps: int = 2000
+    num_steps: int = 3000
+    dim: int = 100
+    unit_aligner_init_mode: str = 'uniform'
+    use_entropy_reg: bool = False
+    use_new_model: bool = True
     init_temperature: float = 0.2
     end_temperature: float = 0.2
     init_expected_ratio: float = 1.0
@@ -260,20 +265,32 @@ class FinalPgm(VowelCheck):
 
     def __post_init__(self):
         super().__post_init__()
-        self.data_path: str = './data/wulfila/processed/corpus.got-germ.trunc.seg.p25.tsv'
+        self.data_path: str = './data/wulfila/processed/corpus.got-germ.trunc.tsv'
         self.vocab_path: str = './data/wulfila/processed/germ.matched.trunc.stems'
 
 
 @reg
 class FinalNon(FinalPgm):
 
-    init_ins_del_cost: float = 10.0
+    # init_ins_del_cost: float = 10.0
     known_lang: str = 'non'
 
     def __post_init__(self):
         super().__post_init__()
-        self.data_path: str = './data/wulfila/processed/corpus.got-non.trunc.seg.p25.tsv'
+        self.data_path: str = './data/wulfila/processed/corpus.got-non.trunc.tsv'
         self.vocab_path: str = './data/wulfila/processed/non.matched.trunc.stems'
+
+
+@reg
+class FinalAng(FinalPgm):
+
+    # init_ins_del_cost: float = 10.0
+    known_lang: str = 'ang'
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/wulfila/processed/corpus.got-ang.trunc.tsv'
+        self.vocab_path: str = './data/wulfila/processed/ang.matched.trunc.stems'
 
 
 @reg

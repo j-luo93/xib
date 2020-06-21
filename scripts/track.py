@@ -20,9 +20,8 @@ from dev_misc.arglib import set_argument
 from dev_misc.devlib.named_tensor import NoName, patch_named_tensors
 from dev_misc.utils import pbar
 from xib.aligned_corpus.char_set import CharSet, CharSetFactory
-from xib.aligned_corpus.data_loader import BaseAlignedBatch
+from xib.aligned_corpus.data_loader import BaseAlignedBatch, DataLoaderRegistry
 from xib.aligned_corpus.vocabulary import Vocabulary
-from xib.data_loader import DataLoaderRegistry
 from xib.ipa import Category, should_include
 from xib.model.extract_model import ExtractModel
 from xib.training.task import ExtractTask
@@ -203,9 +202,13 @@ def get_service_function(lang: str, project_root: str):
         init_path = f'{project_root}/log/grid/matched_cmdl/test-xib-nsb/0/saved.init'
         vocab_path = f'{project_root}/data/Iberian/lat.matched.stems'
         data_path = f'{project_root}/data/Iberian/corpus.xib-lat.tsv'
+    elif lang == 'non':
+        init_path = '/scratch2/j_luo/xib/log/2020-06-14/FinalNon-ml40/21-04-40/saved.init'
+        vocab_path = f'{project_root}/data/wulfila/processed/non.matched.stems'
+        data_path = f'{project_root}/data/wulfila/processed/corpus.got-non.tsv'
     else:
         # init_path = f'{project_root}/log//test-{lang}-ins_1000-p5/0/saved.init'
-        init_path = '/scratch2/j_luo/xib/log/2020-05-31/FinalGothicNon100-ml40//21-44-01/saved.init'
+        init_path = '/scratch2/j_luo/xib/log/2020-06-19/FinalNon-ml40/21-15-38/saved.init'
         vocab_path = f'{project_root}/data/wulfila/processed/{lang}.matched.stems'
         data_path = f'{project_root}/data/wulfila/processed/corpus.got-{lang}.tsv'
     # vocab_path = '/scratch2/j_luo/xib/data/wulfila/processed/non.small.matched.stems'

@@ -18,7 +18,7 @@ from xib.model.extract_model import ExtractModelReturn
 class ExtractAnalyzer:
 
     add_argument('mean_mode', default='segment', choices=['segment', 'char'])
-    add_argument('bij_mode', default='square', choices=['square', 'abs'])
+    add_argument('bij_mode', default='square', choices=['square', 'abs', 'sinkhorn'])
     add_argument('top_only', default=False, dtype=bool)
 
     def analyze(self, model_ret: ExtractModelReturn, batch: AlignedIpaBatch) -> Metrics:
@@ -41,21 +41,30 @@ class ExtractAnalyzer:
             reg = almt.sum() * float(not_zero)
             return reg
 
-        if almt is not None:
-            if g.bij_mode == 'square':
-                bijective_reg = compute_bij(almt.known2lost)
-                # bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
-                # bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0).clamp_max(0.0) ** 2).sum() * float(not_zero)
-                # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0) ** 2).sum() * float(not_zero)
-            else:
-                # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0).abs()).sum() * float(not_zero)
-                bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0).abs()).sum() * float(not_zero)
-            metrics += Metric('bij_reg', bijective_reg, loss_weight)
+        if almt is not None:  # and not g.use_new_model:
+            if True:  # not g.use_new_model:
+                # distr = almt.lost2known if g.use_new_model else almt.known2lost
+                distr = almt.known2lost
+                if g.bij_mode == 'square':
+                    bijective_reg = compute_bij(distr)
+                    # bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0).clamp_max(0.0) ** 2).sum() * float(not_zero)
+                    # bijective_reg = ((almt.known2lost.sum(dim=0) - 1.0) ** 2).sum() * float(not_zero)
+                    # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0) ** 2).sum() * float(not_zero)
+                elif g.bij_mode == 'sinkhorn':
+                    bijective_reg = distr
+                else:
+                    # bijective_reg = ((almt.known2lost.sum(dim=0)[1:] - 1.0).abs()).sum() * float(not_zero)
+                    bijective_reg = ((distr.sum(dim=0) - 1.0).abs()).sum() * float(not_zero)
+                metrics += Metric('bij_reg', bijective_reg, loss_weight)
             if g.use_entropy_reg:
                 ent_k2l_reg = -(almt.known2lost * (1e-8 + almt.known2lost).log()).sum() * float(not_zero)
                 ent_l2k_reg = -(almt.lost2known * (1e-8 + almt.lost2known).log()).sum() * float(not_zero)
                 metrics += Metric('ent_k2l_reg', ent_k2l_reg, loss_weight)
                 metrics += Metric('ent_l2k_reg', ent_l2k_reg, loss_weight)
+            variance = almt.variance
+            if variance is not None:
+                metrics += Metric('variance', -variance, loss_weight)
+
         try:
             pr_reg = Metric('posterior_spans',
                             model_ret.ctc_return.expected_num_spans.sum('batch'),

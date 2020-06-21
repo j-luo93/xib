@@ -39,6 +39,7 @@ class ExtractTrainer(BaseTrainer):
     add_argument('num_anneal_steps', default=2000, dtype=int)
     add_argument('main_loss_hyper', default=1.0, dtype=float)
     add_argument('l_pr_hyper', default=1.0, dtype=float)
+    add_argument('variance_hyper', default=1.0, dtype=float)
     add_argument('coverage_hyper', default=1.0, dtype=float)
     add_argument('weight_hyper', default=0.0, dtype=float)
     add_argument('wc_hyper', default=0.0, dtype=float)
@@ -289,11 +290,16 @@ class ExtractTrainer(BaseTrainer):
                 loss = loss + wc.mean * g.wc_hyper
 
             try:
-                # HACK(j_luo)
-                # loss = loss + metrics.bij_reg.mean * self.bij_reg
-                # loss = loss + metrics.ent_k2l_reg.mean * self.ent_reg
-                # loss = loss + metrics.ent_l2k_reg.mean * self.ent_reg
                 loss = loss + metrics.bij_reg.mean * g.bij_reg_hyper
+            except AttributeError:
+                pass
+
+            try:
+                loss = loss + metrics.variance.mean * g.variance_hyper
+            except AttributeError:
+                pass
+
+            try:
                 loss = loss + metrics.ent_k2l_reg.mean * g.ent_reg_hyper
                 loss = loss + metrics.ent_l2k_reg.mean * g.ent_reg_hyper
             except AttributeError:
@@ -315,7 +321,12 @@ class ExtractTrainer(BaseTrainer):
             metrics += total_loss
             accum_metrics += metrics
 
-        grad_norm = clip_grad_norm_(self.model.parameters(), g.max_grad_norm)
+        if g.conv_only:
+            from itertools import chain
+            grad_norm = clip_grad_norm_(chain(self.model.conv.parameters(),
+                                              self.model.ins_conv.parameters()), g.max_grad_norm)
+        else:
+            grad_norm = clip_grad_norm_(self.model.parameters(), g.max_grad_norm)
         self.optimizer.step()
         accum_metrics += Metric('grad_norm', grad_norm * loss_weight, loss_weight)
 

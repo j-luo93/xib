@@ -23,7 +23,7 @@ from xib.aligned_corpus.transcriber import (BaseTranscriber,
                                             TranscriberWithBackoff)
 from xib.batch import convert_to_dense
 from xib.ipa import Category, should_include
-from xib.model.extract_model import ExtractModel
+from xib.model.extract_model import ExtractModel, ExtractModelV2
 from xib.training.evaluator import AlignedExtractEvaluator
 from xib.training.task import ExtractTask
 from xib.training.trainer import ExtractTrainer
@@ -54,6 +54,8 @@ class ExtractManager(BaseManager):
     add_argument('align_mode', default='reg', choices=['init', 'reg'], dtype=str)
     add_argument('evaluate_only', default=False, dtype=bool)
     add_argument('embedding_only', default=False, dtype=bool)
+    add_argument('conv_only', default=False, dtype=bool)
+    add_argument('use_new_model', dtype=bool, default=False)
     add_argument('vocab_path', dtype='path',
                  msg='Path to a vocabulary file.')
 
@@ -89,8 +91,10 @@ class ExtractManager(BaseManager):
         if g.input_format == 'text':
             lu_size = len(lcs)
             ku_size = len(kcs)
+
         logging.info('Initializing model.')
-        self.model = ExtractModel(lu_size, ku_size, vocab)
+        model_cls = ExtractModelV2 if g.use_new_model else ExtractModel
+        self.model = model_cls(lu_size, ku_size, vocab)
         # HACK(j_luo)
         from xib.aligned_corpus.ipa_sequence import IpaSequence
 
@@ -390,6 +394,10 @@ class ExtractManager(BaseManager):
             ], lr=g.learning_rate)
         elif g.embedding_only:
             self.trainer.optimizer = optim_cls(self.model.base_embeddings.parameters(), lr=g.learning_rate)
+        elif g.conv_only:
+            from itertools import chain
+            self.trainer.optimizer = optim_cls(
+                chain(self.model.conv.parameters(), self.model.ins_conv.parameters()), lr=g.learning_rate)
         else:
             self.trainer.optimizer = optim_cls([
                 {'params': self.model.unit_aligner.parameters(), 'lr': g.aligner_lr},

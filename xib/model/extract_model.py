@@ -57,6 +57,7 @@ class Extracted(BaseBatch):
 class Alignment(BaseBatch):
     known2lost: FT
     lost2known: FT
+    variance: Optional[FT] = None
 
 
 @batch_class
@@ -147,7 +148,7 @@ class ExtractModel(nn.Module):
             self.unit_aligner = nn.Embedding(lost_size, known_size)
             if g.unit_aligner_init_mode == 'uniform':
                 logging.imp('Unit aligner initialized uniformly.')
-                nn.init.uniform_(self.unit_aligner.weight, -0.05, 0.05)
+                nn.init.uniform_(self.unit_aligner.weight, -g.init_interval, g.init_interval)
             else:
                 logging.imp('Unit aligner initialized to 0.')
                 self.unit_aligner.weight.data.fill_(0.0)
@@ -165,7 +166,7 @@ class ExtractModel(nn.Module):
             else:
                 self.base_embeddings = nn.Embedding(known_size, g.base_embedding_dim)
                 logging.imp('Base embeddings initialized uniformly.')
-                nn.init.uniform_(self.base_embeddings.weight, -0.05, 0.05)
+                nn.init.uniform_(self.base_embeddings.weight, -g.init_interval, g.init_interval)
 
         self.span_bias = SpanBias()
         self.vocab = vocab
@@ -278,6 +279,12 @@ class ExtractModel(nn.Module):
         else:
             lost_unit_weight = self.unit_aligner.weight
             lost_unit_emb = lost_unit_weight @ known_unit_emb
+        # HACK(j_luo)
+        if g.use_feature_aligner:
+            names = lost_unit_emb.names
+            with NoName(lost_unit_emb):
+                lost_unit_emb = nn.functional.normalize(lost_unit_emb, dim=-1) * 5.0
+                lost_unit_emb.rename_(*names)
         return lost_unit_emb
 
     # @profile
@@ -319,7 +326,6 @@ class ExtractModel(nn.Module):
     def context_weight(self):
         pass
 
-    # @profile
     def _get_costs(self, vocab_unit_id_seqs: LT, emb_repr: EmbAndRepr) -> Costs:
         vowel_mask = self._get_vowel_mask(vocab_unit_id_seqs)
         # Get global (non-contextualized) log probs.
@@ -478,10 +484,18 @@ class ExtractModel(nn.Module):
             transitions.append(fs[(kl, ll - 1)] + ins_cost)
         if g.one2two and (kl - 1, ll - 2) in fs:
             first_lost_ids = viable_spans.unit_id_seqs[:, ll - 2]
-            sub_cost = costs.sub[:, kl - 1, first_lost_ids]
             second_lost_ids = viable_spans.unit_id_seqs[:, ll - 1]
+
+            # Insert after the sub.
+            sub_cost = costs.sub[:, kl - 1, first_lost_ids]
             ins_cost = costs.ins[:, kl - 1, second_lost_ids]
             transitions.append(fs[(kl - 1, ll - 2)] + ins_cost + sub_cost)
+
+            # # Insert before the sub
+            # sub_cost = costs.sub[:, kl - 1, second_lost_ids]
+            # ins_cost = costs.ins[:, kl - 1, first_lost_ids]
+            # transitions.append(fs[(kl - 1, ll - 2)] + ins_cost + sub_cost)
+
         if (kl - 1, ll - 1) in fs:
             lost_ids = viable_spans.unit_id_seqs[:, ll - 1]
             sub_cost = costs.sub[:, kl - 1, lost_ids]
@@ -602,6 +616,7 @@ class ExtractModel(nn.Module):
             # HACK(j_luo)
             reward *= 20.0
         elif g.reward_mode in ['thresh', 'minus_pos']:
+            # from dev_misc import debug_stats; import logging; logging.info('MARK'); debug_stats('message', raw)
             diff = raw - self.baseline
             pos = diff > 0.0
 
@@ -794,7 +809,6 @@ class ExtractModel(nn.Module):
                         #     print(best_value[1])
                         #     print(best_value[1].storage)
                         #     print(best_value[1].sign)
-                        #     breakpoint()  # BREAKPOINT(j_luo)
                     all_phi_scores[l] = best_value.rename(new_tag='tag')
                     bookkeeper.best_prev_tags[l] = best_prev_tag.rename(new_tag='tag')
                 # Old way here.
@@ -828,3 +842,75 @@ class ExtractModel(nn.Module):
                 expected_avg_log_probs = (phi_nodes.sum(dim=-1) / final_score).value
                 expected_num_spans = (psi_nodes.sum(dim=-1) / final_score).value
         return CtcReturn(final_nodes, final_score.storage, expected_num_spans, expected_avg_log_probs, bookkeeper)
+
+
+class ExtractModelV2(ExtractModel):
+
+    def get_log_probs(self, x, y, names=('vocab', 'length', 'lost_unit')):
+        logits = x @ y.t()
+        log_probs = (logits / self.temperature).log_softmax(dim=-1).rename(*names)
+        return log_probs
+
+    def _get_costs(self, vocab_unit_id_seqs: LT, emb_repr: EmbAndRepr) -> Costs:
+        unit_inp = emb_repr.known_unit_emb
+        with NoName(unit_inp, vocab_unit_id_seqs):
+            inp = unit_inp[vocab_unit_id_seqs].rename('vocab', 'length', 'char_emb')
+
+        def residual(before, after):
+            return before + nn.functional.normalize(after.rename(None), dim=-1) * g.emb_norm * 0.0
+
+        def get_cost_helper(before, after, proj_w):
+            out = residual(before, after)
+            log_probs = self.get_log_probs(out, proj_w)
+            return -log_probs
+
+        proj_w = emb_repr.lost_unit_emb
+        sub = get_cost_helper(inp, emb_repr.known_ctx_repr, proj_w)
+        ins = get_cost_helper(inp, emb_repr.known_ins_ctx_repr, proj_w) + self.ins_del_cost
+
+        variance = None
+        if g.bij_mode == 'sinkhorn':
+            lost2known = known2lost = self._get_sinkhorn_dist(unit_inp, emb_repr.lost_unit_emb)
+            with NoName(unit_inp):
+                variance = -(unit_inp @ unit_inp.t()).mean()
+        else:
+            known2lost = self.get_alignment()  # self.get_log_probs(unit_inp, proj_w, names=('known_unit', 'lost_unit')).exp()
+            lost2known = known2lost.t()
+            # known2lost = self.get_raw_alignment()
+            # lost2known = self.get_raw_alignment(reverse=True)
+        alignment = Alignment(known2lost, lost2known, variance)
+        return Costs(sub, ins, alignment)
+
+    # def get_lost_unit_emb(self, known_unit_emb: FT) -> FT:
+    #     almt = self.get_raw_alignment(reverse=True)
+    #     lost_unit_emb = almt @ known_unit_emb
+    #     # names = lost_unit_emb.names
+    #     # with NoName(lost_unit_emb):
+    #     #     lost_unit_emb = nn.functional.normalize(lost_unit_emb, dim=-1) * g.emb_norm
+    #     #     lost_unit_emb.rename_(*names)
+    #     return lost_unit_emb
+
+    def get_raw_alignment(self, reverse: bool = False) -> FT:
+        w = self.unit_aligner.weight
+        # This is lost2known by default.
+        almt = w
+        # almt = ((w / 0.2).log_softmax(dim=-1)).exp()
+        if not reverse:
+            return almt.t()
+        return almt
+
+    # def get_alignment(self):
+    #     known = self.get_known_unit_emb(self.vocab)
+    #     lost = self.get_lost_unit_emb(known)
+    #     if g.bij_mode == 'sinkhorn':
+    #         return known @ lost.t() / (g.emb_norm ** 2)
+    #     else:
+    #         known2lost = self.get_log_probs(known, lost, names=('known_unit', 'lost_unit')).exp()
+    #         return known2lost
+
+    def _get_sinkhorn_dist(self, x, y):
+        from geomloss import SamplesLoss
+        loss_func = SamplesLoss(loss='sinkhorn')
+        with NoName(x, y):
+            dist = loss_func(x, y)
+        return dist

@@ -118,8 +118,10 @@ class FeatureAligner(nn.Module):
         embeddings = dict()
         for cat in Category:
             if should_include(g.feat_groups, cat):
-                embeddings[cat] = self.embs[cat.name][unit_ids].rename(
-                    'batch', 'feat').align_to('batch', 'length', 'feat')
+                emb = self.embs[cat.name][unit_ids].rename(
+                    'batch', 'feat').align_to('batch', 'length', 'feat')  # * 3.0
+                emb = (emb / 0.2).log_softmax(dim=-1).exp()
+                embeddings[cat] = emb
         return embeddings
 
 
@@ -140,7 +142,7 @@ class DenseFeatEmbedding(FeatEmbedding):
                 # emb_dict[cat.name].data.fill_(0.0)
                 logging.warning('dense feature embedding init')
                 torch.nn.init.uniform_(emb_dict[cat.name], -g.init_interval, g.init_interval)
-                torch.nn.init.uniform_(emb_dict[cat.name], -g.init_interval, g.init_interval)
+                # torch.nn.init.uniform_(emb_dict[cat.name], -g.init_interval, g.init_interval)
         return nn.ParameterDict(emb_dict)
 
     # HACK(j_luo) Use kwargs to deal with masked_positions.

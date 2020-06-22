@@ -14,6 +14,7 @@ from dev_misc.trainlib import has_gpus
 from dev_misc.utils import deprecated
 from xib.aligned_corpus.corpus import AlignedCorpus
 from xib.aligned_corpus.data_loader import BaseAlignedBatch, DataLoaderRegistry
+from xib.aligned_corpus.ipa_sequence import IpaUnit
 from xib.aligned_corpus.transcriber import (BaseTranscriber,
                                             DictionaryTranscriber,
                                             MultilingualTranscriber,
@@ -109,7 +110,7 @@ class ExtractManager(BaseManager):
                         if should_include(g.feat_groups, cat):
                             self.model.feat_aligner.embs[cat.name].data[lost_id].copy_(dfms[cat][0, 0] * 5.0)
                 else:
-                    known_id = kcs.unit2id[IpaSequence(known_char)]
+                    known_id = kcs.unit2id[IpaUnit.from_str(g.known_lang, known_char)]
                     if g.align_mode == 'init':
                         self.model.unit_aligner.weight.data[lost_id, known_id] = 10.0
                     else:

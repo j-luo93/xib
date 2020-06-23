@@ -206,6 +206,10 @@ def get_service_function(lang: str, project_root: str):
         init_path = '/scratch2/j_luo/xib/log/2020-06-14/FinalNon-ml40/21-04-40/saved.init'
         vocab_path = f'{project_root}/data/wulfila/processed/non.matched.stems'
         data_path = f'{project_root}/data/wulfila/processed/corpus.got-non.tsv'
+    elif lang == 'ang':
+        init_path = '/scratch2/j_luo/xib/log/2020-06-23/FinalAng-ml40/15-41-22/saved.init'
+        vocab_path = f'{project_root}/data/wulfila/processed/ang.matched.stems'
+        data_path = f'{project_root}/data/wulfila/processed/corpus.got-ang.tsv'
     else:
         # init_path = f'{project_root}/log//test-{lang}-ins_1000-p5/0/saved.init'
         init_path = '/scratch2/j_luo/xib/log/2020-06-19/FinalNon-ml40/21-15-38/saved.init'

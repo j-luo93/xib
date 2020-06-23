@@ -228,7 +228,7 @@ class ExtractModel(nn.Module):
             with NoName(known_unit_emb):
                 if g.emb_norm > 0.0:
                     known_unit_emb = known_unit_emb / (1e-8 + known_unit_emb.norm(dim=-1,
-                                                                                  keepdim=True)) * math.sqrt(g.emb_norm)
+                                                                                  keepdim=True)) * g.emb_norm
         else:
             with NoName(*vocab.unit_dense_feat_matrix.values()):
                 if g.dense_embedding:
@@ -239,7 +239,7 @@ class ExtractModel(nn.Module):
                     known_unit_emb = self.base_embeddings.weight.unsqueeze(dim=1)  # HACK(j_luo)
                 known_unit_emb = self.dropout(known_unit_emb)
                 known_unit_emb = known_unit_emb / \
-                    (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * math.sqrt(g.emb_norm)
+                    (1e-8 + known_unit_emb.norm(dim=-1, keepdim=True)) * g.emb_norm
         known_unit_emb = known_unit_emb.rename('known_unit', 'length', 'char_emb').squeeze(dim='length')
         return known_unit_emb
 
@@ -282,7 +282,7 @@ class ExtractModel(nn.Module):
         # # # HACK(j_luo)
         # names = lost_unit_emb.names
         # with NoName(lost_unit_emb):
-        #     lost_unit_emb = nn.functional.normalize(lost_unit_emb, dim=-1) * math.sqrt(g.emb_norm)
+        #     lost_unit_emb = nn.functional.normalize(lost_unit_emb, dim=-1) * g.emb_norm
         #     lost_unit_emb.rename_(*names)
         return lost_unit_emb
 
@@ -856,7 +856,7 @@ class ExtractModelV2(ExtractModel):
             inp = unit_inp[vocab_unit_id_seqs].rename('vocab', 'length', 'char_emb')
 
         def residual(before, after):
-            return before + after * g.context_weight
+            return before + nn.functional.normalize(after.rename(None), dim=-1) * g.emb_norm * g.context_weight
 
         def get_cost_helper(before, after, proj_w):
             out = residual(before, after)

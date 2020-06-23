@@ -377,6 +377,8 @@ class FinalContrastBasque(FinalContrastLatin):
 
 @reg
 class FinalUgaReal(FinalPgm):
+    known_lang: str = 'heb'
+    downsample: bool = False
     min_word_length: int = 3
     min_segment_length: int = 3
     span_candidates: str = 'oracle_word'

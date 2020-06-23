@@ -26,7 +26,9 @@ Lang = NewType('Lang', str)
 # Remove some IPA symbols that are co-articulated.
 to_remove_rules_common = {
     'n͡m': ['n', 'm'],
-    'd͡b': ['d', 'b']
+    'd͡b': ['d', 'b'],
+    'k͡p': ['k', 'p'],
+    't͡p': ['t', 'p']
 }
 to_remove_rules_pgm = {
     't͡s': ['t', 's'],

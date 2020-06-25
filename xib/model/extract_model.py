@@ -553,18 +553,22 @@ class ExtractModel(nn.Module):
             bs = span_log_probs.size('batch')
             mask = get_zeros(*span_log_probs.shape)
 
-            # OLD code
+            # Mask as usual.
+            NEG = -9999.9
             should_be = batch.lengths.rename(None) - g.min_word_length
             should_mask = batch.lengths.rename(None) <= g.max_word_length
             mask_values = torch.where(should_mask, torch.ones_like(should_be), torch.zeros_like(should_be))
             safe_should_be = torch.where(should_mask, should_be, torch.zeros_like(should_be))
             mask[range(bs), 0, safe_should_be] += mask_values
 
+            # Prioritize the first one.
             # mask[:, 0] = 1.0
+            # NEG = -1.0
 
-            span_log_probs = (1.0 - mask) * (-9999.9) + span_log_probs
-            # matches.ll = (1.0 - mask.unsqueeze(dim=-1)) * (-9999.9) + matches.ll
-            matches.raw_ll = (1.0 - mask.unsqueeze(dim=-1)) * (-9999.9) + matches.raw_ll
+            span_log_probs = (1.0 - mask) * NEG + span_log_probs
+            matches.ll = (1.0 - mask.unsqueeze(dim=-1)) * NEG + matches.ll
+            matches.raw_ll = (1.0 - mask.unsqueeze(dim=-1)) * NEG + matches.raw_ll
+
         span_raw_square = raw_reward = None
         if g.inference_mode == 'new':
             span_lengths = span_lengths.align_as(matches.raw_ll)
@@ -656,7 +660,7 @@ class ExtractModel(nn.Module):
         if self.training:
             log_probs = p_x_z
         else:
-            if g.save_model_ret:
+            if g.save_model_ret:  # and False:
                 log_probs, best_vocab = (p_xy_z / LogTensor(self.vocab.vocab_length.cuda())).max(dim='vocab')
             else:
                 log_probs, best_vocab = p_xy_z.max(dim='vocab')
@@ -855,8 +859,11 @@ class ExtractModelV2(ExtractModel):
         with NoName(unit_inp, vocab_unit_id_seqs):
             inp = unit_inp[vocab_unit_id_seqs].rename('vocab', 'length', 'char_emb')
 
-        def residual(before, after):
-            return before + nn.functional.normalize(after.rename(None), dim=-1) * g.emb_norm * g.context_weight
+        def residual(before, after=None):
+            if after is not None:
+                return before + nn.functional.normalize(after.rename(None), dim=-1) * g.emb_norm * g.context_weight
+            else:
+                return before
 
         def get_cost_helper(before, after, proj_w):
             out = residual(before, after)
@@ -865,6 +872,7 @@ class ExtractModelV2(ExtractModel):
 
         proj_w = emb_repr.lost_unit_emb
         sub = get_cost_helper(inp, emb_repr.known_ctx_repr, proj_w)
+        # sub = get_cost_helper(inp, None, proj_w)
         ins = get_cost_helper(inp, emb_repr.known_ins_ctx_repr, proj_w) + self.ins_del_cost
 
         variance = None

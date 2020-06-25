@@ -307,6 +307,7 @@ class FinalGothicPgm100(FinalPgm):
 
 @reg
 class FinalGothicNon100(FinalGothicPgm100):
+    known_lang: str = 'non'
 
     def __post_init__(self):
         super().__post_init__()
@@ -328,10 +329,12 @@ class FinalContrastLatin(FinalPgm):
 
     known_lang: str = 'ang'
     use_oracle: bool = True
+    init_ins_del_cost: float = 10.0
+    check_interval: int = 250
 
     def __post_init__(self):
         super().__post_init__()
-        self.data_path: str = './data/wulfila/processed/corpus.got-germ.trunc.seg.p5.tsv'
+        self.data_path: str = './data/wulfila/processed/corpus.got-germ.trunc.seg.1.tsv'
         self.vocab_path: str = './data/wulfila/processed/contrast.lat.stems'
 
 

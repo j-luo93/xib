@@ -40,10 +40,15 @@ to_remove_rules_non = {
 to_remove_rules_heb = {
     't͡ʃ': ['t', 'ʃ'],
 }
+to_remove_rules_ara = {
+    't͡ʃ': ['t', 'ʃ'],
+    't͡s': ['t', 's'],
+}
 to_remove_rules_lang = {
     'pgm': to_remove_rules_pgm,
     'non': to_remove_rules_non,
-    'heb': to_remove_rules_heb
+    'heb': to_remove_rules_heb,
+    'ara': to_remove_rules_ara
 }
 ipa_chars_to_remove = dict()
 

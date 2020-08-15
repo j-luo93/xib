@@ -11,7 +11,6 @@ from dev_misc import LT, add_argument, g
 from dev_misc.utils import Singleton
 from xib.aligned_corpus.corpus import AlignedCorpus, AlignedSentence
 
-
 # def split_by_length(lengths: Sequence[int], max_length: int, min_length: int) -> List[Tuple[int, int]]:
 #     ret = list()
 #     cum_lengths = [0]
@@ -42,6 +41,7 @@ class AlignedDataset:
     add_argument('noiseless', dtype=bool, default=False)
     add_argument('freq_hack', dtype=bool, default=False)
     add_argument('min_segment_length', dtype=int)
+    add_argument('max_segment_length', default=100, dtype=int)
 
     def __init__(self, corpus: AlignedCorpus):
         self.corpus = corpus
@@ -53,7 +53,7 @@ class AlignedDataset:
         min_length = g.min_word_length if g.min_segment_length is None else g.min_segment_length
         for sentence in self.corpus.sentences:
             word_lengths = [word.lost_token.form_length for word in sentence.words]
-            to_add = g.min_word_length <= sum(word_lengths)  # <= g.max_word_length
+            to_add = g.min_word_length <= sum(word_lengths) <= g.max_segment_length
             # splits = split_by_length(word_lengths, 100, min_length)
             # splits = [(0, sum(word_lengths) + 1)]
             # for start, end in splits:

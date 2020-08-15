@@ -251,6 +251,7 @@ class FinalPgm(VowelCheck):
     lost_lang: str = 'got'
     num_steps: int = 3000
     dim: int = 100
+    check_interval: int = 250
     unit_aligner_init_mode: str = 'uniform'
     use_entropy_reg: bool = False
     use_new_model: bool = True
@@ -381,10 +382,12 @@ class FinalContrastBasque(FinalContrastLatin):
 @reg
 class FinalUgaReal(FinalPgm):
     known_lang: str = 'heb'
-    downsample: bool = False
+    downsample: bool = True
     min_word_length: int = 3
     min_segment_length: int = 3
     span_candidates: str = 'oracle_word'
+    init_ins_del_cost: float = 10.0
+    dim: int = 35
 
     def __post_init__(self):
         super().__post_init__()
@@ -409,6 +412,14 @@ class FinalXib(FinalPgm):
     expected_ratio: float = 0.1
     min_word_length: int = 3
     min_segment_length: int = 3
+    known_lang: str = 'lat'
+    max_segment_length: int = 100
+    init_ins_del: float = 10.0
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/Iberian/corpus.xib-lat.tsv'
+        self.vocab_path: str = './data/Iberian/lat.matched.stems'
 
 
 @reg
@@ -417,6 +428,7 @@ class FinalXibBasquePos(FinalXib):
     known_lang: str = 'lat'
     min_word_length: int = 4
     min_segment_length: int = 4
+    check_interval: int = 250
 
     def __post_init__(self):
         super().__post_init__()
@@ -502,6 +514,7 @@ class FinalUgaContrastArabic(FinalUgaReal):
     min_word_length: int = 3
     min_segment_length: int = 3
     span_candidates: str = 'oracle_word'
+    known_lang: str = 'ara'
 
     def __post_init__(self):
         super().__post_init__()
@@ -515,7 +528,16 @@ class FinalUgaContrastLatin(FinalUgaContrastArabic):
     def __post_init__(self):
         super().__post_init__()
         self.data_path: str = './data/uga.real.small.tsv'
-        self.vocab_path: str = './data/wulfila/processed/contrast.lat.stems'
+        self.vocab_path: str = './data/uga/contrast.lat.stems'
+
+
+@reg
+class FinalUgaContrastTurkish(FinalUgaContrastArabic):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.data_path: str = './data/uga.real.small.tsv'
+        self.vocab_path: str = './data/uga/contrast.tur.stems'
 
 
 @reg
@@ -524,7 +546,7 @@ class FinalUgaContrastHungarian(FinalUgaContrastArabic):
     def __post_init__(self):
         super().__post_init__()
         self.data_path: str = './data/uga.real.small.tsv'
-        self.vocab_path: str = './data/wulfila/processed/contrast.hun.stems'
+        self.vocab_path: str = './data/uga/contrast.hun.stems'
 
 
 @reg
@@ -533,7 +555,7 @@ class FinalUgaContrastSpanish(FinalUgaContrastArabic):
     def __post_init__(self):
         super().__post_init__()
         self.data_path: str = './data/uga.real.small.tsv'
-        self.vocab_path: str = './data/wulfila/processed/contrast.es.stems'
+        self.vocab_path: str = './data/uga/contrast.es.stems'
 
 
 # @reg
